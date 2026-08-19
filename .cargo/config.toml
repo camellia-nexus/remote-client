@@ -1,7 +1,7 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-Ctarget-feature=+crt-static"]
 [target.i686-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/NODEFAULTLIB:MSVCRT"]
+rustflags = ["-C", "target-feature=+crt-static"]
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-Ctarget-feature=+crt-static"]
 [target.'cfg(target_os="macos")']

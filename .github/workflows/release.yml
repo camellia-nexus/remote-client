@@ -273,15 +273,21 @@ jobs:
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
         run: |
+          set -o pipefail
+          python .github/scripts/verify_windows_crt.py source
           bash .github/scripts/sync-version.sh \
             "${{ needs.metadata.outputs.version }}" \
             "${{ needs.metadata.outputs.build_number }}" \
             "${{ needs.metadata.outputs.source_date_epoch }}"
           bash .github/scripts/prepare-dependencies.sh "${{ env.DEPENDENCY_MODE }}"
           "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+          python .github/scripts/verify_windows_crt.py archive --path "$VCPKG_ROOT/installed/x64-windows-static/lib/opus.lib" --linkage static --configuration release
+          python .github/scripts/verify_windows_crt.py archive --path "$VCPKG_ROOT/installed/x64-windows-static/debug/lib/opus.lib" --linkage static --configuration debug
           export SODIUM_LIB_DIR="$VCPKG_ROOT/installed/x64-windows-static/lib"
-          cargo build --locked --release --lib --features flutter,hwcodec,vram
+          cargo build --locked --release --lib --features flutter,hwcodec,vram 2>&1 | tee "$RUNNER_TEMP/cargo-link-x64.log"
+          python .github/scripts/verify_windows_crt.py link-log --path "$RUNNER_TEMP/cargo-link-x64.log"
           (cd flutter && flutter build windows --release)
+          python .github/scripts/verify_windows_crt.py image --path flutter/build/windows/x64/runner/Release/camellia_remote.dll
           mkdir -p artifacts
 
       - name: Sign and verify Windows application payload
