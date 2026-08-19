@@ -92,6 +92,8 @@ jobs:
           uv run python -m unittest discover -s tools/admin-cli/tests
           uv build
           python3 .github/scripts/test_dynamic_boundary_policy.py
+          python3 .github/scripts/verify_windows_crt.py source
+          python3 .github/scripts/tests/test_windows_crt.py
 
   generate_bridge:
     name: Generate Flutter Rust bridge
@@ -227,6 +229,8 @@ jobs:
     needs: [metadata, generate_bridge]
     runs-on: windows-2022
     timeout-minutes: 90
+    env:
+      VCPKG_BINARY_SOURCES: clear
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,6 +265,7 @@ jobs:
       - name: Configure vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
         with:
+          doNotCache: true
           vcpkgDirectory: C:\vcpkg
 
       - name: Setup MSBuild
@@ -287,17 +292,56 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install --triplet arm64-windows-static --x-install-root="$RUNNER_TEMP/vcpkg-arm64"
           cp -r "$RUNNER_TEMP/vcpkg-arm64/arm64-windows-static" "$VCPKG_ROOT/installed/arm64-windows-static"
 
+      - name: Build clean Opus and verify CRT directives
+        shell: pwsh
+        run: |
+          python .github/scripts/verify_windows_crt.py source
+          $sourceRoot = (Get-Location).Path
+          foreach ($triplet in @('x64-windows-static', 'arm64-windows-static')) {
+            $workRoot = Join-Path $env:RUNNER_TEMP "camellia-opus-$triplet"
+            $installRoot = Join-Path $workRoot 'installed'
+            $buildtrees = Join-Path $workRoot 'buildtrees'
+            $packages = Join-Path $workRoot 'packages'
+            $downloads = Join-Path $workRoot 'downloads'
+            if (Test-Path -LiteralPath $workRoot) {
+              throw "Refusing to reuse Opus build root: $workRoot"
+            }
+            New-Item -ItemType Directory -Path $workRoot | Out-Null
+            Push-Location $env:RUNNER_TEMP
+            try {
+              & "$env:VCPKG_ROOT\vcpkg.exe" install "opus:$triplet" `
+                "--overlay-ports=$sourceRoot\res\vcpkg" `
+                "--x-install-root=$installRoot" `
+                "--x-buildtrees-root=$buildtrees" `
+                "--x-packages-root=$packages" `
+                "--downloads-root=$downloads" `
+                --clean-after-build
+              if ($LASTEXITCODE -ne 0) {
+                throw "vcpkg failed with exit code $LASTEXITCODE"
+              }
+            } finally {
+              Pop-Location
+            }
+            python .github/scripts/verify_windows_crt.py archive --path "$installRoot/$triplet/lib/opus.lib" --linkage static --configuration release
+            python .github/scripts/verify_windows_crt.py archive --path "$installRoot/$triplet/debug/lib/opus.lib" --linkage static --configuration debug
+          }
+
       - name: Check Windows Rust library
         shell: bash
         run: cargo check --locked --lib --features flutter,hwcodec,vram
 
       - name: Compile Windows native Rust library
         shell: bash
-        run: cargo build --locked --release --lib --features flutter,hwcodec,vram
+        run: |
+          set -o pipefail
+          cargo build --locked --release --lib --features flutter,hwcodec,vram 2>&1 | tee "$RUNNER_TEMP/cargo-link-native.log"
+          python .github/scripts/verify_windows_crt.py link-log --path "$RUNNER_TEMP/cargo-link-native.log"
 
       - name: Build Flutter Windows runner
         shell: bash
-        run: (cd flutter && flutter build windows --release)
+        run: |
+          (cd flutter && flutter build windows --release)
+          python .github/scripts/verify_windows_crt.py image --path flutter/build/windows/x64/runner/Release/camellia_remote.dll
 
       - name: Test Windows native bootstrap boundaries
         shell: bash
@@ -314,6 +358,23 @@ jobs:
         run: cargo check --locked --lib --features flutter,hwcodec,vram --target aarch64-pc-windows-msvc
 
       - name: Verify Windows aarch64 linkable compilation
+        shell: pwsh
+        env:
+          SODIUM_LIB_DIR: C:\vcpkg\installed\arm64-windows-static\lib
+        run: |
+          python -m pip install --disable-pip-version-check -r libs/portable/requirements.txt
+          $payload = Join-Path $env:RUNNER_TEMP 'camellia-portable-smoke-payload'
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          [System.IO.File]::WriteAllBytes(
+            (Join-Path $payload 'camellia-remote.exe'),
+            [byte[]](0x4d, 0x5a)
+          )
+          python libs/portable/generate.py `
+            --folder $payload `
+            --output libs/portable `
+            --executable camellia-remote.exe `
+            --target aarch64-pc-windows-msvc
+          cargo build --locked --target aarch64-pc-windows-msvc --lib --features flutter
         shell: pwsh
         env:
           SODIUM_LIB_DIR: C:\vcpkg\installed\arm64-windows-static\lib
