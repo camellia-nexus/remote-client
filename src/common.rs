@@ -2842,6 +2842,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bounded_peer_id_mutations_are_panic_free() {
+        use std::{panic::AssertUnwindSafe, time::Instant};
+
+        const ITERATIONS: usize = 2_048;
+        const MAX_LEN: usize = 512;
+        const MAX_RUNTIME_MS: u128 = 10_000;
+        let started = Instant::now();
+        for index in 0..ITERATIONS {
+            let mut state = 0x636c_69_2d_66_6669u64.wrapping_add(index as u64);
+            let len = (state as usize % (MAX_LEN + 1)).min(MAX_LEN);
+            let mut value = String::with_capacity(len);
+            for _ in 0..len {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state = state.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                value.push(char::from((state as u8).max(0x20)));
+            }
+            let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = is_valid_untrusted_peer_id(&value);
+            }));
+            assert!(result.is_ok(), "peer-id mutation {index} panicked");
+        }
+        assert!(
+            started.elapsed().as_millis() <= MAX_RUNTIME_MS,
+            "peer-id mutation budget exceeded: {} ms",
+            started.elapsed().as_millis()
+        );
+    }
+
     // ThrottledInterval tick at the same time as tokio interval, if no sleeps
     #[allow(non_snake_case)]
     #[tokio::test]
