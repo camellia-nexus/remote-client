@@ -91,6 +91,7 @@ jobs:
           uv run ruff check tools/admin-cli
           uv run python -m unittest discover -s tools/admin-cli/tests
           uv build
+          python3 .github/scripts/test_dynamic_boundary_policy.py
 
   generate_bridge:
     name: Generate Flutter Rust bridge

@@ -338,6 +338,16 @@ impl<'a> BinaryReader<'a> {
     }
 }
 
+/// Runs the production archive parser without extracting any files.
+///
+/// Dynamic test harnesses use this entry point so malformed input exercises
+/// exactly the same length, path, digest, and decompression metadata parser as
+/// the portable launcher.
+#[allow(dead_code)]
+pub(crate) fn validate_archive(data: &[u8]) -> io::Result<()> {
+    BinaryReader::read(data).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

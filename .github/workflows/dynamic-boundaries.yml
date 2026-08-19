@@ -1,0 +1,81 @@
+name: Dynamic Boundaries
+
+on:
+  schedule:
+    - cron: "29 3 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NIGHTLY_TOOLCHAIN: nightly-2026-08-15
+
+jobs:
+  unix-ipc-ffi:
+    name: Unix IPC unsafe and FFI boundaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # exact repository toolchain
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: client-unix-ipc-ffi
+      - name: Build Unix IPC boundary tests
+        run: cargo test --locked --lib --no-run
+      - name: Exercise unsafe libc IPC boundaries
+        run: >-
+          timeout --signal=TERM --kill-after=30s 10m
+          cargo test --locked --lib ipc::ipc_fs::tests -- --test-threads=1
+
+  portable-fuzz:
+    name: Portable parser libFuzzer and ASan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # pinned installer action
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+          components: rust-src,llvm-tools-preview
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: portable-fuzz
+          workspaces: libs/portable/fuzz
+      - name: Install pinned fuzz driver
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Validate locked fuzz dependencies
+        run: cargo +"${NIGHTLY_TOOLCHAIN}" fetch --locked --manifest-path libs/portable/fuzz/Cargo.toml
+      - name: Run bounded portable archive fuzzing
+        run: |
+          install -d -m 0700 \
+            "$RUNNER_TEMP/portable-fuzz-artifacts" \
+            "$RUNNER_TEMP/portable-fuzz-corpus"
+          cp -- libs/portable/fuzz/corpus/portable_archive/* \
+            "$RUNNER_TEMP/portable-fuzz-corpus/"
+          cargo +"${NIGHTLY_TOOLCHAIN}" fuzz run \
+            --fuzz-dir libs/portable/fuzz \
+            portable_archive \
+            "$RUNNER_TEMP/portable-fuzz-corpus" -- \
+            -artifact_prefix="$RUNNER_TEMP/portable-fuzz-artifacts/" \
+            -max_len=65536 \
+            -max_total_time=300 \
+            -rss_limit_mb=2048 \
+            -runs=1000000 \
+            -seed=20260819 \
+            -timeout=5
+          git diff --exit-code -- libs/portable/fuzz/Cargo.lock
+      - name: Upload bounded crash input
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-fuzz-crash-${{ github.sha }}
+          path: ${{ runner.temp }}/portable-fuzz-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
