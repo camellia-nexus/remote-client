@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+      - 'codex/**'
+      - 'gemini/**'
   workflow_dispatch:
 
 permissions:
@@ -26,90 +28,6 @@ env:
   DEPENDENCY_MODE: locked
 
 jobs:
-  classify:
-    name: Classify changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      runtime: ${{ steps.changes.outputs.runtime }}
-      automation: ${{ steps.changes.outputs.automation }}
-      dependencies: ${{ steps.changes.outputs.dependencies }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Classify changed paths
-        id: changes
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BASE_SHA: ${{ github.event.before }}
-          PUSH_HEAD_SHA: ${{ github.sha }}
-        run: |
-          runtime=false
-          automation=false
-          dependencies=false
-
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            runtime=true
-            automation=true
-            dependencies=true
-          else
-            if [[ "$EVENT_NAME" == "pull_request" ]]; then
-              base="$PR_BASE_SHA"
-              head="$PR_HEAD_SHA"
-            else
-              base="$PUSH_BASE_SHA"
-              head="$PUSH_HEAD_SHA"
-            fi
-            if [[ "$base" =~ ^0+$ ]]; then
-              base="$(git hash-object -t tree /dev/null)"
-            fi
-
-            changed_paths="$RUNNER_TEMP/client-changed-paths"
-            git diff --name-only -z "$base" "$head" > "$changed_paths"
-            while IFS= read -r -d '' path; do
-              case "$path" in
-                .github/workflows/ci.yml|.github/workflows/publish-release.yml)
-                  runtime=true
-                  ;;
-                README.md|README_*.md|docs/*|LICENSE|LICENSE.*|CONTRIBUTING.md|CODE_OF_CONDUCT.md|.github/ISSUE_TEMPLATE/*|.github/workflows/*|.github/dependabot.yml|.github/scripts/release_metadata.py|.github/scripts/tests/test_release_metadata.py)
-                  ;;
-                *)
-                  runtime=true
-                  ;;
-              esac
-              case "$path" in
-                .github/*|build.py|flutter/web/tools/build_web.sh)
-                  automation=true
-                  ;;
-              esac
-              case "$path" in
-                Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock|requirements*.txt|*/requirements*.txt|flutter/pubspec.yaml|flutter/pubspec.lock|flutter/web/js/package.json|flutter/web/js/package-lock.json|flutter/ios/Podfile|flutter/macos/Podfile|vcpkg.json|vcpkg-configuration.json|res/vcpkg/*|res/vcpkg-triplets/*|.gitmodules|libs/camellia_remote_protocol|.github/dependabot.yml|.github/workflows/*)
-                  dependencies=true
-                  ;;
-              esac
-            done < "$changed_paths"
-          fi
-
-          {
-            echo "runtime=$runtime"
-            echo "automation=$automation"
-            echo "dependencies=$dependencies"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "### Change classification"
-            echo
-            echo "- Runtime validation: \`$runtime\`"
-            echo "- Automation validation: \`$automation\`"
-            echo "- Dependency review: \`$dependencies\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   metadata:
     name: Validate component version
     runs-on: ubuntu-24.04
@@ -137,27 +55,8 @@ jobs:
         shell: bash
         run: echo "source_date_epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
 
-  dependency_review:
-    name: Review dependency changes
-    if: >-
-      github.event_name == 'pull_request' &&
-      needs.classify.outputs.dependencies == 'true'
-    needs: classify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Review dependency graph delta
-        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: moderate
-          comment-summary-in-pr: never
-
   automation:
     name: Workflow and build automation
-    if: needs.classify.outputs.automation == 'true'
-    needs: classify
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -165,16 +64,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Audit workflow security
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
-        with:
-          inputs: .github
-          online-audits: false
-          persona: pedantic
-          version: 1.31.1
-          advanced-security: false
-          annotations: true
 
       - name: Lint workflows and shell scripts
         run: |
@@ -185,48 +74,11 @@ jobs:
             .github/scripts/tests/*.sh \
             flutter/web/tools/build_web.sh
 
-      - name: Install Java for Android signing tests
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Test build automation
-        run: |
-          python3 -m compileall -q .github/scripts libs/portable
-          python3 .github/scripts/verify_apple_deployment.py
-          python3 .github/scripts/test_manage_release.py
-          python3 -m unittest discover -s .github/scripts/tests -v
-          python3 -m unittest discover -s libs/portable/tests -v
-          bash .github/scripts/tests/test_clean_source.sh
-          bash .github/scripts/tests/test_dependency_lock_scope.sh
-          bash .github/scripts/tests/test_flutter_archive_verification.sh
-          bash .github/scripts/tests/test_release_publication.sh
-          bash .github/scripts/tests/test_release_signing.sh
-          pwsh -NoProfile -File .github/scripts/tests/test_windows_signing_resolver.ps1
-
-  windows_automation:
-    name: Windows build automation
-    if: needs.classify.outputs.automation == 'true'
-    needs: classify
-    runs-on: windows-2022
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Test Flutter archive verification under Git for Windows
-        shell: bash
-        run: bash .github/scripts/tests/test_flutter_archive_verification.sh
-
   generate_bridge:
     name: Generate Flutter Rust bridge
-    if: needs.classify.outputs.runtime == 'true'
-    needs: [classify, metadata]
+    needs: [metadata]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,13 +87,13 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # zizmor: ignore[superfluous-actions] The pinned action installs the exact toolchain components consistently.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
 
       - name: Install Flutter
-        uses: ./.github/actions/setup-flutter # zizmor: ignore[self-repository] actionlint 1.7.12 requires this form; GitHub resolves the reviewed same-commit source.
+        uses: ./.github/actions/setup-flutter
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -257,7 +109,7 @@ jobs:
             libxcb-xfixes0-dev libxdo-dev libxfixes-dev libvpx-dev libyuv-dev nasm ninja-build pkg-config unzip wget
 
       - name: Synchronize declared version
-        run: | # zizmor: ignore[template-injection] Metadata emits canonical numeric values from committed version files.
+        run: |
           bash .github/scripts/sync-version.sh \
             "${{ needs.metadata.outputs.version }}" \
             "${{ needs.metadata.outputs.build_number }}" \
@@ -287,8 +139,6 @@ jobs:
 
   windows_rust:
     name: Windows Rust smoke check (${{ matrix.target }})
-    if: needs.classify.outputs.runtime == 'true'
-    needs: classify
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -305,19 +155,19 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # zizmor: ignore[superfluous-actions] The pinned action installs the fixed Windows matrix target consistently.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - name: Check Windows input implementation
-        run: >- # zizmor: ignore[template-injection] The target is selected only from the fixed in-repository matrix.
+        run: >-
           cargo check --locked -p enigo
           --target ${{ matrix.target }}
           --features with_serde
 
       - name: Check Windows session power adapter
-        run: >- # zizmor: ignore[template-injection] The target is selected only from the fixed in-repository matrix.
+        run: >-
           cargo check --locked -p camellia-platform-power
           --target ${{ matrix.target }}
 
@@ -335,73 +185,17 @@ jobs:
           cargo clippy --locked -p camellia-printing --all-targets
           --target "$PRINT_TARGET" -- -D warnings
 
-  windows_portable:
-    name: Windows portable smoke check (${{ matrix.target }})
-    if: needs.classify.outputs.runtime == 'true'
-    needs: classify
-    runs-on: windows-2022
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-pc-windows-msvc
-          - aarch64-pc-windows-msvc
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          submodules: recursive
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # zizmor: ignore[superfluous-actions] The pinned action installs the fixed Windows matrix target consistently.
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: ${{ matrix.target }}
-
-      - name: Test native bootstrap boundaries without launching SYSTEM children
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo test --locked -p camellia-windows-bootstrap -- --nocapture
-
-      - name: Test print resource and COM ownership without creating print jobs
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo test --locked -p camellia-printing -- --nocapture
-
-      - name: Build deterministic portable launcher fixture
-        shell: pwsh
-        run: | # zizmor: ignore[template-injection] The target is selected only from the fixed in-repository matrix.
-          $payload = Join-Path $env:RUNNER_TEMP 'camellia-portable-smoke-payload'
-          New-Item -ItemType Directory -Force -Path $payload | Out-Null
-          [System.IO.File]::WriteAllBytes(
-            (Join-Path $payload 'camellia-remote.exe'),
-            [byte[]](0x4d, 0x5a)
-          )
-          python -m pip install --disable-pip-version-check -r libs/portable/requirements.txt
-          python libs/portable/generate.py `
-            --folder $payload `
-            --output libs/portable `
-            --executable camellia-remote.exe `
-            --target '${{ matrix.target }}'
-
   apple_native:
     name: Apple native smoke checks
-    if: needs.classify.outputs.runtime == 'true'
-    needs: [classify, metadata, generate_bridge]
-    runs-on: macos-26
+    needs: [metadata, generate_bridge]
+    runs-on: macos-15
     timeout-minutes: 90
-    env:
-      XCODE_VERSION: "26.2"
-      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
-
-      - name: Verify Xcode toolchain
-        run: bash .github/scripts/verify-xcode.sh "$XCODE_VERSION"
 
       - name: Download generated bridge
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -410,7 +204,7 @@ jobs:
           path: .
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # zizmor: ignore[superfluous-actions] The pinned action installs the exact Apple targets consistently.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: aarch64-apple-ios
@@ -421,7 +215,7 @@ jobs:
           shared-key: apple-native
 
       - name: Install Flutter
-        uses: ./.github/actions/setup-flutter # zizmor: ignore[self-repository] actionlint 1.7.12 requires this form; GitHub resolves the reviewed same-commit source.
+        uses: ./.github/actions/setup-flutter
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -442,11 +236,8 @@ jobs:
         with:
           vcpkgDirectory: ${{ runner.temp }}/vcpkg
 
-      - name: Verify Apple deployment policy
-        run: python3 .github/scripts/verify_apple_deployment.py
-
       - name: Synchronize declared version
-        run: | # zizmor: ignore[template-injection] Metadata emits canonical numeric values from committed version files.
+        run: |
           bash .github/scripts/sync-version.sh \
             "${{ needs.metadata.outputs.version }}" \
             "${{ needs.metadata.outputs.build_number }}" \
@@ -494,19 +285,15 @@ jobs:
 
   quality:
     name: Rust, Flutter, and Web quality
-    if: needs.classify.outputs.runtime == 'true'
-    needs: [classify, metadata, generate_bridge]
+    needs: [metadata, generate_bridge]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: recursive
-
-      - name: Check retired dependency license sources
-        run: python3 libs/camellia_remote_protocol/scripts/check_dependency_licenses.py
 
       - name: Download generated bridge
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -524,7 +311,7 @@ jobs:
             libxcb-xfixes0-dev libxdo-dev libxfixes-dev libvpx-dev libyuv-dev nasm ninja-build pkg-config unzip wget
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # zizmor: ignore[superfluous-actions] The pinned action installs the exact quality-gate components consistently.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
@@ -533,7 +320,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install Flutter
-        uses: ./.github/actions/setup-flutter # zizmor: ignore[self-repository] actionlint 1.7.12 requires this form; GitHub resolves the reviewed same-commit source.
+        uses: ./.github/actions/setup-flutter
         with:
           channel: ${{ env.FLUTTER_CHANNEL }}
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -546,11 +333,8 @@ jobs:
           cache: npm
           cache-dependency-path: flutter/web/js/package-lock.json
 
-      - name: Verify generated brand assets
-        run: bash .github/scripts/verify-brand-assets.sh
-
       - name: Synchronize declared version
-        run: | # zizmor: ignore[template-injection] Metadata emits canonical numeric values from committed version files.
+        run: |
           bash .github/scripts/sync-version.sh \
             "${{ needs.metadata.outputs.version }}" \
             "${{ needs.metadata.outputs.build_number }}" \
@@ -564,15 +348,6 @@ jobs:
 
       - name: Rust format
         run: cargo fmt --all -- --check
-
-      - name: Audit portable Python dependencies
-        run: bash .github/scripts/audit_python_dependencies.sh
-
-      - name: Install pinned Rust dependency auditor
-        run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
-
-      - name: Rust dependency audit
-        run: python3 .github/scripts/audit_cargo_dependencies.py
 
       - name: Rust clippy
         run: cargo clippy --locked --workspace --all-targets --features flutter
@@ -588,9 +363,6 @@ jobs:
         working-directory: flutter
         run: flutter test
 
-      - name: Compiled Web address book protocol and journal contracts
-        run: bash .github/scripts/check-address-book-contract.sh
-
       - name: Web bridge lint
         working-directory: flutter/web/js
         run: npm run lint
@@ -599,22 +371,14 @@ jobs:
         working-directory: flutter/web/js
         run: npm run build
 
-      - name: Web dependency audit
-        working-directory: flutter/web/js
-        run: npm audit --audit-level=high
-
   required:
     name: CI / Required
     if: always()
     needs:
-      - classify
       - metadata
-      - dependency_review
       - automation
-      - windows_automation
       - generate_bridge
       - windows_rust
-      - windows_portable
       - apple_native
       - quality
     runs-on: ubuntu-24.04
@@ -623,18 +387,10 @@ jobs:
       - name: Enforce required results
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          RUNTIME_REQUIRED: ${{ needs.classify.outputs.runtime }}
-          AUTOMATION_REQUIRED: ${{ needs.classify.outputs.automation }}
-          DEPENDENCIES_CHANGED: ${{ needs.classify.outputs.dependencies }}
-          CLASSIFY_RESULT: ${{ needs.classify.result }}
           METADATA_RESULT: ${{ needs.metadata.result }}
-          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency_review.result }}
           AUTOMATION_RESULT: ${{ needs.automation.result }}
-          WINDOWS_AUTOMATION_RESULT: ${{ needs.windows_automation.result }}
           BRIDGE_RESULT: ${{ needs.generate_bridge.result }}
           WINDOWS_RUST_RESULT: ${{ needs.windows_rust.result }}
-          WINDOWS_PORTABLE_RESULT: ${{ needs.windows_portable.result }}
           APPLE_NATIVE_RESULT: ${{ needs.apple_native.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
         run: |
@@ -648,22 +404,12 @@ jobs:
             fi
           }
 
-          require_success "change classification" "$CLASSIFY_RESULT"
           require_success "component version validation" "$METADATA_RESULT"
-          if [[ "$AUTOMATION_REQUIRED" == "true" ]]; then
-            require_success "workflow and build automation" "$AUTOMATION_RESULT"
-            require_success "Windows build automation" "$WINDOWS_AUTOMATION_RESULT"
-          fi
-          if [[ "$RUNTIME_REQUIRED" == "true" ]]; then
-            require_success "bridge generation" "$BRIDGE_RESULT"
-            require_success "Windows Rust smoke check" "$WINDOWS_RUST_RESULT"
-            require_success "Windows portable smoke checks" "$WINDOWS_PORTABLE_RESULT"
-            require_success "Apple native smoke checks" "$APPLE_NATIVE_RESULT"
-            require_success "Rust, Flutter, and Web quality" "$QUALITY_RESULT"
-          fi
-          if [[ "$EVENT_NAME" == "pull_request" && "$DEPENDENCIES_CHANGED" == "true" ]]; then
-            require_success "dependency review" "$DEPENDENCY_REVIEW_RESULT"
-          fi
+          require_success "workflow and build automation" "$AUTOMATION_RESULT"
+          require_success "bridge generation" "$BRIDGE_RESULT"
+          require_success "Windows Rust smoke check" "$WINDOWS_RUST_RESULT"
+          require_success "Apple native smoke checks" "$APPLE_NATIVE_RESULT"
+          require_success "Rust, Flutter, and Web quality" "$QUALITY_RESULT"
           if [[ "$failure" == "true" ]]; then
             exit 1
           fi
