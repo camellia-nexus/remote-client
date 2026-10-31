@@ -1,0 +1,589 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.1; defaults to version from metadata)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: client-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CAMELLIA_REMOTE_DOCS_HOME_URL: ${{ github.server_url }}/${{ github.repository }}
+  CAMELLIA_REMOTE_LINUX_DISPLAY_DOCS_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/docs/platform-notes.md#linux-display-requirements
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.1"
+  FLUTTER_CHANNEL: stable
+  FLUTTER_VERSION: "3.44.9"
+  COCOAPODS_VERSION: "1.17.0"
+  NODE_VERSION: "24.22.1"
+  DEPENDENCY_MODE: locked
+
+jobs:
+  metadata:
+    name: Validate component version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      app_version: ${{ steps.release.outputs.app_version }}
+      build_number: ${{ steps.release.outputs.build_number }}
+      tag: ${{ steps.release.outputs.tag }}
+      source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test and validate release metadata
+        id: release
+        run: |
+          python3 .github/scripts/tests/test_release_metadata.py
+          python3 .github/scripts/release_metadata.py --github-output
+
+      - name: Resolve reproducible source timestamp
+        id: source
+        shell: bash
+        run: echo "source_date_epoch=$(git show -s --format=%ct HEAD)" >> "$GITHUB_OUTPUT"
+
+  generate_bridge:
+    name: Generate Flutter Rust bridge
+    needs: [metadata]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
+            libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxdo-dev libxfixes-dev libvpx-dev libyuv-dev nasm ninja-build pkg-config unzip wget
+
+      - name: Synchronize declared version
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+
+      - name: Prepare locked dependencies
+        run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
+
+      - name: Generate bridge
+        run: bash .github/scripts/generate-bridge.sh
+
+      - name: Format generated Rust bridge
+        run: cargo fmt --all
+
+      - name: Upload generated bridge
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: |
+            src/bridge_generated*.rs
+            flutter/lib/generated_bridge*.dart
+            flutter/lib/generated_bridge/**
+            flutter/macos/Runner/bridge_generated.h
+            flutter/ios/Runner/bridge_generated.h
+          if-no-files-found: error
+          retention-days: 1
+
+  build_linux:
+    name: Build Linux client packages
+    needs: [metadata, generate_bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Resolve Linux artifact-signing mode
+        shell: bash
+        env:
+          LINUX_GPG_FINGERPRINT: ${{ vars.LINUX_GPG_FINGERPRINT || '' }}
+          LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY || '' }}
+          LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE || '' }}
+        run: SIGNING_ENV_FILE="$GITHUB_ENV" bash .github/scripts/resolve-linux-signing.sh
+
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
+            libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxdo-dev libxfixes-dev libvpx-dev libyuv-dev gnupg nasm ninja-build pkg-config unzip wget
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Synchronize declared version
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+
+      - name: Prepare locked dependencies
+        run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          doNotCache: true
+          vcpkgDirectory: ${{ runner.temp }}/vcpkg
+
+      - name: Compile and package Linux client
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+          cargo build --locked --release --target x86_64-unknown-linux-gnu --lib --features flutter,hwcodec,unix-file-copy-paste
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-gnu/release/libcamellia_remote.so target/release/libcamellia_remote.so
+          (cd flutter && flutter build linux --release)
+          mkdir -p artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64
+          cp -R flutter/build/linux/*/release/bundle/* artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64/
+          tar -C artifacts -czf artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.tar.gz camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64
+          rm -rf artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64
+          bash .github/scripts/package-linux.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "x64" \
+            "amd64" \
+            "x86_64"
+
+      - name: Upload Linux release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-packages-linux
+          path: |
+            artifacts/*.tar.gz
+            artifacts/*.deb
+            artifacts/*.AppImage
+          if-no-files-found: error
+          retention-days: 1
+
+  build_windows:
+    name: Build Windows client packages
+    needs: [metadata, generate_bridge]
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          doNotCache: true
+          vcpkgDirectory: C:\vcpkg
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Resolve Windows signing mode
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODESIGN_CERTIFICATE_SHA256 || '' }}
+          WINDOWS_CODESIGN_CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_CERTIFICATE_THUMBPRINT || '' }}
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 || '' }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD || '' }}
+          WINDOWS_SECONDARY_CODESIGN_CERTIFICATE_SHA256: ${{ vars.WINDOWS_SECONDARY_CODESIGN_CERTIFICATE_SHA256 || '' }}
+          WINDOWS_SECONDARY_CODESIGN_CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_SECONDARY_CODESIGN_CERTIFICATE_THUMBPRINT || '' }}
+          WINDOWS_SECONDARY_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_SECONDARY_CODESIGN_PFX_BASE64 || '' }}
+          WINDOWS_SECONDARY_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_SECONDARY_CODESIGN_PFX_PASSWORD || '' }}
+        run: ./.github/scripts/resolve-windows-signing.ps1
+
+      - name: Build Windows client
+        shell: bash
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+          bash .github/scripts/prepare-dependencies.sh "${{ env.DEPENDENCY_MODE }}"
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+          export SODIUM_LIB_DIR="$VCPKG_ROOT/installed/x64-windows-static/lib"
+          cargo build --locked --release --lib --features flutter,hwcodec,vram
+          (cd flutter && flutter build windows --release)
+          mkdir -p artifacts
+
+      - name: Sign and verify Windows application payload
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ env.WINDOWS_SIGNING_GROUP == 'primary' && secrets.WINDOWS_CODESIGN_PFX_PASSWORD || env.WINDOWS_SIGNING_GROUP == 'secondary' && secrets.WINDOWS_SECONDARY_CODESIGN_PFX_PASSWORD || '' }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          $applicationDirectory = 'flutter/build/windows/x64/runner/Release'
+          $ownedFiles = @("$applicationDirectory/camellia-remote.exe")
+          $nativeLibraries = @(
+            Get-ChildItem -LiteralPath $applicationDirectory -Recurse -File -Filter 'camellia_remote.dll'
+          )
+          if ($nativeLibraries.Count -ne 1) {
+            throw "Expected one Camellia native library; found $($nativeLibraries.Count)"
+          }
+          $ownedFiles += $nativeLibraries.FullName
+          ./.github/scripts/sign-windows-artifacts.ps1 -Path $ownedFiles
+
+      - name: Build Windows installers
+        shell: pwsh
+        run: |
+          python -m pip install -r libs/portable/requirements.txt
+          python libs/portable/generate.py `
+            -f flutter/build/windows/x64/runner/Release `
+            -o libs/portable `
+            -e camellia-remote.exe `
+            -t x86_64-pc-windows-msvc
+          Copy-Item target/x86_64-pc-windows-msvc/release/camellia-remote-portable-packer.exe `
+            artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-windows-x64-portable.exe
+          Push-Location res/msi
+          python preprocess.py --arp `
+            --architecture x64 --app-name "Camellia Remote" `
+            -v "${{ needs.metadata.outputs.version }}"
+          nuget restore msi.sln
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          Copy-Item $msi.FullName ../../artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-windows-x64.msi
+          Pop-Location
+
+      - name: Sign and verify Windows artifacts
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ env.WINDOWS_SIGNING_GROUP == 'primary' && secrets.WINDOWS_CODESIGN_PFX_PASSWORD || env.WINDOWS_SIGNING_GROUP == 'secondary' && secrets.WINDOWS_SECONDARY_CODESIGN_PFX_PASSWORD || '' }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          $ownedFiles = @(
+            'artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-windows-x64-portable.exe',
+            'artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-windows-x64.msi'
+          )
+          ./.github/scripts/sign-windows-artifacts.ps1 -Path $ownedFiles
+
+      - name: Package Windows zip archive
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path 'flutter/build/windows/x64/runner/Release/*' `
+            -DestinationPath 'artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-windows-x64.zip' `
+            -Force
+
+      - name: Remove Windows signing material
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:WINDOWS_SIGNING_PFX_PATH) {
+            Remove-Item -LiteralPath $env:WINDOWS_SIGNING_PFX_PATH -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Windows release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-packages-windows
+          path: |
+            artifacts/*.exe
+            artifacts/*.msi
+            artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  build_macos:
+    name: Build macOS universal packages
+    needs: [metadata, generate_bridge]
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Resolve macOS signing mode
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY || '' }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY || '' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_CERTIFICATE_SHA256: ${{ vars.APPLE_SIGNING_CERTIFICATE_SHA256 || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_SECONDARY_API_ISSUER: ${{ vars.APPLE_SECONDARY_API_ISSUER || '' }}
+          APPLE_SECONDARY_API_KEY: ${{ vars.APPLE_SECONDARY_API_KEY || '' }}
+          APPLE_SECONDARY_API_PRIVATE_KEY: ${{ secrets.APPLE_SECONDARY_API_PRIVATE_KEY || '' }}
+          APPLE_SECONDARY_CERTIFICATE: ${{ secrets.APPLE_SECONDARY_CERTIFICATE || '' }}
+          APPLE_SECONDARY_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SECONDARY_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SECONDARY_SIGNING_CERTIFICATE_SHA256: ${{ vars.APPLE_SECONDARY_SIGNING_CERTIFICATE_SHA256 || '' }}
+          APPLE_SECONDARY_SIGNING_IDENTITY: ${{ vars.APPLE_SECONDARY_SIGNING_IDENTITY || '' }}
+        run: |
+          SIGNING_ENV_FILE="$GITHUB_ENV" SIGNING_TEMP_DIRECTORY="$RUNNER_TEMP" \
+            bash .github/scripts/resolve-macos-signing.sh
+
+      - name: Import macOS signing identity
+        if: env.MACOS_NATIVE_SIGNING == 'signed' || env.MACOS_NATIVE_SIGNING == 'notarized'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_PASSWORD: ${{ env.MACOS_SIGNING_GROUP == 'primary' && secrets.APPLE_CERTIFICATE_PASSWORD || env.MACOS_SIGNING_GROUP == 'secondary' && secrets.APPLE_SECONDARY_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          SIGNING_ENV_FILE="$GITHUB_ENV" SIGNING_TEMP_DIRECTORY="$RUNNER_TEMP" \
+            bash .github/scripts/prepare-macos-signing.sh
+
+      - name: Install macOS prerequisites
+        run: bash .github/scripts/install-apple-prerequisites.sh
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          doNotCache: true
+          vcpkgDirectory: ${{ runner.temp }}/vcpkg
+
+      - name: Build macOS universal client
+        shell: bash
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+          bash .github/scripts/prepare-dependencies.sh "${{ env.DEPENDENCY_MODE }}"
+          bash .github/scripts/verify-apple-pod-locks.sh macos
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx --x-install-root="$VCPKG_ROOT/installed"
+          cargo build --locked --release --target aarch64-apple-darwin --lib --features flutter,hwcodec,screencapturekit,unix-file-copy-paste
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-osx --x-install-root="$VCPKG_ROOT/installed"
+          cargo build --locked --release --target x86_64-apple-darwin --lib --features flutter,hwcodec,screencapturekit,unix-file-copy-paste
+          mkdir -p target/release
+          lipo -create \
+            target/aarch64-apple-darwin/release/libcamellia_remote.dylib \
+            target/x86_64-apple-darwin/release/libcamellia_remote.dylib \
+            -output target/release/libcamellia_remote.dylib
+          (cd flutter && FLUTTER_XCODE_ARCHS="arm64 x86_64" flutter build macos --release)
+
+      - name: Stage and package macOS artifacts
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          bash .github/scripts/stage-macos-release.sh \
+            flutter/build/macos/Build/Products/Release \
+            artifacts
+
+      - name: Remove macOS signing material
+        if: always()
+        shell: bash
+        run: bash .github/scripts/cleanup-macos-signing.sh
+
+      - name: Upload macOS release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-packages-macos
+          path: |
+            artifacts/*.dmg
+            artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  build_web:
+    name: Build Web client packages
+    needs: [metadata]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Build Web client
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.metadata.outputs.app_version }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.source_date_epoch }}
+        run: |
+          chmod +x flutter/web/tools/build_web.sh
+          ./flutter/web/tools/build_web.sh --mode release
+          mkdir -p artifacts
+          tar -C flutter/build -czf "artifacts/camellia-remote-${RELEASE_VERSION}-web.tar.gz" web
+          (cd flutter/build && zip -qry "$GITHUB_WORKSPACE/artifacts/camellia-remote-${RELEASE_VERSION}-web.zip" web)
+
+      - name: Upload Web release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-packages-web
+          path: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: [metadata, build_linux, build_windows, build_macos, build_web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download all client release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: downloaded-artifacts
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find downloaded-artifacts -type f \( \
+            -name '*.tar.gz' -o \
+            -name '*.deb' -o \
+            -name '*.AppImage' -o \
+            -name '*.exe' -o \
+            -name '*.msi' -o \
+            -name '*.dmg' -o \
+            -name '*.zip' \
+          \) -exec cp {} release-assets/ \;
+          echo "Collected release assets:"
+          ls -la release-assets/
+
+      - name: Determine tag name
+        id: release-tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          METADATA_TAG: ${{ needs.metadata.outputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$REF_NAME"
+          else
+            tag="$METADATA_TAG"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9ec8723d33963d3cb2430f80 # v2.2.12
+        with:
+          tag_name: ${{ steps.release-tag.outputs.tag }}
+          name: Release ${{ steps.release-tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: release-assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
