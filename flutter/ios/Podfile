@@ -36,5 +36,19 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    if target.name == 'device_info_plus'
+      target.build_configurations.each do |config|
+        compat_header = File.expand_path(File.join(__dir__, 'Flutter', 'VisionOSCompat.h'))
+        config.build_settings['GCC_PREFIX_HEADER'] = compat_header
+      end
+    end
+  end
+
+  Dir.glob(File.join(__dir__, '.symlinks', 'plugins', 'device_info_plus', '**', 'FPPDeviceInfoPlusPlugin.m')).each do |file|
+    content = File.read(file)
+    unless content.include?('VisionOSCompat')
+      shim = "@interface NSProcessInfo (VisionOSCompat)\n@property (readonly) BOOL isiOSAppOnVision;\n@end\n"
+      File.write(file, "#{shim}\n#{content}")
+    end
   end
 end
