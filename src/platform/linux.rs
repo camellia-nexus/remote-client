@@ -2046,17 +2046,29 @@ fn switch_service(stop: bool) -> String {
         .unwrap_or_default();
     Config::set_option("stop-service".into(), if stop { "Y" } else { "" }.into());
     if !home.is_empty() && home != "/root" && !Config::get().is_empty() {
-        let app_name_lower = crate::get_app_name().to_lowercase();
+        const CONFIG_SUBDIR: &str = ".config/camellia-remote";
+        const CANONICAL_APP: &str = "camellia-remote";
         let app_name0 = crate::get_app_name();
-        let config_subdir = format!(".config/{}", app_name_lower);
 
-        // SECURITY: Quote all paths to prevent shell injection from paths containing
-        // spaces, semicolons, or other special characters.
-        let src1 = shell_quote(&format!("{}/{}/{}.toml", home, config_subdir, app_name0));
-        let src2 = shell_quote(&format!("{}/{}/{}2.toml", home, config_subdir, app_name0));
-        let dst = shell_quote(&format!("/root/{}/", config_subdir));
+        // SECURITY (INJECT-001): Quote all paths to prevent shell injection from paths containing
+        // spaces, semicolons, or other special characters. Ensure target directory exists.
+        let src1 = shell_quote(&format!(
+            "{}/{}/{}.toml",
+            home, CONFIG_SUBDIR, CANONICAL_APP
+        ));
+        let src2 = shell_quote(&format!(
+            "{}/{}/{}2.toml",
+            home, CONFIG_SUBDIR, CANONICAL_APP
+        ));
+        let src1_legacy = shell_quote(&format!("{}/{}/{}.toml", home, CONFIG_SUBDIR, app_name0));
+        let src2_legacy = shell_quote(&format!("{}/{}/{}2.toml", home, CONFIG_SUBDIR, app_name0));
+        let dst = shell_quote(&format!("/root/{}/", CONFIG_SUBDIR));
+        let dst_dir = shell_quote(&format!("/root/{}", CONFIG_SUBDIR));
 
-        format!("cp -f {} {}; cp -f {} {};", src1, dst, src2, dst)
+        format!(
+            "mkdir -p {}; cp -f {} {} 2>/dev/null || cp -f {} {}; cp -f {} {} 2>/dev/null || cp -f {} {};",
+            dst_dir, src1, dst, src1_legacy, dst, src2, dst, src2_legacy, dst
+        )
     } else {
         "".to_owned()
     }

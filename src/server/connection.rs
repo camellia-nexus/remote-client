@@ -191,6 +191,8 @@ lazy_static::lazy_static! {
     pub static ref CONTROL_PERMISSIONS_ARRAY: Arc::<Mutex<Vec<(i32, ControlPermissions)>>> = Default::default();
     static ref WAKELOCK_SENDER: Arc::<Mutex<std::sync::mpsc::Sender<(usize, usize)>>> = Arc::new(Mutex::new(start_wakelock_thread()));
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
+    static ref ALARM_AUDIT_RATE_LIMITER: Arc<Mutex<HashMap<(String, i8), (Instant, u32)>>> = Default::default();
+    static ref AUDIT_HTTP_SEMAPHORE: Arc<tokio::sync::Semaphore> = Arc::new(tokio::sync::Semaphore::new(16));
 }
 
 #[cfg(feature = "flutter")]
@@ -1298,6 +1300,7 @@ impl Connection {
             }
         }
         video_service::notify_video_frame_fetched_by_conn_id(id, None);
+        video_service::remove_screenshots_for_conn(id);
         if conn.authorized {
             password::update_temporary_password();
         }
@@ -2565,7 +2568,33 @@ impl Connection {
         }
     }
 
+    fn check_alarm_rate_limit(ip: &str, typ: AlarmAuditType) -> bool {
+        let mut limiter = ALARM_AUDIT_RATE_LIMITER.lock().unwrap();
+        let now = Instant::now();
+        // Clean entries older than 5 minutes to prevent memory leaks
+        limiter
+            .retain(|_, (last_seen, _)| now.duration_since(*last_seen) < Duration::from_secs(300));
+        let key = (ip.to_string(), typ as i8);
+        let entry = limiter.entry(key).or_insert((now, 0));
+        if now.duration_since(entry.0) > Duration::from_secs(60) {
+            *entry = (now, 1);
+            true
+        } else {
+            entry.1 += 1;
+            // Allow up to 5 alarms of the same type per IP per minute (RES-012 rate-limiting)
+            entry.1 <= 5
+        }
+    }
+
     fn post_alarm_audit(&self, typ: AlarmAuditType, info: Value) {
+        if !Self::check_alarm_rate_limit(&self.ip, typ) {
+            log::warn!(
+                "Rate-limiting alarm audit {:?} for IP {} to prevent alarm amplification (RES-012)",
+                typ,
+                &self.ip
+            );
+            return;
+        }
         let url = crate::get_audit_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -2613,6 +2642,12 @@ impl Connection {
     ) -> ResultType<String> {
         let Some(auth_header) = crate::get_api_auth_header() else {
             bail!("API account session required for audit upload");
+        };
+        // RES-012: Global bounded semaphore to prevent unbounded in-flight audit HTTP requests
+        let _permit = match timeout(5_000, AUDIT_HTTP_SEMAPHORE.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => bail!("Audit HTTP semaphore closed"),
+            Err(_) => bail!("Timed out waiting for audit HTTP concurrency permit"),
         };
         crate::common::post_request_with_operation(url, v.to_string(), &auth_header, operation)
             .await
@@ -4912,6 +4947,7 @@ impl Connection {
                             request.display as _,
                             request.sid.clone(),
                             tx,
+                            self.inner.id,
                         );
                         self.refresh_video_display(Some(request.display as usize));
                     }
@@ -7366,33 +7402,39 @@ async fn start_ipc(
         #[cfg(target_os = "linux")]
         if headless_cm {
             let mut username = linux_desktop_manager::get_username();
-            loop {
-                if !username.is_empty() {
-                    break;
+            let wait_start = tokio::time::Instant::now();
+            const MAX_DESKTOP_WAIT: Duration = Duration::from_secs(30);
+            while username.is_empty() {
+                if wait_start.elapsed() >= MAX_DESKTOP_WAIT {
+                    bail!("Timed out waiting for desktop session user (headless)");
                 }
-                // `_rx_desktop_ready` is used as a wake-up signal from desktop/session state changes
-                // (for example wait_desktop_cm_ready paths). It is not itself a proof of CM readiness.
-                // TODO:
-                // When `_rx_desktop_ready` is closed, `recv()` returns
-                // `None` immediately and this loop may spin if `username` remains empty.
-                // Keep behavior unchanged for now; if field reports appear, handle `Ok(None)` by
-                // breaking/returning to avoid hot-looping.
-                let _res = timeout(1_000, _rx_desktop_ready.recv()).await;
+                // RES-011: Break hot loop immediately if channel is closed.
+                match timeout(1_000, _rx_desktop_ready.recv()).await {
+                    Ok(Some(())) => {
+                        // Desktop ready wake-up signal received
+                    }
+                    Ok(None) => {
+                        // Sender closed (connection terminated/dropped). Exit immediately to prevent hot loop.
+                        bail!("Desktop ready notification channel closed while waiting for user");
+                    }
+                    Err(_) => {
+                        // Timeout 1s, loop again and recheck username & deadline
+                    }
+                }
                 username = linux_desktop_manager::get_username();
             }
             let uid = {
                 let username_for_cmd = username.clone();
                 let mut uid_cmd = camellia_remote_protocol::tokio::process::Command::new("id");
-                // TODO:
-                // Keep current behavior for now to minimize change risk.
-                // If usernames starting with '-' are observed in the field, prefer:
-                // `id -u -- <username>` to avoid option-parsing ambiguity.
-                // Already verified that `id -u -- <username>` works as expected on macOS and Ubuntu 24.04.
-                uid_cmd.arg("-u").arg(&username_for_cmd).kill_on_drop(true);
+                uid_cmd
+                    .arg("-u")
+                    .arg("--")
+                    .arg(&username_for_cmd)
+                    .kill_on_drop(true);
                 let output = timeout(10_000, uid_cmd.output())
                     .await
                     .map_err(|_| anyhow!("Timed out querying uid for {}", username))?
-                    .map_err(|e| anyhow!("Failed to run `id -u {}`: {}", username, e))?;
+                    .map_err(|e| anyhow!("Failed to run `id -u -- {}`: {}", username, e))?;
                 if !output.status.success() {
                     bail!("Failed to query uid for {}", username);
                 }
@@ -9127,5 +9169,27 @@ mod test {
             scoped.terminal_persistent.enum_value(),
             Ok(BoolOption::NotSet)
         );
+    }
+
+    #[test]
+    fn test_alarm_rate_limiter_bounds_res_012() {
+        let ip = "192.168.1.100";
+        let typ = AlarmAuditType::IpWhitelist;
+        // First 5 alarms should be allowed
+        for _ in 0..5 {
+            assert!(Connection::check_alarm_rate_limit(ip, typ));
+        }
+        // 6th alarm within the same minute must be rate limited
+        assert!(!Connection::check_alarm_rate_limit(ip, typ));
+
+        // Different IP should still have its own quota
+        let other_ip = "192.168.1.101";
+        assert!(Connection::check_alarm_rate_limit(other_ip, typ));
+
+        // Different alarm type on the original IP has independent counter
+        assert!(Connection::check_alarm_rate_limit(
+            ip,
+            AlarmAuditType::ExceedThirtyAttempts
+        ));
     }
 }

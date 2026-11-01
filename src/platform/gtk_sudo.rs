@@ -758,6 +758,10 @@ fn error_dialog_and_exit(err_msg: &str, exit_code: i32) {
 }
 
 fn quote_shell_arg(arg: &str, add_splash_if_match: bool) -> String {
+    if arg.contains('\0') {
+        log::error!("Refusing to quote shell argument containing null byte");
+        return "''".to_string();
+    }
     let mut rv = arg.to_string();
     let needs_quotes = arg.chars().any(|c| {
         c.is_whitespace()

@@ -4072,6 +4072,40 @@ pub mod peer_online {
         ResultType, Stream,
     };
 
+    pub const MAX_ONLINE_BATCH_SIZE: usize = 256;
+
+    /// PROTO-002: Checked parsing of online states bitfield.
+    /// States bitfield is packed MSB-first: peer i's state is at byte i/8, bit 0x01 << (7 - i%8).
+    /// Requires states.len() >= ceil(ids.len() / 8).
+    pub fn parse_online_states(
+        ids: &[String],
+        states: &[u8],
+    ) -> ResultType<(Vec<String>, Vec<String>)> {
+        if ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let expected_bytes = (ids.len() + 7) / 8;
+        if states.len() < expected_bytes {
+            bail!(
+                "Online response states truncated: expected at least {} bytes for {} peers, got {}",
+                expected_bytes,
+                ids.len(),
+                states.len()
+            );
+        }
+        let mut onlines = Vec::new();
+        let mut offlines = Vec::new();
+        for i in 0..ids.len() {
+            let bit_value = 0x01 << (7 - (i % 8));
+            if (states[i / 8] & bit_value) == bit_value {
+                onlines.push(ids[i].clone());
+            } else {
+                offlines.push(ids[i].clone());
+            }
+        }
+        Ok((onlines, offlines))
+    }
+
     pub async fn query_online_states<F: FnOnce(Vec<String>, Vec<String>)>(ids: Vec<String>, f: F) {
         let test = false;
         if test {
@@ -4080,14 +4114,33 @@ pub mod peer_online {
             let offlines = onlines.drain((onlines.len() / 2)..).collect();
             f(onlines, offlines)
         } else {
+            if ids.is_empty() {
+                f(Vec::new(), Vec::new());
+                return;
+            }
             let query_timeout = std::time::Duration::from_millis(3_000);
-            match query_online_states_(&ids, query_timeout).await {
-                Ok((onlines, offlines)) => {
-                    f(onlines, offlines);
+            let mut total_onlines = Vec::new();
+            let mut total_offlines = Vec::new();
+            let mut any_success = false;
+            for chunk in ids.chunks(MAX_ONLINE_BATCH_SIZE) {
+                let chunk_vec = chunk.to_vec();
+                match query_online_states_(&chunk_vec, query_timeout).await {
+                    Ok((onlines, offlines)) => {
+                        total_onlines.extend(onlines);
+                        total_offlines.extend(offlines);
+                        any_success = true;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "query online states failed for chunk of {} peers: {}",
+                            chunk_vec.len(),
+                            &e
+                        );
+                    }
                 }
-                Err(e) => {
-                    log::debug!("query onlines, {}", &e);
-                }
+            }
+            if any_success {
+                f(total_onlines, total_offlines);
             }
         }
     }
@@ -4139,19 +4192,7 @@ pub mod peer_online {
             {
                 match msg_in.union {
                     Some(rendezvous_message::Union::OnlineResponse(online_response)) => {
-                        let states = online_response.states;
-                        let mut onlines = Vec::new();
-                        let mut offlines = Vec::new();
-                        for i in 0..ids.len() {
-                            // bytes index from left to right
-                            let bit_value = 0x01 << (7 - i % 8);
-                            if (states[i / 8] & bit_value) == bit_value {
-                                onlines.push(ids[i].clone());
-                            } else {
-                                offlines.push(ids[i].clone());
-                            }
-                        }
-                        return Ok((onlines, offlines));
+                        return parse_online_states(ids, &online_response.states);
                     }
                     _ => {
                         // ignore
@@ -4168,7 +4209,63 @@ pub mod peer_online {
 
     #[cfg(test)]
     mod tests {
+        use super::*;
         use camellia_remote_protocol::tokio;
+
+        #[test]
+        fn test_parse_online_states_bounds_proto_002() {
+            // 0 IDs
+            let (on, off) = parse_online_states(&[], &[]).unwrap();
+            assert!(on.is_empty() && off.is_empty());
+
+            // 1 ID, empty states -> truncated
+            let id1 = vec!["peer1".to_string()];
+            assert!(parse_online_states(&id1, &[]).is_err());
+
+            // 1 ID, 1 byte with MSB set -> online
+            let (on, off) = parse_online_states(&id1, &[0b1000_0000]).unwrap();
+            assert_eq!(on, vec!["peer1"]);
+            assert!(off.is_empty());
+
+            // 1 ID, 1 byte with MSB clear -> offline
+            let (on, off) = parse_online_states(&id1, &[0b0000_0000]).unwrap();
+            assert!(on.is_empty());
+            assert_eq!(off, vec!["peer1"]);
+
+            // 7 IDs, 1 byte -> valid
+            let ids7: Vec<String> = (0..7).map(|i| format!("peer{i}")).collect();
+            let (on, off) = parse_online_states(&ids7, &[0b1010_1010]).unwrap();
+            assert_eq!(on, vec!["peer0", "peer2", "peer4", "peer6"]);
+            assert_eq!(off, vec!["peer1", "peer3", "peer5"]);
+
+            // 8 IDs, 1 byte -> valid
+            let ids8: Vec<String> = (0..8).map(|i| format!("peer{i}")).collect();
+            let (on, off) = parse_online_states(&ids8, &[0b1111_0000]).unwrap();
+            assert_eq!(on.len(), 4);
+            assert_eq!(off.len(), 4);
+
+            // 9 IDs, 1 byte -> truncated (requires 2 bytes)
+            let ids9: Vec<String> = (0..9).map(|i| format!("peer{i}")).collect();
+            assert!(parse_online_states(&ids9, &[0b1111_1111]).is_err());
+
+            // 9 IDs, 2 bytes -> valid
+            let (on, off) = parse_online_states(&ids9, &[0b1111_1111, 0b1000_0000]).unwrap();
+            assert_eq!(on.len(), 9);
+            assert_eq!(off.len(), 0);
+
+            // 256 IDs, 31 bytes -> truncated
+            let ids256: Vec<String> = (0..256).map(|i| format!("peer{i}")).collect();
+            assert!(parse_online_states(&ids256, &[0u8; 31]).is_err());
+
+            // 256 IDs, 32 bytes -> valid
+            let (on, off) = parse_online_states(&ids256, &[0xFFu8; 32]).unwrap();
+            assert_eq!(on.len(), 256);
+            assert_eq!(off.len(), 0);
+
+            // Extra bytes allowed without panic or error
+            let (on, _) = parse_online_states(&id1, &[0b1000_0000, 0xAA, 0xBB]).unwrap();
+            assert_eq!(on, vec!["peer1"]);
+        }
 
         #[tokio::test]
         async fn test_query_onlines() {

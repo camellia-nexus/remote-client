@@ -87,6 +87,7 @@ type ConnectionCandidate = {
 const FALLBACK_DEFAULT_ID_PORT = 21116;
 
 export { SessionPolicyGuard } from './policy';
+import { decodeOnlineStates } from './online_states';
 
 export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly config: RuntimeConfig;
@@ -2468,6 +2469,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     } catch (err) {
       this.logger.warn('query_onlines failed', err);
       this.closeOnlineQueryTransport();
+      return;
     } finally {
       inbox?.close();
       this.scheduleOnlineQueryTransportClose();
@@ -2533,21 +2535,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     states: Uint8Array | undefined,
     ids: string[]
   ): [string[], string[]] {
-    if (!states || states.length === 0) {
-      return [[], ids.slice()];
-    }
-    const onlines: string[] = [];
-    const offlines: string[] = [];
-    for (let i = 0; i < ids.length; i++) {
-      const byteIndex = Math.floor(i / 8);
-      const bitValue = 0x01 << (7 - (i % 8));
-      if ((states[byteIndex] & bitValue) === bitValue) {
-        onlines.push(ids[i]);
-      } else {
-        offlines.push(ids[i]);
-      }
-    }
-    return [onlines, offlines];
+    return decodeOnlineStates(states, ids);
   }
 
   private deriveOnlineServer(endpoint: string): string {

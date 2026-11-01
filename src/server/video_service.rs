@@ -145,12 +145,19 @@ lazy_static::lazy_static! {
     pub static ref IS_UAC_RUNNING: Arc<Mutex<bool>> = Default::default();
     pub static ref IS_FOREGROUND_WINDOW_ELEVATED: Arc<Mutex<bool>> = Default::default();
     static ref SCREENSHOTS: Mutex<HashMap<(VideoSource, usize), Screenshot>> = Default::default();
+    static ref PNG_ENCODING_SEMAPHORE: Arc<tokio::sync::Semaphore> = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PNG_ENCODINGS));
 }
 
+pub const MAX_SCREENSHOT_DISPLAYS: usize = 32;
+pub const SCREENSHOT_EXPIRY: Duration = Duration::from_secs(10);
+pub const MAX_CONCURRENT_PNG_ENCODINGS: usize = 4;
+
 struct Screenshot {
+    conn_id: i32,
     sid: String,
     tx: Sender,
     restore_vram: bool,
+    created_at: Instant,
 }
 
 #[inline]
@@ -807,9 +814,31 @@ fn run(vs: VideoService) -> ResultType<()> {
                                 }
                             }
                         };
-                        std::thread::spawn(move || {
-                            handle_screenshot(screenshot, msg, w, h, data);
-                        });
+                        let permit = PNG_ENCODING_SEMAPHORE.clone().try_acquire_owned();
+                        match permit {
+                            Ok(permit) => {
+                                std::thread::spawn(move || {
+                                    let _permit = permit;
+                                    handle_screenshot(screenshot, msg, w, h, data);
+                                });
+                            }
+                            Err(_) => {
+                                log::warn!(
+                                    "Dropping screenshot PNG encoding: concurrency limit ({MAX_CONCURRENT_PNG_ENCODINGS}) reached"
+                                );
+                                let mut response = ScreenshotResponse::new();
+                                response.sid = screenshot.sid;
+                                response.msg =
+                                    "Server busy: concurrent screenshot limit reached, please retry later."
+                                        .to_owned();
+                                let mut msg_out = Message::new();
+                                msg_out.set_screenshot_response(response);
+                                let _ = screenshot.tx.send((
+                                    camellia_remote_protocol::tokio::time::Instant::now(),
+                                    Arc::new(msg_out),
+                                ));
+                            }
+                        }
                         if restore_vram {
                             bail!("SWITCH");
                         }
@@ -1427,15 +1456,62 @@ fn check_qos(
     Ok(())
 }
 
-pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String, tx: Sender) {
-    SCREENSHOTS.lock().unwrap().insert(
+pub fn set_take_screenshot(
+    source: VideoSource,
+    display_idx: usize,
+    sid: String,
+    tx: Sender,
+    conn_id: i32,
+) {
+    if display_idx >= MAX_SCREENSHOT_DISPLAYS {
+        log::warn!(
+            "Rejecting screenshot request for display {display_idx} >= {MAX_SCREENSHOT_DISPLAYS}"
+        );
+        let mut response = ScreenshotResponse::new();
+        response.sid = sid;
+        response.msg = format!("Invalid display index: {display_idx}");
+        let mut msg_out = Message::new();
+        msg_out.set_screenshot_response(response);
+        let _ = tx.send((
+            camellia_remote_protocol::tokio::time::Instant::now(),
+            Arc::new(msg_out),
+        ));
+        return;
+    }
+
+    let mut map = SCREENSHOTS.lock().unwrap();
+    let now = Instant::now();
+    // Prune expired entries to prevent memory leak
+    map.retain(|_, s| now.duration_since(s.created_at) < SCREENSHOT_EXPIRY);
+
+    // If an existing request exists for this (source, display_idx), notify previous requester
+    if let Some(old) = map.remove(&(source, display_idx)) {
+        let mut response = ScreenshotResponse::new();
+        response.sid = old.sid;
+        response.msg = "Screenshot request superseded by newer request".to_owned();
+        let mut msg_out = Message::new();
+        msg_out.set_screenshot_response(response);
+        let _ = old.tx.send((
+            camellia_remote_protocol::tokio::time::Instant::now(),
+            Arc::new(msg_out),
+        ));
+    }
+
+    map.insert(
         (source, display_idx),
         Screenshot {
+            conn_id,
             sid,
             tx,
             restore_vram: false,
+            created_at: now,
         },
     );
+}
+
+pub fn remove_screenshots_for_conn(conn_id: i32) {
+    let mut map = SCREENSHOTS.lock().unwrap();
+    map.retain(|_, s| s.conn_id != conn_id);
 }
 
 // We need to this function, because the `stride` may be larger than `width * 4`.
@@ -1607,5 +1683,42 @@ mod frame_ack_tests {
         assert!(!states.contains_key(&(VideoSource::Monitor, first_idx)));
         assert!(!states.contains_key(&(VideoSource::Monitor, second_idx)));
         assert!(!states.contains_key(&(VideoSource::Camera, first_idx)));
+    }
+
+    #[test]
+    fn test_screenshot_bounds_res_016() {
+        let (tx, _rx) = camellia_remote_protocol::tokio::sync::mpsc::unbounded_channel();
+        // Display >= MAX_SCREENSHOT_DISPLAYS (32) must be rejected
+        set_take_screenshot(
+            VideoSource::Monitor,
+            999,
+            "sid_invalid".to_string(),
+            tx.clone(),
+            1234,
+        );
+        assert!(!SCREENSHOTS
+            .lock()
+            .unwrap()
+            .contains_key(&(VideoSource::Monitor, 999)));
+
+        // Valid display is accepted
+        set_take_screenshot(
+            VideoSource::Monitor,
+            0,
+            "sid_valid".to_string(),
+            tx.clone(),
+            1234,
+        );
+        assert!(SCREENSHOTS
+            .lock()
+            .unwrap()
+            .contains_key(&(VideoSource::Monitor, 0)));
+
+        // remove_screenshots_for_conn cleans up on disconnect
+        remove_screenshots_for_conn(1234);
+        assert!(!SCREENSHOTS
+            .lock()
+            .unwrap()
+            .contains_key(&(VideoSource::Monitor, 0)));
     }
 }
