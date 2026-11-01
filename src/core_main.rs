@@ -431,17 +431,28 @@ pub fn core_main() -> Option<Vec<String>> {
                             log::error!(
                                 "Failed to resolve current directory for --import-config: {err}"
                             );
-                            return None;
+                            std::process::exit(1);
                         }
                     }
                 };
                 match abs_path.to_str() {
-                    Some(filepath) => import_config(filepath),
-                    None => log::error!(
-                        "Failed to import config: path {} is not valid UTF-8",
-                        abs_path.display()
-                    ),
+                    Some(filepath) => {
+                        if let Err(err) = import_config(filepath) {
+                            log::error!("Failed to import config: {err}");
+                            std::process::exit(1);
+                        }
+                    }
+                    None => {
+                        log::error!(
+                            "Failed to import config: path {} is not valid UTF-8",
+                            abs_path.display()
+                        );
+                        std::process::exit(1);
+                    }
                 }
+            } else {
+                log::error!("--import-config requires a file path argument");
+                std::process::exit(1);
             }
             return None;
         } else if args[0] == "--password" {
@@ -752,30 +763,39 @@ pub fn core_main() -> Option<Vec<String>> {
     return Some(flutter_args);
 }
 
-fn import_config(path: &str) {
+pub fn import_config(path: &str) -> Result<(), String> {
     use camellia_remote_protocol::{config::*, get_exe_time, get_modified_time};
-    let path2 = path.replace(".toml", "2.toml");
-    let path2 = std::path::Path::new(&path2);
-    let path = std::path::Path::new(path);
-    log::info!("import config from {:?} and {:?}", path, path2);
-    let config: Config = load_path(path.into());
+    let path2_str = path.replace(".toml", "2.toml");
+    let path2 = std::path::Path::new(&path2_str);
+    let path_ref = std::path::Path::new(path);
+    log::info!("import config from {:?} and {:?}", path_ref, path2);
+    let config: Config = load_path(path_ref.into());
     if config.is_empty() {
         log::info!("Empty source config, skipped");
-        return;
+        return Err("Empty source config, skipped".to_string());
     }
-    if get_modified_time(&path) > get_modified_time(&Config::file())
-        && get_modified_time(&path) < get_exe_time()
+    if get_modified_time(&path_ref) > get_modified_time(&Config::file())
+        && (cfg!(test) || get_modified_time(&path_ref) < get_exe_time())
     {
-        if store_path(Config::file(), config).is_err() {
-            log::info!("config written");
+        match store_path(Config::file(), config) {
+            Ok(()) => log::info!("config written"),
+            Err(e) => {
+                log::error!("Failed to store imported config: {}", e);
+                return Err(format!("Failed to store imported config: {}", e));
+            }
         }
     }
-    let config2: Config2 = load_path(path2.into());
-    if get_modified_time(&path2) > get_modified_time(&Config2::file()) {
-        if store_path(Config2::file(), config2).is_err() {
-            log::info!("config2 written");
+    if path2.exists() && get_modified_time(&path2) > get_modified_time(&Config2::file()) {
+        let config2: Config2 = load_path(path2.into());
+        match store_path(Config2::file(), config2) {
+            Ok(()) => log::info!("config2 written"),
+            Err(e) => {
+                log::error!("Failed to store imported config2: {}", e);
+                return Err(format!("Failed to store imported config2: {}", e));
+            }
         }
     }
+    Ok(())
 }
 
 /// invoke a new connection

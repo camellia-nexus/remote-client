@@ -511,6 +511,98 @@ fn authorize_service_sync_frame(
     }
 }
 
+/// Check if an option key represents a root-owned security or network setting.
+///
+/// Root-owned settings include:
+/// - Custom rendezvous/relay servers and network endpoints
+/// - API servers
+/// - Permanent passwords, credentials, and privilege/security controls
+/// - Trusted devices
+/// - Whitelists
+#[inline]
+pub fn is_root_owned_option(key: &str) -> bool {
+    matches!(
+        key,
+        // Custom rendezvous/relay servers and network endpoints
+        config::keys::OPTION_CUSTOM_RENDEZVOUS_SERVER
+            | config::keys::OPTION_RELAY_SERVER
+            | config::keys::OPTION_KEY
+            | config::keys::OPTION_ICE_SERVERS
+            | config::keys::OPTION_ALLOW_WEBSOCKET
+            | config::keys::OPTION_DISABLE_UDP
+            | "proxy-url"
+            | "proxy-username"
+            | "proxy-password"
+            // API servers
+            | config::keys::OPTION_API_SERVER
+            // Permanent passwords, credentials, and privilege/security controls
+            | config::keys::OPTION_DEFAULT_CONNECT_PASSWORD
+            | config::keys::OPTION_PRESET_ADDRESS_BOOK_PASSWORD
+            | config::keys::OPTION_DISABLE_CHANGE_PERMANENT_PASSWORD
+            | config::keys::OPTION_DISABLE_CHANGE_ID
+            | config::keys::OPTION_DISABLE_UNLOCK_PIN
+            | config::keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED
+            // Trusted devices
+            | config::keys::OPTION_ENABLE_TRUSTED_DEVICES
+            // Whitelists
+            | config::keys::OPTION_WHITELIST
+            | config::keys::OPTION_ID_WHITELIST
+    )
+}
+
+/// Merge a user-provided `Config2` into an authoritative root `Config2`, ensuring
+/// that root-owned security and network settings are strictly preserved.
+pub fn sanitize_user_config2_for_root(
+    user_config2: &Config2,
+    root_config2: &Config2,
+) -> Config2 {
+    let mut merged = root_config2.clone();
+    let mut merged_options = std::collections::HashMap::new();
+
+    // Preserve all root-owned options from root_config2
+    for (k, v) in &root_config2.options {
+        if is_root_owned_option(k) {
+            merged_options.insert(k.clone(), v.clone());
+        }
+    }
+
+    // Apply all non-root-owned options from user_config2
+    for (k, v) in &user_config2.options {
+        if !is_root_owned_option(k) {
+            merged_options.insert(k.clone(), v.clone());
+        }
+    }
+
+    merged.options = merged_options;
+    merged
+}
+
+/// Merge user-provided `Config` and `Config2` against the root service's authoritative
+/// configuration.
+///
+/// Prevents user-initiated sync from clobbering root-owned identity, credentials,
+/// custom rendezvous/relay servers, API servers, trusted devices, and whitelists.
+pub fn sanitize_user_config_for_root(
+    user_config: &Config,
+    user_config2: &Config2,
+    root_config: &Config,
+    root_config2: &Config2,
+) -> (Config, Config2) {
+    let merged_config = if root_config.is_empty() {
+        user_config.clone()
+    } else {
+        root_config.clone()
+    };
+
+    let merged_config2 = if root_config.is_empty() && root_config2.options.is_empty() {
+        user_config2.clone()
+    } else {
+        sanitize_user_config2_for_root(user_config2, root_config2)
+    };
+
+    (merged_config, merged_config2)
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn start(postfix: &str) -> ResultType<()> {
     let mut incoming = new_listener(postfix).await?;
@@ -971,8 +1063,11 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::SyncConfig(Some(configs)) => {
             let (config, config2) = *configs;
             let _chk = CheckIfRestart::new();
-            Config::set(config);
-            Config2::set(config2);
+            let (root_config, root_config2) = (Config::get(), Config2::get());
+            let (merged_config, merged_config2) =
+                sanitize_user_config_for_root(&config, &config2, &root_config, &root_config2);
+            Config::set(merged_config);
+            Config2::set(merged_config2);
             allow_err!(stream.send(&Data::SyncConfig(None)).await);
         }
         Data::SyncConfig(None) => {
