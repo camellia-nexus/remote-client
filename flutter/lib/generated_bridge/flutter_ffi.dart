@@ -1612,6 +1612,28 @@ Future<void> mainAccountAuthCancel() =>
 Future<String> mainAccountAuthResult() =>
     RustLib.instance.api.crateFlutterFfiMainAccountAuthResult();
 
+Future<void> accountLogout() =>
+    RustLib.instance.api.crateFlutterFfiAccountLogout();
+
+Future<void> mainAccountLogout() =>
+    RustLib.instance.api.crateFlutterFfiMainAccountLogout();
+
+String mainCreateCapabilityHandle({
+  required String peerId,
+  required String secret,
+}) => RustLib.instance.api.crateFlutterFfiMainCreateCapabilityHandle(
+  peerId: peerId,
+  secret: secret,
+);
+
+String mainConsumeCapabilityHandle({
+  required String peerId,
+  required String handle,
+}) => RustLib.instance.api.crateFlutterFfiMainConsumeCapabilityHandle(
+  peerId: peerId,
+  handle: handle,
+);
+
 Future<void> mainOnMainWindowClose() =>
     RustLib.instance.api.crateFlutterFfiMainOnMainWindowClose();
 

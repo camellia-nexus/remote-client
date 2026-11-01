@@ -977,6 +977,16 @@ class RustdeskImpl {
   }) => ffi.mainAccountAuth(op: op, rememberMe: rememberMe);
   Future<void> mainAccountAuthCancel() => ffi.mainAccountAuthCancel();
   Future<String> mainAccountAuthResult() => ffi.mainAccountAuthResult();
+  Future<void> accountLogout() => ffi.accountLogout();
+  Future<void> mainAccountLogout() => ffi.mainAccountLogout();
+  String mainCreateCapabilityHandle({
+    required String peerId,
+    required String secret,
+  }) => ffi.mainCreateCapabilityHandle(peerId: peerId, secret: secret);
+  String mainConsumeCapabilityHandle({
+    required String peerId,
+    required String handle,
+  }) => ffi.mainConsumeCapabilityHandle(peerId: peerId, handle: handle);
   Future<void> mainOnMainWindowClose() => ffi.mainOnMainWindowClose();
   bool mainCurrentIsWayland() => ffi.mainCurrentIsWayland();
   bool mainIsLoginWayland() => ffi.mainIsLoginWayland();
