@@ -1842,25 +1842,9 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
-    #[cfg(debug_assertions)]
-    if let Ok(data) = std::fs::read_to_string("./custom.txt") {
-        read_custom_client(data.trim());
-        return;
-    }
-    let Some(path) = std::env::current_exe().map_or(None, |x| x.parent().map(|x| x.to_path_buf()))
-    else {
-        return;
-    };
-    #[cfg(target_os = "macos")]
-    let path = path.join("../Resources");
-    let path = path.join("custom.txt");
-    if path.is_file() {
-        let Ok(data) = std::fs::read_to_string(&path) else {
-            log::error!("Failed to read custom client config");
-            return;
-        };
-        read_custom_client(&data.trim());
-    }
+    // SECURITY (CONFIG-010): Loading unauthenticated custom client configuration
+    // from CWD, executable directory, or adjacent files is permanently disabled.
+    // Client identity and core configuration must not be hijacked by adjacent drop files.
 }
 
 fn read_custom_client_advanced_settings(
@@ -1966,8 +1950,8 @@ pub fn read_custom_client(config: &str) {
     };
 
     if let Some(app_name) = data.remove("app-name") {
-        if let Some(app_name) = app_name.as_str() {
-            *config::APP_NAME.write().unwrap() = app_name.to_owned();
+        if let Some(_app_name) = app_name.as_str() {
+            log::warn!("Runtime modification of app-name is disabled (CONFIG-010/INJECT-001)");
         }
     }
 

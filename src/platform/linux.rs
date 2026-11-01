@@ -2069,10 +2069,9 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     }
     log::info!("Uninstalling service...");
     let cp = switch_service(true);
-    let app_name = crate::get_app_name().to_lowercase();
-    // systemctl kill rustdesk --tray, execute cp first
+    const SERVICE_UNIT: &str = "camellia-remote.service";
     if !run_cmds_privileged(&format!(
-        "{cp} systemctl disable {app_name}; systemctl stop {app_name};"
+        "{cp} systemctl disable {SERVICE_UNIT}; systemctl stop {SERVICE_UNIT};"
     )) {
         Config::set_option("stop-service".into(), "".into());
         return true;
@@ -2091,9 +2090,9 @@ pub fn install_service() -> bool {
     }
     log::info!("Installing service...");
     let cp = switch_service(false);
-    let app_name = crate::get_app_name().to_lowercase();
+    const SERVICE_UNIT: &str = "camellia-remote.service";
     if !run_cmds_privileged(&format!(
-        "{cp} systemctl enable {app_name}; systemctl start {app_name};"
+        "{cp} systemctl enable {SERVICE_UNIT}; systemctl start {SERVICE_UNIT};"
     )) {
         Config::set_option("stop-service".into(), "Y".into());
     }
@@ -2102,9 +2101,9 @@ pub fn install_service() -> bool {
 
 fn check_if_stop_service() {
     if Config::get_option("stop-service".into()) == "Y" {
-        let app_name = crate::get_app_name().to_lowercase();
+        const SERVICE_UNIT: &str = "camellia-remote.service";
         allow_err!(run_cmds(&format!(
-            "systemctl disable {app_name}; systemctl stop {app_name}"
+            "systemctl disable {SERVICE_UNIT}; systemctl stop {SERVICE_UNIT}"
         )));
     }
 }

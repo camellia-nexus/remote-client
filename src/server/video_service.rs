@@ -623,7 +623,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     );
     let client_record = video_qos.record();
     drop(video_qos);
-    let (mut encoder, encoder_cfg, codec_format, use_i444, recorder) = match setup_encoder(
+    let (mut encoder, encoder_cfg, codec_format, use_i444, recorder, _upload_handle) = match setup_encoder(
         &c,
         sp.name(),
         quality,
@@ -997,6 +997,7 @@ fn setup_encoder(
     CodecFormat,
     bool,
     Arc<Mutex<Option<Recorder>>>,
+    Option<crate::hbbs_http::record_upload::RecordUploadHandle>,
 )> {
     let fps = VIDEO_QOS.lock().unwrap().fps();
     let encoder_cfg = get_encoder_config(
@@ -1010,10 +1011,18 @@ fn setup_encoder(
     );
     Encoder::set_fallback(&encoder_cfg);
     let codec_format = Encoder::negotiated_codec();
-    let recorder = get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
+    let (recorder, upload_handle) =
+        get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
-    Ok((encoder, encoder_cfg, codec_format, use_i444, recorder))
+    Ok((
+        encoder,
+        encoder_cfg,
+        codec_format,
+        use_i444,
+        recorder,
+        upload_handle,
+    ))
 }
 
 fn get_encoder_config(
@@ -1100,36 +1109,42 @@ fn get_recorder(
     record_incoming: bool,
     display_idx: usize,
     camera: bool,
-) -> Arc<Mutex<Option<Recorder>>> {
+) -> (
+    Arc<Mutex<Option<Recorder>>>,
+    Option<crate::hbbs_http::record_upload::RecordUploadHandle>,
+) {
     #[cfg(windows)]
     let root = crate::platform::is_root();
     #[cfg(not(windows))]
     let root = false;
-    let recorder = if record_incoming {
+    let (recorder, upload_handle) = if record_incoming {
         use crate::hbbs_http::record_upload;
 
         let recording_dir = crate::ui_interface::video_save_directory(root);
-        let tx = if record_upload::is_enable() {
+        let (tx, upload_handle) = if record_upload::is_enable() {
             let (tx, rx) = std::sync::mpsc::channel();
-            record_upload::run(rx, recording_dir.clone());
-            Some(tx)
+            let handle = record_upload::run(rx, recording_dir.clone());
+            (Some(tx), Some(handle))
         } else {
-            None
+            (None, None)
         };
-        Recorder::new(RecorderContext {
-            server: true,
-            id: Config::get_id(),
-            dir: recording_dir,
-            display_idx,
-            camera,
-            tx,
-        })
-        .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))))
+        (
+            Recorder::new(RecorderContext {
+                server: true,
+                id: Config::get_id(),
+                dir: recording_dir,
+                display_idx,
+                camera,
+                tx,
+            })
+            .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r)))),
+            upload_handle,
+        )
     } else {
-        Default::default()
+        (Default::default(), None)
     };
 
-    recorder
+    (recorder, upload_handle)
 }
 
 #[cfg(target_os = "android")]

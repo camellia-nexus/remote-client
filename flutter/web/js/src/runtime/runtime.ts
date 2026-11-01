@@ -20,11 +20,21 @@ import {
 } from './crypto';
 import { MessageInbox } from './inbox';
 import { createOidcPollRequest } from './oidc_poll_request';
+import {
+  resolveSecurityPolicyFromReader,
+  type SecurityPolicyOptionsReader,
+  SessionPolicyGuard
+} from './policy';
 import { decodeProtoObject, loadProtos, ProtoRoots } from './proto';
 import { checkWsEndpoint, secureRendezvousTransport } from './rendezvous';
 import { WebSession } from './session';
 import { WebSocketTransport } from './transport';
-import { ConnectRequest, SessionContext, SessionMode } from './types';
+import {
+  ConnectRequest,
+  SessionContext,
+  SessionMode,
+  SessionSecurityPolicy
+} from './types';
 
 type OptionPayload = { name?: string; value?: unknown };
 type AccountAuthPayload = { op?: string; remember?: boolean };
@@ -75,7 +85,9 @@ type ConnectionCandidate = {
 
 const FALLBACK_DEFAULT_ID_PORT = 21116;
 
-export class WebRuntime {
+export { SessionPolicyGuard } from './policy';
+
+export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly config: RuntimeConfig;
   private readonly store: StorageStore;
   private readonly events: EventDispatcher;
@@ -85,6 +97,7 @@ export class WebRuntime {
   private readonly flutterLocalOptionDefaults = new Map<string, string>();
   private readonly userDefaultOptionDefaults = new Map<string, string>();
   private currentSession?: WebSession;
+  private policyGuard: SessionPolicyGuard | null = null;
   private initialized = false;
   private nextFileHandle = 1;
   private readonly fileHandles = new Map<number, File[]>();
@@ -150,6 +163,7 @@ export class WebRuntime {
         this.releaseInputSource1PressedKeys();
         this.currentSession?.detachVideoSurface(this.videoSurfaceElementId);
         this.currentSession?.close();
+        this.policyGuard = null;
         this.closeOnlineQueryTransport();
         return '';
       case 'attach_video_surface':
@@ -275,6 +289,9 @@ export class WebRuntime {
         return '';
       case 'flutter_key_event':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendKeyboard()) {
+            return '';
+          }
           const payload = this.safeJson(arg0);
           this.applyLocalFlutterKeyOptions(payload);
           payload.keyboard_mode =
@@ -285,11 +302,17 @@ export class WebRuntime {
         return '';
       case 'flutter_raw_key_event':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendKeyboard()) {
+            return '';
+          }
           this.handleFlutterRawKeyEvent(this.safeJson(arg0));
         }
         return '';
       case 'send_mouse':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendMouse()) {
+            return '';
+          }
           const payload = this.safeJson(arg0);
           this.applyLocalMouseOptions(payload);
           this.currentSession.sendMouse(payload);
@@ -297,16 +320,25 @@ export class WebRuntime {
         return '';
       case 'send_pointer':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendMouse()) {
+            return '';
+          }
           this.handlePointerPayload(this.safeJson(arg0));
         }
         return '';
       case 'input_string':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendKeyboard()) {
+            return '';
+          }
           this.currentSession.inputString(arg0);
         }
         return '';
       case 'input_key':
         if (this.currentSession && typeof arg0 === 'string') {
+          if (!this.canSendKeyboard()) {
+            return '';
+          }
           const payload = this.safeJson(arg0);
           this.applyLocalKeyOptions(payload);
           this.currentSession.inputKey(payload);
@@ -392,9 +424,15 @@ export class WebRuntime {
         }
         return '';
       case 'lock_screen':
+        if (!this.canSendControl()) {
+          return '';
+        }
         this.currentSession?.lockScreen();
         return '';
       case 'ctrl_alt_del':
+        if (!this.canSendControl()) {
+          return '';
+        }
         this.currentSession?.ctrlAltDel();
         return '';
       case 'switch_display':
@@ -529,15 +567,29 @@ export class WebRuntime {
         }
         return '';
       case 'send_files':
+        if (!this.canTransferFiles()) {
+          this.emitJobError(0, 'file-transfer-disabled-tip');
+          return '';
+        }
         this.handleSendFiles(arg0);
         return '';
       case 'send_local_files':
+        if (!this.canTransferFiles()) {
+          this.emitJobError(0, 'file-transfer-disabled-tip');
+          return '';
+        }
         this.handleSendLocalFiles(arg0);
         return '';
       case 'register_drop_files':
+        if (!this.canTransferFiles()) {
+          return '';
+        }
         void this.handleRegisterDropFiles(arg0);
         return '';
       case 'select_files':
+        if (!this.canTransferFiles()) {
+          return '';
+        }
         void this.handleSelectFiles(Boolean(arg0));
         return '';
       case 'create_dir':
@@ -547,6 +599,10 @@ export class WebRuntime {
             path?: string;
             is_remote?: boolean;
           };
+          if (!this.canTransferFiles()) {
+            this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+            return '';
+          }
           if (payload.is_remote) {
             this.currentSession.createDir(
               Number(payload.id ?? 0),
@@ -565,6 +621,10 @@ export class WebRuntime {
             file_num?: number;
             is_remote?: boolean;
           };
+          if (!this.canTransferFiles()) {
+            this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+            return '';
+          }
           if (payload.is_remote) {
             this.currentSession.removeFile(
               Number(payload.id ?? 0),
@@ -584,6 +644,10 @@ export class WebRuntime {
             is_remote?: boolean;
             show_hidden?: boolean;
           };
+          if (!this.canTransferFiles()) {
+            this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+            return '';
+          }
           if (payload.is_remote) {
             this.currentSession.readAllFiles(
               Number(payload.id ?? 0),
@@ -602,6 +666,10 @@ export class WebRuntime {
             path?: string;
             is_remote?: boolean;
           };
+          if (!this.canTransferFiles()) {
+            this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+            return '';
+          }
           if (payload.is_remote) {
             this.currentSession.removeDir(
               Number(payload.id ?? 0),
@@ -1409,6 +1477,26 @@ export class WebRuntime {
       });
     }
     if (name === 'view-only') {
+      this.policyGuard?.updatePolicy({
+        viewOnly: value,
+        ...(value
+          ? {
+              disableKeyboard: true,
+              disableClipboard: true,
+              enableFileTransfer: false,
+              lockAfterSessionEnd: false,
+              showRemoteCursor: true,
+              showMyCursor: false
+            }
+          : {
+              disableKeyboard: this.getToggleOption('disable-keyboard'),
+              disableClipboard: this.getToggleOption('disable-clipboard'),
+              showRemoteCursor: this.getToggleOption('show-remote-cursor'),
+              showMyCursor: this.getToggleOption('show-my-cursor'),
+              enableFileTransfer: this.getToggleOption('enable-file-copy-paste'),
+              lockAfterSessionEnd: this.getToggleOption('lock-after-session-end')
+            })
+      });
       this.applyViewOnlyToggle(value);
       return;
     }
@@ -1437,6 +1525,9 @@ export class WebRuntime {
     const field = this.toggleOptionField(name);
     if (!field) {
       return;
+    }
+    if (this.policyGuard) {
+      this.policyGuard.updatePolicy({ [field]: value });
     }
     this.currentSession.sendOption({ [field]: this.boolOption(value) });
   }
@@ -1544,7 +1635,9 @@ export class WebRuntime {
       option.enableFileTransfer = this.boolOption(false);
       option.lockAfterSessionEnd = this.boolOption(false);
     } else {
-      option.disableKeyboard = this.boolOption(false);
+      option.disableKeyboard = this.boolOption(
+        this.getToggleOption('disable-keyboard')
+      );
       option.disableClipboard = this.boolOption(
         this.getToggleOption('disable-clipboard')
       );
@@ -1666,7 +1759,7 @@ export class WebRuntime {
     if (
       !this.inputSource1PointerInside ||
       this.isEditableTarget(event.target) ||
-      this.getToggleOption('view-only')
+      !this.canSendKeyboard()
     ) {
       return;
     }
@@ -1687,7 +1780,7 @@ export class WebRuntime {
       !!this.currentSession &&
       this.inputSource1PointerInside &&
       this.isInputSource1Enabled() &&
-      !this.getToggleOption('view-only') &&
+      this.canSendKeyboard() &&
       !event.defaultPrevented &&
       !this.isEditableTarget(event.target)
     );
@@ -1955,6 +2048,10 @@ export class WebRuntime {
       is_remote?: boolean;
       file_num?: number;
     };
+    if (!this.canTransferFiles()) {
+      this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+      return;
+    }
     if (!payload.is_remote) {
       this.emitJobError(payload.id, 'one-way-file-transfer-tip');
       return;
@@ -1981,6 +2078,10 @@ export class WebRuntime {
       path?: string;
       to?: string;
     };
+    if (!this.canTransferFiles()) {
+      this.emitJobError(payload.id, 'file-transfer-disabled-tip');
+      return;
+    }
     const handleIndex = Number(payload.handle_index ?? 0);
     const files = this.fileHandles.get(handleIndex);
     if (!files || files.length === 0) {
@@ -4001,7 +4102,8 @@ export class WebRuntime {
           .map((value) => Number(value))
           .filter((value) => Number.isFinite(value) && value >= 0)
       : [];
-    const context = this.buildSessionContext();
+    const peerId = this.currentSession.getPeerId();
+    const context = this.buildSessionContext(peerId);
     this.store.set('session_conn_status', 'connecting');
     this.setServiceStatus('connecting');
     try {
@@ -4372,7 +4474,63 @@ export class WebRuntime {
     return output;
   }
 
-  private buildSessionContext(): SessionContext {
+  getSessionPolicyGuard(): SessionPolicyGuard | null {
+    return this.policyGuard;
+  }
+
+  canSendKeyboard(): boolean {
+    if (this.policyGuard) {
+      return this.policyGuard.canSendKeyboard();
+    }
+    return !this.getToggleOption('view-only') && !this.getToggleOption('disable-keyboard');
+  }
+
+  canSendMouse(): boolean {
+    if (this.policyGuard) {
+      return this.policyGuard.canSendMouse();
+    }
+    return !this.getToggleOption('view-only');
+  }
+
+  canSendControl(): boolean {
+    if (this.policyGuard) {
+      return this.policyGuard.canSendControl();
+    }
+    return !this.getToggleOption('view-only');
+  }
+
+  canTransferFiles(): boolean {
+    if (this.policyGuard) {
+      return this.policyGuard.canTransferFiles();
+    }
+    return !this.getToggleOption('view-only') && this.getToggleOption('enable-file-copy-paste');
+  }
+
+  canReceiveClipboard(): boolean {
+    if (this.policyGuard) {
+      return this.policyGuard.canReceiveClipboard();
+    }
+    return !this.getToggleOption('view-only') && !this.getToggleOption('disable-clipboard');
+  }
+
+  resolveOptionBool(name: string, peerId?: string): boolean {
+    if (peerId) {
+      const peerKeys = [name, name.replace(/-/g, '_')];
+      for (const key of peerKeys) {
+        const val = this.getPeerOptionValue(peerId, key);
+        if (val) {
+          return this.parseBoolOptionValue(val);
+        }
+      }
+    }
+    return this.getToggleOption(name);
+  }
+
+  resolveSessionSecurityPolicy(peerId?: string): SessionSecurityPolicy {
+    return resolveSecurityPolicyFromReader(this, peerId);
+  }
+
+  private buildSessionContext(peerId?: string): SessionContext {
     const defaultIdPort = this.getDefaultIdPort();
     const rendezvousServer = this.resolveRendezvousServer();
     const relayServer = this.resolveRelayServer(rendezvousServer);
@@ -4390,6 +4548,8 @@ export class WebRuntime {
     const codecPreference =
       this.getScopedOption('option:session', 'codec-preference') || 'auto';
     const preferI444 = this.getToggleOption('i444');
+    const policy = this.resolveSessionSecurityPolicy(peerId);
+    this.policyGuard = new SessionPolicyGuard(policy);
     return {
       rendezvousServer,
       relayServer,
@@ -4406,7 +4566,8 @@ export class WebRuntime {
       customImageQuality,
       customFps,
       codecPreference,
-      preferI444
+      preferI444,
+      policy
     };
   }
 

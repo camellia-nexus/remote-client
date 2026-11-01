@@ -14,7 +14,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::PathBuf,
     sync::mpsc::Sender,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use webm::mux::{self, Segment, Track, VideoTrack, Writer};
 
@@ -95,7 +95,7 @@ pub trait RecorderApi {
     fn write_video(&mut self, frame: &EncodedVideoFrame) -> bool;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum RecordState {
     NewFile(String),
     NewFrame,
@@ -109,6 +109,7 @@ pub struct Recorder {
     ctx2: Option<RecorderContext2>,
     pts: Option<i64>,
     check_failed: bool,
+    last_frame_notif: Option<Instant>,
 }
 
 impl Deref for Recorder {
@@ -133,6 +134,7 @@ impl Recorder {
             ctx2: None,
             pts: None,
             check_failed: false,
+            last_frame_notif: None,
         })
     }
 
@@ -246,9 +248,19 @@ impl Recorder {
                     self.as_mut().map(|x| x.write_video(f));
                 }
             }
+            #[cfg(feature = "hwcodec")]
+            _ => bail!("unsupported frame type"),
+            #[cfg(not(feature = "hwcodec"))]
             _ => bail!("unsupported frame type"),
         }
-        self.send_state(RecordState::NewFrame);
+        let should_notify = match self.last_frame_notif {
+            Some(last) => last.elapsed() >= Duration::from_millis(100),
+            None => true,
+        };
+        if should_notify {
+            self.last_frame_notif = Some(Instant::now());
+            self.send_state(RecordState::NewFrame);
+        }
         Ok(())
     }
 

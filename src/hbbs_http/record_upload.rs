@@ -17,7 +17,11 @@ use std::{
     fs::{File, OpenOptions},
     io::{prelude::*, SeekFrom},
     path::{Path, PathBuf},
-    sync::mpsc::Receiver,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::Receiver,
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -47,8 +51,52 @@ pub fn is_enable() -> bool {
     ) && crate::get_api_access_token().is_some()
 }
 
-pub fn run(rx: Receiver<RecordState>, recording_dir: String) {
-    std::thread::spawn(move || {
+pub struct RecordUploadHandle {
+    stop_signal: Arc<AtomicBool>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RecordUploadHandle {
+    pub fn new(stop_signal: Arc<AtomicBool>, handle: std::thread::JoinHandle<()>) -> Self {
+        Self {
+            stop_signal,
+            join_handle: Some(handle),
+        }
+    }
+
+    pub fn stop(&mut self, deadline: Duration) -> bool {
+        self.stop_signal.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.join_handle.take() {
+            let start = Instant::now();
+            while !handle.is_finished() && start.elapsed() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+                true
+            } else {
+                log::warn!(
+                    "Record upload worker did not exit within bounded deadline {:?}",
+                    deadline
+                );
+                false
+            }
+        } else {
+            true
+        }
+    }
+}
+
+impl Drop for RecordUploadHandle {
+    fn drop(&mut self) {
+        self.stop(Duration::from_millis(500));
+    }
+}
+
+pub fn run(rx: Receiver<RecordState>, recording_dir: String) -> RecordUploadHandle {
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let stop_signal_clone = stop_signal.clone();
+    let handle = std::thread::spawn(move || {
         let api_server = crate::get_api_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -62,16 +110,45 @@ pub fn run(rx: Receiver<RecordState>, recording_dir: String) {
         let mut uploader = RecordUploader::new(api_server);
         uploader.recover_pending(&recording_dir);
 
-        loop {
-            let result = match rx.recv() {
-                Ok(RecordState::NewFile(filepath)) => uploader.handle_new_file(filepath),
-                Ok(RecordState::NewFrame) => uploader.handle_frame(false).map(|_| ()),
-                Ok(RecordState::WriteTail) => uploader.handle_tail_with_retry(),
-                Ok(RecordState::RemoveFile) => uploader.handle_abort(),
-                Err(error) => {
-                    log::trace!("recording upload thread stopped: {}", error);
+        while !stop_signal_clone.load(Ordering::SeqCst) {
+            let msg = match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(m) => m,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    log::trace!("recording upload thread channel disconnected");
                     break;
                 }
+            };
+            let result = match msg {
+                RecordState::NewFile(filepath) => uploader.handle_new_file(filepath),
+                RecordState::NewFrame => {
+                    // Coalesce any redundant NewFrame messages already waiting in the channel
+                    let mut extra_non_frame = None;
+                    while let Ok(extra) = rx.try_recv() {
+                        match extra {
+                            RecordState::NewFrame => {} // drop duplicate NewFrame
+                            other => {
+                                extra_non_frame = Some(other);
+                                break;
+                            }
+                        }
+                    }
+                    let res = uploader.handle_frame(false).map(|_| ());
+                    if let Some(other) = extra_non_frame {
+                        let res2 = match other {
+                            RecordState::NewFile(filepath) => uploader.handle_new_file(filepath),
+                            RecordState::WriteTail => uploader.handle_tail_with_retry(),
+                            RecordState::RemoveFile => uploader.handle_abort(),
+                            RecordState::NewFrame => Ok(()),
+                        };
+                        if let Err(e) = res2 {
+                            log::error!("recording upload error on coalesced event: {}", e);
+                        }
+                    }
+                    res
+                }
+                RecordState::WriteTail => uploader.handle_tail_with_retry(),
+                RecordState::RemoveFile => uploader.handle_abort(),
             };
             if let Err(error) = result {
                 // The durable sidecar remains authoritative after errors. A
@@ -81,6 +158,7 @@ pub fn run(rx: Receiver<RecordState>, recording_dir: String) {
             }
         }
     });
+    RecordUploadHandle::new(stop_signal, handle)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

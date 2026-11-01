@@ -23,6 +23,19 @@ export type ConnectRequest = {
   forceRelay?: boolean;
 };
 
+export interface SessionSecurityPolicy {
+  viewOnly: boolean;
+  disableKeyboard: boolean;
+  disableClipboard: boolean;
+  disableAudio: boolean;
+  enableFileTransfer: boolean;
+  lockAfterSessionEnd: boolean;
+  showRemoteCursor: boolean;
+  showMyCursor: boolean;
+  followRemoteCursor: boolean;
+  followRemoteWindow: boolean;
+}
+
 export type SessionContext = {
   rendezvousServer: string;
   relayServer: string;
@@ -40,4 +53,5 @@ export type SessionContext = {
   customFps: number;
   codecPreference: string;
   preferI444: boolean;
+  policy: SessionSecurityPolicy;
 };

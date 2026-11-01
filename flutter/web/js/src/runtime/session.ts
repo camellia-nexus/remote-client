@@ -784,6 +784,35 @@ export class WebSession {
     if (!this.proto) {
       return;
     }
+    if (this.context?.policy) {
+      if ('disableKeyboard' in option) {
+        this.context.policy.disableKeyboard = option.disableKeyboard === BoolOption.Yes;
+      }
+      if ('disableClipboard' in option) {
+        this.context.policy.disableClipboard = option.disableClipboard === BoolOption.Yes;
+      }
+      if ('disableAudio' in option) {
+        this.context.policy.disableAudio = option.disableAudio === BoolOption.Yes;
+      }
+      if ('enableFileTransfer' in option) {
+        this.context.policy.enableFileTransfer = option.enableFileTransfer === BoolOption.Yes;
+      }
+      if ('lockAfterSessionEnd' in option) {
+        this.context.policy.lockAfterSessionEnd = option.lockAfterSessionEnd === BoolOption.Yes;
+      }
+      if ('showRemoteCursor' in option) {
+        this.context.policy.showRemoteCursor = option.showRemoteCursor === BoolOption.Yes;
+      }
+      if ('showMyCursor' in option) {
+        this.context.policy.showMyCursor = option.showMyCursor === BoolOption.Yes;
+      }
+      if ('followRemoteCursor' in option) {
+        this.context.policy.followRemoteCursor = option.followRemoteCursor === BoolOption.Yes;
+      }
+      if ('followRemoteWindow' in option) {
+        this.context.policy.followRemoteWindow = option.followRemoteWindow === BoolOption.Yes;
+      }
+    }
     this.sendMessage({ misc: { option } });
   }
 
@@ -1506,6 +1535,18 @@ export class WebSession {
           : 100;
       option.customImageQuality = customQuality << 8;
     }
+    const policy = context?.policy;
+    if (policy) {
+      option.disableKeyboard = boolOption(policy.disableKeyboard);
+      option.disableClipboard = boolOption(policy.disableClipboard);
+      option.disableAudio = boolOption(policy.disableAudio);
+      option.enableFileTransfer = boolOption(policy.enableFileTransfer);
+      option.lockAfterSessionEnd = boolOption(policy.lockAfterSessionEnd);
+      option.showRemoteCursor = boolOption(policy.showRemoteCursor);
+      option.showMyCursor = boolOption(policy.showMyCursor);
+      option.followRemoteCursor = boolOption(policy.followRemoteCursor);
+      option.followRemoteWindow = boolOption(policy.followRemoteWindow);
+    }
     return option;
   }
 
@@ -1800,6 +1841,9 @@ export class WebSession {
   }
 
   private handleClipboard(data: Record<string, unknown>): void {
+    if (this.context?.policy?.viewOnly || this.context?.policy?.disableClipboard) {
+      return;
+    }
     const format = Number(data.format ?? 0);
     if (format !== 0) {
       return;

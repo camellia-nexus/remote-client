@@ -230,19 +230,12 @@ pub fn core_main() -> Option<Vec<String>> {
                     return None;
                 }
 
-                let text = match crate::platform::prepare_custom_client_update() {
-                    Err(e) => {
-                        log::error!("Error preparing custom client update: {}", e);
+                let text = match platform::update_me(false) {
+                    Ok(_) => "Updated successfully!".to_string(),
+                    Err(err) => {
+                        log::error!("Failed with error: {err}");
                         "Update failed!".to_string()
                     }
-                    Ok(false) => "Update failed!".to_string(),
-                    Ok(true) => match platform::update_me(false) {
-                        Ok(_) => "Updated successfully!".to_string(),
-                        Err(err) => {
-                            log::error!("Failed with error: {err}");
-                            "Update failed!".to_string()
-                        }
-                    },
                 };
                 Toast::new(Toast::POWERSHELL_APP_ID)
                     .title(&config::APP_NAME.read().unwrap())

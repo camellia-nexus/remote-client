@@ -1,5 +1,7 @@
 use super::HbbHttpResponse;
-use camellia_remote_protocol::{config::LocalConfig, log, ResultType};
+use camellia_remote_protocol::{
+    config::LocalConfig, log, tokio_util::sync::CancellationToken, ResultType,
+};
 use serde_derive::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{
@@ -123,6 +125,9 @@ pub struct OidcSession {
     keep_querying: bool,
     running: bool,
     query_timeout: Duration,
+    generation: u64,
+    cancel_token: CancellationToken,
+    worker_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 #[derive(Serialize)]
@@ -149,6 +154,9 @@ impl OidcSession {
             keep_querying: false,
             running: false,
             query_timeout: Duration::from_secs(QUERY_TIMEOUT_SECS),
+            generation: 0,
+            cancel_token: CancellationToken::new(),
+            worker_handle: None,
         }
     }
 
@@ -204,49 +212,76 @@ impl OidcSession {
         self.running = false;
     }
 
-    fn sleep(secs: f32) {
-        std::thread::sleep(std::time::Duration::from_secs_f32(secs));
-    }
 
-    fn auth_task(api_server: String, op: String, id: String, uuid: String, remember_me: bool) {
+    fn auth_task(
+        api_server: String,
+        op: String,
+        id: String,
+        uuid: String,
+        remember_me: bool,
+        generation: u64,
+        cancel_token: CancellationToken,
+    ) {
+        if cancel_token.is_cancelled() {
+            return;
+        }
         let auth_request_res = Self::auth(&api_server, &op, &id, &uuid);
         log::info!("Request oidc auth result: {:?}", &auth_request_res);
+        if cancel_token.is_cancelled() {
+            log::info!("OIDC auth cancelled after initial auth request");
+            return;
+        }
+
         let code_url = match auth_request_res {
             Ok(HbbHttpResponse::<_>::Data(code_url)) => code_url,
             Ok(HbbHttpResponse::<_>::Error(err)) => {
-                OIDC_SESSION
-                    .write()
-                    .unwrap()
-                    .set_state(REQUESTING_ACCOUNT_AUTH, err);
+                let mut session = OIDC_SESSION.write().unwrap();
+                if session.generation == generation && !cancel_token.is_cancelled() {
+                    session.set_state(REQUESTING_ACCOUNT_AUTH, err);
+                }
                 return;
             }
             Ok(_) => {
-                OIDC_SESSION
-                    .write()
-                    .unwrap()
-                    .set_state(REQUESTING_ACCOUNT_AUTH, "Invalid auth response".to_owned());
+                let mut session = OIDC_SESSION.write().unwrap();
+                if session.generation == generation && !cancel_token.is_cancelled() {
+                    session.set_state(REQUESTING_ACCOUNT_AUTH, "Invalid auth response".to_owned());
+                }
                 return;
             }
             Err(err) => {
-                OIDC_SESSION
-                    .write()
-                    .unwrap()
-                    .set_state(REQUESTING_ACCOUNT_AUTH, err.to_string());
+                let mut session = OIDC_SESSION.write().unwrap();
+                if session.generation == generation && !cancel_token.is_cancelled() {
+                    session.set_state(REQUESTING_ACCOUNT_AUTH, err.to_string());
+                }
                 return;
             }
         };
 
-        OIDC_SESSION
-            .write()
-            .unwrap()
-            .set_state(WAITING_ACCOUNT_AUTH, "".to_owned());
-        OIDC_SESSION.write().unwrap().code_url = Some(code_url.clone());
+        {
+            let mut session = OIDC_SESSION.write().unwrap();
+            if session.generation != generation || cancel_token.is_cancelled() {
+                log::info!("OIDC session generation changed or cancelled before setting code_url");
+                return;
+            }
+            session.set_state(WAITING_ACCOUNT_AUTH, "".to_owned());
+            session.code_url = Some(code_url.clone());
+        }
 
         let begin = Instant::now();
         let query_timeout = OIDC_SESSION.read().unwrap().query_timeout;
-        while OIDC_SESSION.read().unwrap().keep_querying && begin.elapsed() < query_timeout {
+        while !cancel_token.is_cancelled() && begin.elapsed() < query_timeout {
+            {
+                let session = OIDC_SESSION.read().unwrap();
+                if session.generation != generation || !session.keep_querying {
+                    break;
+                }
+            }
             match Self::query(&api_server, &code_url.code, &id, &uuid) {
                 Ok(HbbHttpResponse::<_>::Data(auth_body)) => {
+                    let mut session = OIDC_SESSION.write().unwrap();
+                    if session.generation != generation || cancel_token.is_cancelled() {
+                        return;
+                    }
                     if auth_body.r#type == "access_token" {
                         if remember_me {
                             LocalConfig::set_option(
@@ -265,21 +300,18 @@ impl OidcSession {
                             );
                         }
                     }
-                    OIDC_SESSION
-                        .write()
-                        .unwrap()
-                        .set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
-                    OIDC_SESSION.write().unwrap().auth_body = Some(auth_body);
+                    session.set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
+                    session.auth_body = Some(auth_body);
                     return;
                 }
                 Ok(HbbHttpResponse::<_>::Error(err)) => {
                     if err.contains("No authed oidc is found") {
                         // ignore, keep querying
                     } else {
-                        OIDC_SESSION
-                            .write()
-                            .unwrap()
-                            .set_state(WAITING_ACCOUNT_AUTH, err);
+                        let mut session = OIDC_SESSION.write().unwrap();
+                        if session.generation == generation && !cancel_token.is_cancelled() {
+                            session.set_state(WAITING_ACCOUNT_AUTH, err);
+                        }
                         return;
                     }
                 }
@@ -291,29 +323,29 @@ impl OidcSession {
                     // ignore
                 }
             }
-            Self::sleep(QUERY_INTERVAL_SECS);
+
+            // Bounded cooperative sleep checking cancellation token
+            let sleep_start = Instant::now();
+            let interval = Duration::from_secs_f32(QUERY_INTERVAL_SECS);
+            while sleep_start.elapsed() < interval {
+                if cancel_token.is_cancelled() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
 
         if begin.elapsed() >= query_timeout {
-            OIDC_SESSION
-                .write()
-                .unwrap()
-                .set_state(WAITING_ACCOUNT_AUTH, "timeout".to_owned());
+            let mut session = OIDC_SESSION.write().unwrap();
+            if session.generation == generation && !cancel_token.is_cancelled() {
+                session.set_state(WAITING_ACCOUNT_AUTH, "timeout".to_owned());
+            }
         }
-
-        // no need to handle "keep_querying == false"
     }
 
     fn set_state(&mut self, state_msg: &'static str, failed_msg: String) {
         self.state_msg = state_msg;
         self.failed_msg = failed_msg;
-    }
-
-    fn wait_stop_querying() {
-        let wait_secs = 0.3;
-        while OIDC_SESSION.read().unwrap().running {
-            Self::sleep(wait_secs);
-        }
     }
 
     pub fn account_auth(
@@ -323,13 +355,53 @@ impl OidcSession {
         uuid: String,
         remember_me: bool,
     ) {
-        Self::auth_cancel();
-        Self::wait_stop_querying();
-        OIDC_SESSION.write().unwrap().before_task();
-        std::thread::spawn(move || {
-            Self::auth_task(api_server, op, id, uuid, remember_me);
-            OIDC_SESSION.write().unwrap().after_task();
+        let (generation, cancel_token, prev_worker) = {
+            let mut session = OIDC_SESSION.write().unwrap();
+            // Cooperative cancellation of previous worker
+            session.cancel_token.cancel();
+            let prev_worker = session.worker_handle.take();
+            let new_cancel_token = CancellationToken::new();
+            session.cancel_token = new_cancel_token.clone();
+            session.generation = session.generation.wrapping_add(1);
+            let gen = session.generation;
+            session.before_task();
+            (gen, new_cancel_token, prev_worker)
+        };
+
+        // Bounded join deadline (500ms) for previous worker, without holding write lock
+        if let Some(handle) = prev_worker {
+            let deadline = Duration::from_millis(500);
+            let start = Instant::now();
+            while !handle.is_finished() && start.elapsed() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                log::warn!(
+                    "Previous OIDC worker did not exit within 500ms; detaching safely under generation isolation"
+                );
+            }
+        }
+
+        let handle = std::thread::spawn(move || {
+            Self::auth_task(
+                api_server,
+                op,
+                id,
+                uuid,
+                remember_me,
+                generation,
+                cancel_token,
+            );
+            let mut session = OIDC_SESSION.write().unwrap();
+            if session.generation == generation {
+                session.after_task();
+                session.worker_handle = None;
+            }
         });
+
+        OIDC_SESSION.write().unwrap().worker_handle = Some(handle);
     }
 
     fn get_result_(&self) -> AuthResult {
@@ -342,17 +414,28 @@ impl OidcSession {
     }
 
     pub fn auth_cancel() {
-        OIDC_SESSION.write().unwrap().keep_querying = false;
+        let mut session = OIDC_SESSION.write().unwrap();
+        session.cancel_token.cancel();
+        session.keep_querying = false;
+        session.running = false;
+        session.code_url = None;
+        session.auth_body = None;
+        session.set_state("", "cancelled".to_owned());
     }
 
     pub fn get_result() -> AuthResult {
         OIDC_SESSION.read().unwrap().get_result_()
     }
+
+    #[cfg(test)]
+    pub fn current_generation() -> u64 {
+        OIDC_SESSION.read().unwrap().generation
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::oidc_query_body;
+    use super::*;
 
     #[test]
     fn oidc_poll_credentials_are_serialized_in_the_post_body() {
@@ -363,5 +446,33 @@ mod tests {
         assert_eq!(parsed["id"], "123456789");
         assert_eq!(parsed["uuid"], "device-uuid-canary");
         assert_eq!(parsed.as_object().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_oidc_cancel_clears_code_url_and_auth_body() {
+        OidcSession::auth_cancel();
+        let res = OidcSession::get_result();
+        assert_eq!(res.url, None);
+        assert!(res.auth_body.is_none());
+        assert_eq!(res.failed_msg, "cancelled");
+    }
+
+    #[test]
+    fn test_oidc_generation_increments_monotonically_on_auth() {
+        let gen1 = OidcSession::current_generation();
+        // Invoke auth with dummy unroutable endpoint; worker starts with bounded timeout
+        OidcSession::account_auth(
+            "http://127.0.0.1:9".to_string(),
+            "oidc".to_string(),
+            "test_id".to_string(),
+            "test_uuid".to_string(),
+            false,
+        );
+        let gen2 = OidcSession::current_generation();
+        assert!(gen2 > gen1, "Generation must increase on account_auth");
+        // Immediate cancel resets url and stops querying
+        OidcSession::auth_cancel();
+        let res = OidcSession::get_result();
+        assert_eq!(res.url, None);
     }
 }
