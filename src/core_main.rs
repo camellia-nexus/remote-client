@@ -22,6 +22,68 @@ macro_rules! my_println{
     };
 }
 
+fn read_secret(flag_name: &str, stdin_flag: bool) -> Result<zeroize::Zeroizing<String>, String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if stdin_flag || !std::io::stdin().is_terminal() {
+        let mut line = String::new();
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
+        handle
+            .read_line(&mut line)
+            .map_err(|e| format!("Failed to read {flag_name} from stdin: {e}"))?;
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed.is_empty() {
+            return Err(format!("Empty {flag_name} received from stdin"));
+        }
+        return Ok(zeroize::Zeroizing::new(trimmed.to_string()));
+    }
+
+    print!("Enter {flag_name}: ");
+    std::io::stdout().flush().ok();
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = std::io::stdin().as_raw_fd();
+        let mut termios = std::mem::MaybeUninit::uninit();
+        let rc = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
+        if rc == 0 {
+            let mut termios = unsafe { termios.assume_init() };
+            let original_c_lflag = termios.c_lflag;
+            termios.c_lflag &= !libc::ECHO;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) };
+
+            let mut line = String::new();
+            let stdin = std::io::stdin();
+            let res = stdin.lock().read_line(&mut line);
+
+            // Restore echo
+            termios.c_lflag = original_c_lflag;
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) };
+            println!();
+
+            res.map_err(|e| format!("Failed to read {flag_name} from terminal: {e}"))?;
+            let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+            if trimmed.is_empty() {
+                return Err(format!("Empty {flag_name} entered"));
+            }
+            return Ok(zeroize::Zeroizing::new(trimmed.to_string()));
+        }
+    }
+
+    let mut line = String::new();
+    let stdin = std::io::stdin();
+    stdin
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| format!("Failed to read {flag_name}: {e}"))?;
+    let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+    if trimmed.is_empty() {
+        return Err(format!("Empty {flag_name} entered"));
+    }
+    Ok(zeroize::Zeroizing::new(trimmed.to_string()))
+}
+
 /// shared by Flutter startup paths
 ///
 /// [Note]
@@ -457,16 +519,24 @@ pub fn core_main() -> Option<Vec<String>> {
                 println!("Changing permanent password is disabled!");
                 return None;
             }
-            if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    if let Err(err) = crate::ipc::set_permanent_password(args[1].to_owned()) {
-                        println!("{err}");
-                    } else {
-                        println!("Done!");
+            if args.len() > 1 && args[1] != "--stdin" {
+                eprintln!("Passing plaintext passwords as CLI arguments is disallowed for security (CRED-001). Use interactive prompt or pipe via stdin with `--stdin`.");
+                return None;
+            }
+            if crate::platform::is_installed() && is_root() {
+                let from_stdin = args.len() == 2 && args[1] == "--stdin";
+                match read_secret("permanent password", from_stdin) {
+                    Ok(pwd) => {
+                        if let Err(err) = crate::ipc::set_permanent_password((*pwd).clone()) {
+                            println!("{err}");
+                        } else {
+                            println!("Done!");
+                        }
                     }
-                } else {
-                    println!("Installation and administrative privileges required!");
+                    Err(err) => eprintln!("{err}"),
                 }
+            } else {
+                println!("Installation and administrative privileges required!");
             }
             return None;
         } else if args[0] == "--set-unlock-pin" {
@@ -474,17 +544,25 @@ pub fn core_main() -> Option<Vec<String>> {
                 println!("Unlock PIN is disabled!");
                 return None;
             }
+            if args.len() > 1 && args[1] != "--stdin" {
+                eprintln!("Passing plaintext unlock PIN as CLI arguments is disallowed for security (CRED-001). Use interactive prompt or pipe via stdin with `--stdin`.");
+                return None;
+            }
             #[cfg(feature = "flutter")]
-            if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    if let Err(err) = crate::ipc::set_unlock_pin(args[1].to_owned(), false) {
-                        println!("{err}");
-                    } else {
-                        println!("Done!");
+            if crate::platform::is_installed() && is_root() {
+                let from_stdin = args.len() == 2 && args[1] == "--stdin";
+                match read_secret("unlock PIN", from_stdin) {
+                    Ok(pin) => {
+                        if let Err(err) = crate::ipc::set_unlock_pin((*pin).clone(), false) {
+                            println!("{err}");
+                        } else {
+                            println!("Done!");
+                        }
                     }
-                } else {
-                    println!("Installation and administrative privileges required!");
+                    Err(err) => eprintln!("{err}"),
                 }
+            } else {
+                println!("Installation and administrative privileges required!");
             }
             return None;
         } else if args[0] == "--get-id" {
@@ -558,45 +636,70 @@ pub fn core_main() -> Option<Vec<String>> {
                 println!("Cannot assign an unregistrable device!");
             } else if crate::platform::is_installed() && is_root() {
                 let max = args.len() - 1;
-                let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
-                if pos < max {
-                    let token = args[pos + 1].to_owned();
-                    let id = crate::ipc::get_id();
-                    let uuid = crate::encode64(camellia_remote_protocol::get_uuid());
-                    let get_value = |c: &str| {
-                        let pos = args.iter().position(|x| x == c).unwrap_or(max);
-                        if pos < max {
-                            Some(args[pos + 1].to_owned())
-                        } else {
-                            None
-                        }
+                let token_arg_pos = args.iter().position(|x| x == "--token").unwrap_or(max);
+                if token_arg_pos < max {
+                    eprintln!("Passing API token directly as CLI argument is disallowed for security (CRED-001). Use interactive prompt or `--token-stdin`.");
+                    return None;
+                }
+                let ab_pwd_pos = args
+                    .iter()
+                    .position(|x| x == "--address_book_password")
+                    .unwrap_or(max);
+                if ab_pwd_pos < max {
+                    eprintln!("Passing address book password directly as CLI argument is disallowed for security (CRED-001). Use `--address_book_password-stdin`.");
+                    return None;
+                }
+                let from_stdin = args.iter().any(|x| x == "--token-stdin" || x == "--stdin");
+                let token = match read_secret("API token", from_stdin) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return None;
+                    }
+                };
+                let id = crate::ipc::get_id();
+                let uuid = crate::encode64(camellia_remote_protocol::get_uuid());
+                let get_value = |c: &str| {
+                    let pos = args.iter().position(|x| x == c).unwrap_or(max);
+                    if pos < max {
+                        Some(args[pos + 1].to_owned())
+                    } else {
+                        None
+                    }
+                };
+                let user_name = get_value("--user_name");
+                let strategy_name = get_value("--strategy_name");
+                let address_book_name = get_value("--address_book_name");
+                let address_book_tag = get_value("--address_book_tag");
+                let address_book_alias = get_value("--address_book_alias");
+                let address_book_password =
+                    if args.iter().any(|x| x == "--address_book_password-stdin") {
+                        read_secret("address book password", true)
+                            .ok()
+                            .map(|p| (*p).clone())
+                    } else {
+                        None
                     };
-                    let user_name = get_value("--user_name");
-                    let strategy_name = get_value("--strategy_name");
-                    let address_book_name = get_value("--address_book_name");
-                    let address_book_tag = get_value("--address_book_tag");
-                    let address_book_alias = get_value("--address_book_alias");
-                    let address_book_password = get_value("--address_book_password");
-                    let address_book_note = get_value("--address_book_note");
-                    let device_group_name = get_value("--device_group_name");
-                    let note = get_value("--note");
-                    let device_username = get_value("--device_username");
-                    let device_name = get_value("--device_name");
-                    let mut body = serde_json::json!({
-                        "id": id,
-                        "uuid": uuid,
-                    });
-                    let header = "Authorization: Bearer ".to_owned() + &token;
-                    if user_name.is_none()
-                        && strategy_name.is_none()
-                        && address_book_name.is_none()
-                        && device_group_name.is_none()
-                        && note.is_none()
-                        && device_username.is_none()
-                        && device_name.is_none()
-                    {
-                        println!(
-                            r#"At least one of the following options is required:
+                let address_book_note = get_value("--address_book_note");
+                let device_group_name = get_value("--device_group_name");
+                let note = get_value("--note");
+                let device_username = get_value("--device_username");
+                let device_name = get_value("--device_name");
+                let mut body = serde_json::json!({
+                    "id": id,
+                    "uuid": uuid,
+                });
+                let header = "Authorization: Bearer ".to_owned() + &token;
+                if user_name.is_none()
+                    && strategy_name.is_none()
+                    && address_book_name.is_none()
+                    && device_group_name.is_none()
+                    && note.is_none()
+                    && device_username.is_none()
+                    && device_name.is_none()
+                {
+                    println!(
+                        r#"At least one of the following options is required:
   --user_name
   --strategy_name
   --address_book_name
@@ -604,55 +707,52 @@ pub fn core_main() -> Option<Vec<String>> {
   --note
   --device_username
   --device_name"#
-                        );
-                    } else {
-                        if let Some(name) = user_name {
-                            body["user_name"] = serde_json::json!(name);
+                    );
+                } else {
+                    if let Some(name) = user_name {
+                        body["user_name"] = serde_json::json!(name);
+                    }
+                    if let Some(name) = strategy_name {
+                        body["strategy_name"] = serde_json::json!(name);
+                    }
+                    if let Some(name) = address_book_name {
+                        body["address_book_name"] = serde_json::json!(name);
+                        if let Some(name) = address_book_tag {
+                            body["address_book_tag"] = serde_json::json!(name);
                         }
-                        if let Some(name) = strategy_name {
-                            body["strategy_name"] = serde_json::json!(name);
+                        if let Some(name) = address_book_alias {
+                            body["address_book_alias"] = serde_json::json!(name);
                         }
-                        if let Some(name) = address_book_name {
-                            body["address_book_name"] = serde_json::json!(name);
-                            if let Some(name) = address_book_tag {
-                                body["address_book_tag"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_alias {
-                                body["address_book_alias"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_password {
-                                body["address_book_password"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_note {
-                                body["address_book_note"] = serde_json::json!(name);
-                            }
+                        if let Some(name) = address_book_password {
+                            body["address_book_password"] = serde_json::json!(name);
                         }
-                        if let Some(name) = device_group_name {
-                            body["device_group_name"] = serde_json::json!(name);
+                        if let Some(name) = address_book_note {
+                            body["address_book_note"] = serde_json::json!(name);
                         }
-                        if let Some(name) = note {
-                            body["note"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = device_username {
-                            body["device_username"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = device_name {
-                            body["device_name"] = serde_json::json!(name);
-                        }
-                        let url = crate::ui_interface::get_api_server() + "/api/devices/cli";
-                        match crate::post_request_sync(url, body.to_string(), &header) {
-                            Err(err) => println!("{}", err),
-                            Ok(text) => {
-                                if text.is_empty() {
-                                    println!("Done!");
-                                } else {
-                                    println!("{}", text);
-                                }
+                    }
+                    if let Some(name) = device_group_name {
+                        body["device_group_name"] = serde_json::json!(name);
+                    }
+                    if let Some(name) = note {
+                        body["note"] = serde_json::json!(name);
+                    }
+                    if let Some(name) = device_username {
+                        body["device_username"] = serde_json::json!(name);
+                    }
+                    if let Some(name) = device_name {
+                        body["device_name"] = serde_json::json!(name);
+                    }
+                    let url = crate::ui_interface::get_api_server() + "/api/devices/cli";
+                    match crate::post_request_sync(url, body.to_string(), &header) {
+                        Err(err) => println!("{}", err),
+                        Ok(text) => {
+                            if text.is_empty() {
+                                println!("Done!");
+                            } else {
+                                println!("{}", text);
                             }
                         }
                     }
-                } else {
-                    println!("--token is required!");
                 }
             } else {
                 println!("Installation and administrative privileges required!");
@@ -666,11 +766,18 @@ pub fn core_main() -> Option<Vec<String>> {
             } else if crate::platform::is_installed() && is_root() {
                 let max = args.len() - 1;
                 let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
-                if pos >= max {
-                    println!("--token is required!");
+                if pos < max {
+                    eprintln!("Passing deployment token directly as CLI argument is disallowed for security (CRED-001). Use interactive prompt or `--token-stdin`.");
                     return None;
                 }
-                let token = args[pos + 1].to_owned();
+                let from_stdin = args.iter().any(|x| x == "--token-stdin" || x == "--stdin");
+                let token = match read_secret("deployment token", from_stdin) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return None;
+                    }
+                };
                 let get_value = |c: &str| {
                     let pos = args.iter().position(|x| x == c).unwrap_or(max);
                     if pos < max {
@@ -681,7 +788,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 };
                 // An empty --id (e.g. an unset var) would deploy a blank id; the Android flow guards this too (#15146).
                 let new_id = get_value("--id").filter(|s| !s.is_empty());
-                match crate::ui_interface::deploy_device(token, new_id) {
+                match crate::ui_interface::deploy_device((*token).clone(), new_id) {
                     crate::ui_interface::DeployResult::Ok => {
                         println!("Device deployed.");
                     }
@@ -810,8 +917,8 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
                 id = args.next();
             }
             "--password" => {
-                if let Some(password) = args.next() {
-                    param_array.push(format!("password={password}"));
+                if let Some(_pwd) = args.next() {
+                    log::warn!("Passing password via CLI connection arguments is disallowed for security (CRED-001). Parameter ignored.");
                 }
             }
             "--relay" => {

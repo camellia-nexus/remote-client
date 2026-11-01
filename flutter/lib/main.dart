@@ -18,6 +18,7 @@ import 'package:camellia_remote_app/desktop/screen/desktop_terminal_screen.dart'
 import 'package:camellia_remote_app/desktop/widgets/refresh_wrapper.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -39,70 +40,75 @@ WindowType? kWindowType;
 late List<String> kBootArgs;
 
 Future<void> main(List<String> args) async {
-  earlyAssert();
-  WidgetsFlutterBinding.ensureInitialized();
+  LogSanitizer.install();
+  runZonedGuarded(() async {
+    earlyAssert();
+    WidgetsFlutterBinding.ensureInitialized();
 
-  debugPrint("launch args: $args");
-  kBootArgs = List.from(args);
+    debugPrint("launch args: ${args.map(LogSanitizer.sanitize).toList()}");
+    kBootArgs = List.from(args);
 
-  if (!isDesktop) {
-    runMobileApp();
-    return;
-  }
-  // main window
-  if (args.isNotEmpty && args.first == 'multi_window') {
-    kWindowId = int.parse(args[1]);
-    stateGlobal.setWindowId(kWindowId!);
-    if (!isMacOS) {
-      WindowController.fromWindowId(kWindowId!).showTitleBar(false);
+    if (!isDesktop) {
+      runMobileApp();
+      return;
     }
-    final argument = args[2].isEmpty
-        ? <String, dynamic>{}
-        : jsonDecode(args[2]) as Map<String, dynamic>;
-    int type = argument['type'] ?? -1;
-    // to-do: No need to parse window id ?
-    // Because stateGlobal.windowId is a global value.
-    argument['windowId'] = kWindowId;
-    kWindowType = type.windowType;
-    switch (kWindowType) {
-      case WindowType.RemoteDesktop:
-        desktopType = DesktopType.remote;
-        runMultiWindow(argument, kAppTypeDesktopRemote);
-        break;
-      case WindowType.FileTransfer:
-        desktopType = DesktopType.fileTransfer;
-        runMultiWindow(argument, kAppTypeDesktopFileTransfer);
-        break;
-      case WindowType.ViewCamera:
-        desktopType = DesktopType.viewCamera;
-        runMultiWindow(argument, kAppTypeDesktopViewCamera);
-        break;
-      case WindowType.PortForward:
-        desktopType = DesktopType.portForward;
-        runMultiWindow(argument, kAppTypeDesktopPortForward);
-        break;
-      case WindowType.Terminal:
-        desktopType = DesktopType.terminal;
-        runMultiWindow(argument, kAppTypeDesktopTerminal);
-      default:
-        break;
+    // main window
+    if (args.isNotEmpty && args.first == 'multi_window') {
+      kWindowId = int.parse(args[1]);
+      stateGlobal.setWindowId(kWindowId!);
+      if (!isMacOS) {
+        WindowController.fromWindowId(kWindowId!).showTitleBar(false);
+      }
+      final argument = args[2].isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(args[2]) as Map<String, dynamic>;
+      int type = argument['type'] ?? -1;
+      // to-do: No need to parse window id ?
+      // Because stateGlobal.windowId is a global value.
+      argument['windowId'] = kWindowId;
+      kWindowType = type.windowType;
+      switch (kWindowType) {
+        case WindowType.RemoteDesktop:
+          desktopType = DesktopType.remote;
+          runMultiWindow(argument, kAppTypeDesktopRemote);
+          break;
+        case WindowType.FileTransfer:
+          desktopType = DesktopType.fileTransfer;
+          runMultiWindow(argument, kAppTypeDesktopFileTransfer);
+          break;
+        case WindowType.ViewCamera:
+          desktopType = DesktopType.viewCamera;
+          runMultiWindow(argument, kAppTypeDesktopViewCamera);
+          break;
+        case WindowType.PortForward:
+          desktopType = DesktopType.portForward;
+          runMultiWindow(argument, kAppTypeDesktopPortForward);
+          break;
+        case WindowType.Terminal:
+          desktopType = DesktopType.terminal;
+          runMultiWindow(argument, kAppTypeDesktopTerminal);
+        default:
+          break;
+      }
+    } else if (args.isNotEmpty && args.first == '--cm') {
+      debugPrint("--cm started");
+      desktopType = DesktopType.cm;
+      await windowManager.ensureInitialized();
+      runConnectionManagerScreen();
+    } else if (args.contains('--install')) {
+      runInstallPage();
+    } else {
+      desktopType = DesktopType.main;
+      await windowManager.ensureInitialized();
+      windowManager.setPreventClose(true);
+      if (isMacOS) {
+        disableWindowMovable(kWindowId);
+      }
+      runMainApp(true);
     }
-  } else if (args.isNotEmpty && args.first == '--cm') {
-    debugPrint("--cm started");
-    desktopType = DesktopType.cm;
-    await windowManager.ensureInitialized();
-    runConnectionManagerScreen();
-  } else if (args.contains('--install')) {
-    runInstallPage();
-  } else {
-    desktopType = DesktopType.main;
-    await windowManager.ensureInitialized();
-    windowManager.setPreventClose(true);
-    if (isMacOS) {
-      disableWindowMovable(kWindowId);
-    }
-    runMainApp(true);
-  }
+  }, (error, stack) {
+    debugPrint("Unhandled zone error: $error\n$stack");
+  }, zoneSpecification: LogSanitizer.zoneSpecification());
 }
 
 Future<void> initEnv(String appType) async {

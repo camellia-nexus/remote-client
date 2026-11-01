@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use url::Url;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 lazy_static::lazy_static! {
     static ref OIDC_SESSION: Arc<RwLock<OidcSession>> = Arc::new(RwLock::new(OidcSession::new()));
@@ -31,10 +32,39 @@ fn oidc_query_body(code: &str, id: &str, uuid: &str) -> String {
     .to_string()
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone)]
 pub struct OidcAuthUrl {
     code: String,
     url: Url,
+}
+
+impl std::fmt::Debug for OidcAuthUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut sanitized_url = format!("{}://", self.url.scheme());
+        if let Some(host) = self.url.host_str() {
+            sanitized_url.push_str(host);
+        }
+        if let Some(port) = self.url.port() {
+            sanitized_url.push(':');
+            sanitized_url.push_str(&port.to_string());
+        }
+        sanitized_url.push_str(self.url.path());
+        if self.url.query().is_some() {
+            sanitized_url.push_str("?<redacted>");
+        }
+
+        f.debug_struct("OidcAuthUrl")
+            .field(
+                "code",
+                &if self.code.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("url", &sanitized_url)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -86,7 +116,7 @@ pub enum UserStatus {
     Unverified = -1,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UserPayload {
     pub name: String,
     #[serde(default)]
@@ -106,7 +136,7 @@ pub struct UserPayload {
     pub third_auth_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthBody {
     pub access_token: String,
     pub r#type: String,
@@ -115,6 +145,33 @@ pub struct AuthBody {
     #[serde(default)]
     pub secret: String,
     pub user: UserPayload,
+}
+
+impl Zeroize for AuthBody {
+    fn zeroize(&mut self) {
+        self.access_token.zeroize();
+        self.secret.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for AuthBody {}
+
+impl Drop for AuthBody {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl std::fmt::Debug for AuthBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthBody")
+            .field("access_token", &"[REDACTED]")
+            .field("type", &self.r#type)
+            .field("tfa_type", &self.tfa_type)
+            .field("secret", &"[REDACTED]")
+            .field("user", &self.user)
+            .finish()
+    }
 }
 
 pub struct OidcSession {
@@ -200,7 +257,9 @@ impl OidcSession {
         self.keep_querying = true;
         self.running = false;
         self.code_url = None;
-        self.auth_body = None;
+        if let Some(mut body) = self.auth_body.take() {
+            body.zeroize();
+        }
     }
 
     fn before_task(&mut self) {
@@ -225,7 +284,23 @@ impl OidcSession {
             return;
         }
         let auth_request_res = Self::auth(&api_server, &op, &id, &uuid);
-        log::info!("Request oidc auth result: {:?}", &auth_request_res);
+        match &auth_request_res {
+            Ok(HbbHttpResponse::Data(_)) => {
+                log::info!("Request oidc auth succeeded");
+            }
+            Ok(HbbHttpResponse::Error(err)) => {
+                log::warn!("Request oidc auth returned error: {}", err);
+            }
+            Ok(HbbHttpResponse::ErrorFormat) => {
+                log::warn!("Request oidc auth returned ErrorFormat");
+            }
+            Ok(HbbHttpResponse::DataTypeFormat) => {
+                log::warn!("Request oidc auth returned DataTypeFormat");
+            }
+            Err(err) => {
+                log::error!("Request oidc auth network/HTTP failed: {}", err);
+            }
+        }
         if cancel_token.is_cancelled() {
             log::info!("OIDC auth cancelled after initial auth request");
             return;
@@ -418,8 +493,28 @@ impl OidcSession {
         session.keep_querying = false;
         session.running = false;
         session.code_url = None;
-        session.auth_body = None;
+        if let Some(mut body) = session.auth_body.take() {
+            body.zeroize();
+        }
         session.set_state("", "cancelled".to_owned());
+    }
+
+    pub fn logout() {
+        let mut session = OIDC_SESSION.write().unwrap();
+        session.cancel_token.cancel();
+        session.keep_querying = false;
+        session.running = false;
+        session.code_url = None;
+        if let Some(mut body) = session.auth_body.take() {
+            body.zeroize();
+        }
+        session.set_state("", "".to_owned());
+        session.generation = session.generation.wrapping_add(1);
+    }
+
+    pub fn get_access_token() -> Option<String> {
+        let session = OIDC_SESSION.read().unwrap();
+        session.auth_body.as_ref().map(|b| b.access_token.clone())
     }
 
     pub fn get_result() -> AuthResult {
@@ -436,8 +531,11 @@ impl OidcSession {
 mod tests {
     use super::*;
 
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn oidc_poll_credentials_are_serialized_in_the_post_body() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let body = oidc_query_body("poll-code-canary", "123456789", "device-uuid-canary");
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
 
@@ -449,6 +547,7 @@ mod tests {
 
     #[test]
     fn test_oidc_cancel_clears_code_url_and_auth_body() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         OidcSession::auth_cancel();
         let res = OidcSession::get_result();
         assert_eq!(res.url, None);
@@ -458,6 +557,7 @@ mod tests {
 
     #[test]
     fn test_oidc_generation_increments_monotonically_on_auth() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let gen1 = OidcSession::current_generation();
         // Invoke auth with dummy unroutable endpoint; worker starts with bounded timeout
         OidcSession::account_auth(
@@ -473,5 +573,62 @@ mod tests {
         OidcSession::auth_cancel();
         let res = OidcSession::get_result();
         assert_eq!(res.url, None);
+    }
+
+    #[test]
+    fn test_oidc_auth_url_debug_redaction() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let auth_url = OidcAuthUrl {
+            code: "CANARY_SECRET_POLL_CODE_ABCDEF".to_string(),
+            url: Url::parse(
+                "https://idp.example.com/oauth/authorize?client_id=123&state=CANARY_SECRET_STATE_XYZ",
+            )
+            .unwrap(),
+        };
+
+        let debug_output = format!("{:?}", auth_url);
+        assert!(
+            !debug_output.contains("CANARY_SECRET_POLL_CODE_ABCDEF"),
+            "OIDC polling code leaked in Debug"
+        );
+        assert!(
+            !debug_output.contains("CANARY_SECRET_STATE_XYZ"),
+            "Query string state leaked in Debug"
+        );
+        assert!(debug_output.contains("<redacted>"));
+        assert!(debug_output.contains("https://idp.example.com/oauth/authorize?<redacted>"));
+    }
+
+    #[test]
+    fn test_oidc_logout_zeroizes_auth_body_and_invalidates_getters() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        {
+            let mut session = OIDC_SESSION.write().unwrap();
+            session.auth_body = Some(AuthBody {
+                access_token: "CANARY_ACCESS_TOKEN_123456789".to_string(),
+                r#type: "access_token".to_string(),
+                tfa_type: "".to_string(),
+                secret: "CANARY_SECRET_987654321".to_string(),
+                user: Default::default(),
+            });
+            session.set_state(LOGIN_ACCOUNT_AUTH, "".to_owned());
+        }
+
+        assert_eq!(
+            OidcSession::get_access_token().as_deref(),
+            Some("CANARY_ACCESS_TOKEN_123456789")
+        );
+        assert_eq!(
+            crate::get_api_access_token().as_deref(),
+            Some("CANARY_ACCESS_TOKEN_123456789")
+        );
+        assert!(OidcSession::get_result().auth_body.is_some());
+
+        // Now log out
+        OidcSession::logout();
+
+        assert_eq!(OidcSession::get_access_token(), None);
+        assert_eq!(crate::get_api_access_token(), None);
+        assert!(OidcSession::get_result().auth_body.is_none());
     }
 }

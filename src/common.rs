@@ -1043,7 +1043,9 @@ pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
 /// Callers must skip the request when there is no account session instead of
 /// falling back to public device identifiers.
 pub fn get_api_access_token() -> Option<String> {
-    let token = LocalConfig::get_option("access_token");
+    let token = crate::hbbs_http::account::OidcSession::get_access_token()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| LocalConfig::get_option("access_token"));
     if token.is_empty()
         || !token
             .bytes()
@@ -1103,6 +1105,18 @@ fn should_use_tcp_proxy_for_api_url(url: &str, api_url: &str) -> bool {
     }
 }
 
+fn sanitize_url_path_for_log(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        if segment.starts_with("bot") && segment.len() > 3 {
+            parts.push("bot<redacted>");
+        } else {
+            parts.push(segment);
+        }
+    }
+    parts.join("/")
+}
+
 fn tcp_proxy_log_target(url: &str) -> String {
     url::Url::parse(url)
         .ok()
@@ -1116,7 +1130,8 @@ fn tcp_proxy_log_target(url: &str) -> String {
                 redacted.push(':');
                 redacted.push_str(&port.to_string());
             }
-            redacted.push_str(parsed.path());
+            let sanitized_path = sanitize_url_path_for_log(parsed.path());
+            redacted.push_str(&sanitized_path);
             redacted
         })
         .unwrap_or_else(|| "<invalid-url>".to_owned())
@@ -1329,7 +1344,10 @@ async fn post_request_http(
     )
     .await?;
     let status = response.status().as_u16();
-    let text = response.text().await?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| anyhow!("{:?}", e.without_url()))?;
     Ok((status, text))
 }
 
@@ -1428,7 +1446,7 @@ async fn post_request_(
     let to = std::time::Duration::from_secs(12);
     match req.body(body).timeout(to).send().await {
         Ok(resp) => Ok(resp),
-        Err(e) => Err(anyhow!("{:?}", e)),
+        Err(e) => Err(anyhow!("{:?}", e.without_url())),
     }
 }
 
@@ -3068,5 +3086,16 @@ mod tests {
         let combined_mask = MOUSE_TYPE_DOWN | ((MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT) << 3);
         assert_eq!(combined_mask & MOUSE_TYPE_MASK, MOUSE_TYPE_DOWN);
         assert_eq!(combined_mask >> 3, MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT);
+    }
+
+    #[test]
+    fn test_tcp_proxy_log_target_redacts_telegram_bot_token() {
+        let url = "https://api.telegram.org/bot123456:CANARY_BOT_TOKEN_XYZ/sendMessage";
+        let target = tcp_proxy_log_target(url);
+        assert!(
+            !target.contains("CANARY_BOT_TOKEN_XYZ"),
+            "Telegram token leaked in tcp_proxy_log_target"
+        );
+        assert_eq!(target, "https://api.telegram.org/bot<redacted>/sendMessage");
     }
 }

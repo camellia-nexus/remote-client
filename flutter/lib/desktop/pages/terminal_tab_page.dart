@@ -9,6 +9,7 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:get/get.dart';
 
@@ -309,8 +310,8 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
-      print(
-          "[Remote Terminal] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+      debugPrint(
+          "[Remote Terminal] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId");
       if (call.method == kWindowEventNewTerminal) {
         final args = jsonDecode(call.arguments);
         final id = args['id'];

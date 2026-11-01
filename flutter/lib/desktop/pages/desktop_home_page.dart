@@ -21,6 +21,7 @@ import 'package:camellia_remote_app/models/server_model.dart';
 import 'package:camellia_remote_app/plugin/ui_manager.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/platform_channel.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -856,7 +857,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       if (!isChattyMethod(call.method)) {
         debugPrint(
-          "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId",
+          "[Main] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId",
         );
       }
       if (call.method == kWindowMainWindowOnTop) {

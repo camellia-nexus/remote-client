@@ -923,6 +923,7 @@ dependencies = [
  "jni 0.21.1",
  "kcp-sys",
  "lazy_static",
+ "libc",
  "libpulse-binding",
  "libpulse-simple-binding",
  "libpulse-simple-sys",
@@ -981,6 +982,7 @@ dependencies = [
  "wol-rs",
  "x11-clipboard 0.8.1",
  "x11rb 0.12.0",
+ "zeroize",
 ]
 
 [[package]]

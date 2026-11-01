@@ -1951,7 +1951,7 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
   ffi.dialogManager.dismissAll();
 
   Future<void> updateAuditNoteByGuid(String auditGuid, String note) async {
-    debugPrint('Updating audit note for GUID: $auditGuid, note: $note');
+    debugPrint('Updating audit note for GUID: $auditGuid, note length: ${note.length}');
     try {
       final apiServer = await bind.mainGetApiServer();
       if (apiServer.isEmpty) {
@@ -1973,7 +1973,7 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
         debugPrint('Successfully updated audit note for GUID: $auditGuid');
       } else {
         debugPrint(
-          'Failed to update audit note. Status: ${response.statusCode}, Body: ${response.body}',
+          'Failed to update audit note. Status: ${response.statusCode}, Body length: ${response.body.length}',
         );
       }
     } catch (e) {

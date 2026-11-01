@@ -18,6 +18,7 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/platform_channel.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
@@ -2678,7 +2679,7 @@ Future<bool> initUniLinks() async {
   // check cold boot
   try {
     final initialLink = await getInitialLink();
-    print("initialLink: $initialLink");
+    debugPrint("initialLink: ${LogSanitizer.sanitize(initialLink ?? '')}");
     if (initialLink == null || initialLink.isEmpty) {
       return false;
     }
@@ -2706,7 +2707,7 @@ StreamSubscription? listenUniLinks({handleByFlutter = true}) {
 
   final sub = uriLinkStream.listen(
     (Uri? uri) {
-      debugPrint("A uri was received: $uri. handleByFlutter $handleByFlutter");
+      debugPrint("A uri was received: ${LogSanitizer.sanitize(uri?.toString() ?? '')}. handleByFlutter $handleByFlutter");
       if (uri != null) {
         if (handleByFlutter) {
           handleUriLink(uri: uri);
@@ -2936,30 +2937,13 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     }
     return null;
   } else if (uri.authority == "password") {
-    if (isAndroid || isIOS) {
-      final allowDeepLinkPassword =
-          bind.mainGetBuildinOption(key: kOptionAllowDeepLinkPassword) == 'Y';
-      if (!allowDeepLinkPassword) {
-        debugPrint(
-          "Ignore camellia-remote://password because $kOptionAllowDeepLinkPassword is not enabled.",
-        );
-        // Keep the user-facing error generic; detailed rejection reason is in debug logs.
-        // Delay toast to avoid missing overlay during cold-start deeplink handling.
-        Timer(Duration(seconds: 1), () {
-          showToast(translate('Failed'));
-        });
-        return null;
-      }
-      final password = uri.path.substring("/".length);
-      if (password.isNotEmpty) {
-        Timer(Duration(seconds: 1), () async {
-          final ok = await bind.mainSetPermanentPasswordWithResult(
-            password: password,
-          );
-          showToast(translate(ok ? 'Successful' : 'Failed'));
-        });
-      }
-    }
+    debugPrint(
+      "[CRED-001] Insecure deep link authority 'password' rejected.",
+    );
+    Timer(Duration(seconds: 1), () {
+      showToast(translate('Direct password in links is disabled for security'));
+    });
+    return null;
   } else if (options.contains(uri.authority)) {
     command = '--${uri.authority}';
     if (uri.path.length > 1) {
@@ -2982,6 +2966,13 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     (k, v) => MapEntry(k.toLowerCase(), v),
   );
 
+  if (queryParameters.containsKey("password") || queryParameters.containsKey("token")) {
+    debugPrint("[CRED-001] Insecure cleartext password/token query parameter in URI rejected.");
+    Timer(Duration(seconds: 1), () {
+      showToast(translate('Direct credential parameters in links are disabled for security'));
+    });
+  }
+
   var key = queryParameters["key"];
   if (id != null) {
     if (key != null) {
@@ -2991,7 +2982,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
 
   if (isMobile && id != null) {
     final forceRelay = queryParameters["relay"] != null;
-    final password = queryParameters["password"];
 
     // Determine connection type based on command
     if (command == '--file-transfer') {
@@ -3000,7 +2990,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
         id,
         isFileTransfer: true,
         forceRelay: forceRelay,
-        password: password,
       );
     } else if (command == '--view-camera') {
       connect(
@@ -3008,7 +2997,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
         id,
         isViewCamera: true,
         forceRelay: forceRelay,
-        password: password,
       );
     } else if (command == '--terminal') {
       connect(
@@ -3016,7 +3004,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
         id,
         isTerminal: true,
         forceRelay: forceRelay,
-        password: password,
       );
     } else if (command == 'terminal-admin') {
       setEnvTerminalAdmin();
@@ -3025,11 +3012,10 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
         id,
         isTerminal: true,
         forceRelay: forceRelay,
-        password: password,
       );
     } else {
       // Default to remote desktop for '--connect', '--play', or direct connection
-      connect(Get.context!, id, forceRelay: forceRelay, password: password);
+      connect(Get.context!, id, forceRelay: forceRelay);
     }
     return null;
   }
@@ -3039,8 +3025,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     args.add(command);
     args.add(id);
     var param = queryParameters;
-    String? password = param["password"];
-    if (password != null) args.addAll(['--password', password]);
     String? switch_uuid = param["switch_uuid"];
     if (switch_uuid != null) args.addAll(['--switch_uuid', switch_uuid]);
     if (param["relay"] != null) args.add("--relay");

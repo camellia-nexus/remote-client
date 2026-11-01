@@ -213,15 +213,7 @@ class PlatformFFI {
         name = macOsInfo.computerName;
         id = macOsInfo.systemGUID ?? '';
       }
-      if (isAndroid || isIOS) {
-        debugPrint(
-          '_appType:$_appType,info1-id:$id,info2-name:$name,dir:$_dir,homeDir:$_homeDir',
-        );
-      } else {
-        debugPrint(
-          '_appType:$_appType,info1-id:$id,info2-name:$name,dir:$_dir',
-        );
-      }
+      debugPrint('_appType:$_appType (device initialized)');
       if (desktopType == DesktopType.cm) {
         await _ffiBind.cmInit();
       }

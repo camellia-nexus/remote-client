@@ -226,9 +226,24 @@ pub fn get_builtin_option(key: &str) -> String {
     crate::get_builtin_option(key)
 }
 
+pub fn purge_option(key: &str) {
+    LocalConfig::set_option(key.to_owned(), "".to_owned());
+}
+
+pub fn account_logout() {
+    account::OidcSession::logout();
+    purge_option("access_token");
+    LocalConfig::set_option("user_info".to_owned(), "".to_owned());
+    camellia_remote_protocol::config::Ab::remove();
+}
+
 #[inline]
 pub fn set_local_option(key: String, value: String) {
-    LocalConfig::set_option(key.clone(), value);
+    if key == "access_token" && value.is_empty() {
+        account_logout();
+    } else {
+        LocalConfig::set_option(key.clone(), value);
+    }
 }
 
 /// Resolve relative avatar path (e.g. "/avatar/xxx") to absolute URL

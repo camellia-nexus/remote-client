@@ -1237,6 +1237,10 @@ class RustdeskImpl {
     );
   }
 
+  Future<void> mainAccountLogout({dynamic hint}) {
+    return Future(() => js.context.callMethod('setByName', ['account_logout']));
+  }
+
   String mainGetInputSource({dynamic hint}) {
     final inputSource = js.context.callMethod('getByName', [
       'option:local',

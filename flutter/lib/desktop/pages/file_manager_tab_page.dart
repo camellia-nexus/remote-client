@@ -9,6 +9,7 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/file_manager_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
 
 import '../../models/platform_model.dart';
@@ -67,7 +68,7 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
 
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       debugPrint(
-          "[FileTransfer] call ${call.method} with args ${call.arguments} from window $fromWindowId to ${windowId()}");
+          "[FileTransfer] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId to ${windowId()}");
       // for simplify, just replace connectionId
       if (call.method == kWindowEventNewFileTransfer) {
         final args = jsonDecode(call.arguments);

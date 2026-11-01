@@ -17,6 +17,7 @@ import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart
     as mod_menu;
 import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:bot_toast/bot_toast.dart';
@@ -386,7 +387,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
 
   Future<dynamic> _remoteMethodHandler(call, fromWindowId) async {
     debugPrint(
-        "[View Camera Page] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+        "[View Camera Page] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId");
 
     dynamic returnValue;
     // for simplify, just replace connectionId

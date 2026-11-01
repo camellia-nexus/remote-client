@@ -14,7 +14,7 @@
     "lint": "npm run test:security && npm run test:proto && tsc -p tsconfig.json --noEmit",
     "test": "npm run test:security && npm run test:proto",
     "test:proto": "node --test test/proto_contract.test.ts",
-    "test:security": "node --test test/device_identity_proof.test.ts test/direct_access_policy.test.ts test/oidc_poll_request.test.ts test/secretbox_direction.test.ts test/session_security_policy.test.ts"
+    "test:security": "node --test test/account_auth_lifecycle.test.ts test/device_identity_proof.test.ts test/direct_access_policy.test.ts test/oidc_poll_request.test.ts test/secretbox_direction.test.ts test/session_security_policy.test.ts"
   },
   "dependencies": {
     "fzstd": "^0.1.1",

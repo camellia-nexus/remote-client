@@ -8,6 +8,7 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/port_forward_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
+import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
 
 class PortForwardTabPage extends StatefulWidget {
@@ -58,7 +59,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
 
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       debugPrint(
-          "[Port Forward] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+          "[Port Forward] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId");
       // for simplify, just replace connectionId
       if (call.method == kWindowEventNewPortForward) {
         final args = jsonDecode(call.arguments);

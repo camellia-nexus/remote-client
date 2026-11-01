@@ -20,6 +20,7 @@ import {
 } from './crypto';
 import { MessageInbox } from './inbox';
 import { createOidcPollRequest } from './oidc_poll_request';
+import { purgeAccountCredentials as purgeStoreCredentials } from './account_credentials';
 import {
   resolveSecurityPolicyFromReader,
   type SecurityPolicyOptionsReader,
@@ -197,6 +198,9 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
             Number.isFinite(display) && display >= 0 ? display : undefined
           );
         }
+        return '';
+      case 'account_logout':
+        this.purgeAccountCredentials();
         return '';
       case 'option:toggle':
         return this.toggleOption(String(arg0 ?? ''));
@@ -1255,6 +1259,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return;
     }
     let normalized = String(value ?? '');
+    if (
+      prefix === 'option:local' &&
+      key === 'access_token' &&
+      (!normalized || normalized === '')
+    ) {
+      this.purgeAccountCredentials();
+      return;
+    }
     if (prefix === 'option:session' && key === 'codec-preference') {
       normalized = this.normalizeCodecPreference(normalized);
     }
@@ -2822,7 +2834,12 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private updateAccountAuthResult(result: AccountAuthResult): void {
-    this.store.set('account_auth_result', JSON.stringify(result));
+    this.store.set('account_auth_result', JSON.stringify(result), false);
+  }
+
+  private purgeAccountCredentials(): void {
+    this.cancelAccountAuth(true);
+    purgeStoreCredentials(this.store);
   }
 
   private isAccountAuthActive(nonce: number): boolean {

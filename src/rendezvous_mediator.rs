@@ -241,7 +241,7 @@ impl RendezvousMediator {
                     }
                     Ok(register_pk_response::Result::NOT_DEPLOYED) => {
                         if !NEEDS_DEPLOY.load(Ordering::SeqCst) {
-                            log::warn!("Server requires deployment. Run `camellia-remote --deploy --token <api_token>` on this device.");
+                            log::warn!("Server requires deployment. Run `camellia-remote --deploy` (secure prompt) or `echo <token> | camellia-remote --deploy --token-stdin` on this device.");
                         }
                         NEEDS_DEPLOY.store(true, Ordering::SeqCst);
                         // Clear key_confirmed so the UI reflects the truth: this device is

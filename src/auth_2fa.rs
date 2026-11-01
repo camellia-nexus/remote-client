@@ -156,12 +156,42 @@ pub fn get_2fa(raw: Option<String>) -> Option<TOTP> {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct TelegramBot {
     #[serde(skip)]
     pub token_str: String,
     pub token: Vec<u8>,
     pub chat_id: String,
+}
+
+impl std::fmt::Debug for TelegramBot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelegramBot")
+            .field(
+                "token_str",
+                &if self.token_str.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field(
+                "token",
+                &if self.token.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("chat_id", &self.chat_id)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for TelegramBot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TelegramBot(chat_id: {})", self.chat_id)
+    }
 }
 
 impl TelegramBot {
@@ -282,5 +312,33 @@ mod tests {
 
         // Immediate replay of same code must fail
         assert!(!verify_totp_single_use(&totp, &code));
+    }
+
+    #[test]
+    fn test_telegram_bot_debug_and_display_redaction() {
+        let bot = TelegramBot {
+            token_str: "CANARY_TELEGRAM_SECRET_TOKEN_123456".to_string(),
+            token: vec![1, 2, 3, 4, 5],
+            chat_id: "chat_987654".to_string(),
+        };
+
+        let debug_output = format!("{:?}", bot);
+        assert!(
+            !debug_output.contains("CANARY_TELEGRAM_SECRET_TOKEN"),
+            "Plaintext token leaked in Debug"
+        );
+        assert!(
+            !debug_output.contains("[1, 2, 3, 4, 5]"),
+            "Raw token bytes leaked in Debug"
+        );
+        assert!(debug_output.contains("<redacted>"));
+        assert!(debug_output.contains("chat_987654"));
+
+        let display_output = format!("{}", bot);
+        assert!(
+            !display_output.contains("CANARY_TELEGRAM_SECRET_TOKEN"),
+            "Plaintext token leaked in Display"
+        );
+        assert!(display_output.contains("chat_987654"));
     }
 }

@@ -2514,6 +2514,26 @@ pub fn main_account_auth_result() -> String {
     account_auth_result()
 }
 
+pub fn account_logout() {
+    ui_interface::account_logout();
+}
+
+pub fn main_account_logout() {
+    ui_interface::account_logout();
+}
+
+#[frb(sync)]
+pub fn main_create_capability_handle(peer_id: String, secret: String) -> String {
+    crate::capability::create_capability_handle(&peer_id, &secret)
+}
+
+#[frb(sync)]
+pub fn main_consume_capability_handle(peer_id: String, handle: String) -> String {
+    crate::capability::consume_capability_handle(&peer_id, &handle)
+        .map(|s| (*s).clone())
+        .unwrap_or_default()
+}
+
 pub fn main_on_main_window_close() {
     // may called more than one times
     #[cfg(windows)]

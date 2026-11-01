@@ -160,7 +160,7 @@ class UserModel {
     try {
       return json.decode(userInfo);
     } catch (e) {
-      debugPrint('Failed to get local user info "$userInfo": $e');
+      debugPrint('Failed to parse local user info: $e');
     }
     return null;
   }
@@ -180,6 +180,7 @@ class UserModel {
   }
 
   Future<void> reset({bool resetOther = false}) async {
+    await bind.mainAccountLogout();
     await bind.mainSetLocalOption(key: 'access_token', value: '');
     await bind.mainSetLocalOption(key: 'user_info', value: '');
     if (resetOther) {
