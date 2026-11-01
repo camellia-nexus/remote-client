@@ -2675,10 +2675,10 @@ mod tests {
         ));
         Config::set_option(
             keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_string(),
-            "1:2".to_string(),
+            "1::2".to_string(),
         );
 
-        assert_eq!(get_tcp_proxy_addr(), format!("[1:2]:{RENDEZVOUS_PORT}"));
+        assert_eq!(get_tcp_proxy_addr(), format!("[1::2]:{RENDEZVOUS_PORT}"));
     }
 
     #[tokio::test]
