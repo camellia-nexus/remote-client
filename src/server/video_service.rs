@@ -623,38 +623,39 @@ fn run(vs: VideoService) -> ResultType<()> {
     );
     let client_record = video_qos.record();
     drop(video_qos);
-    let (mut encoder, encoder_cfg, codec_format, use_i444, recorder, _upload_handle) = match setup_encoder(
-        &c,
-        sp.name(),
-        quality,
-        client_record,
-        record_incoming,
-        last_portable_service_running,
-        vs.source,
-        display_idx,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            log::error!("Failed to create encoder: {err:?}, fallback to VP9");
-            Encoder::set_fallback(&EncoderCfg::VPX(VpxEncoderConfig {
-                width: c.width as _,
-                height: c.height as _,
-                quality,
-                codec: VpxVideoCodecId::VP9,
-                keyframe_interval: None,
-            }));
-            setup_encoder(
-                &c,
-                sp.name(),
-                quality,
-                client_record,
-                record_incoming,
-                last_portable_service_running,
-                vs.source,
-                display_idx,
-            )?
-        }
-    };
+    let (mut encoder, encoder_cfg, codec_format, use_i444, recorder, _upload_handle) =
+        match setup_encoder(
+            &c,
+            sp.name(),
+            quality,
+            client_record,
+            record_incoming,
+            last_portable_service_running,
+            vs.source,
+            display_idx,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                log::error!("Failed to create encoder: {err:?}, fallback to VP9");
+                Encoder::set_fallback(&EncoderCfg::VPX(VpxEncoderConfig {
+                    width: c.width as _,
+                    height: c.height as _,
+                    quality,
+                    codec: VpxVideoCodecId::VP9,
+                    keyframe_interval: None,
+                }));
+                setup_encoder(
+                    &c,
+                    sp.name(),
+                    quality,
+                    client_record,
+                    record_incoming,
+                    last_portable_service_running,
+                    vs.source,
+                    display_idx,
+                )?
+            }
+        };
     #[cfg(feature = "vram")]
     c.set_output_texture(encoder.input_texture());
     #[cfg(target_os = "android")]

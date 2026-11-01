@@ -13,7 +13,7 @@ fn link_pkg_config(name: &str) -> Vec<PathBuf> {
     };
     let lib = match pkg_config::probe_library(pc_name) {
         Ok(lib) => lib,
-        Err(err) if name == "libyuv" && Path::new("/usr/include/libyuv.h").exists() => {
+        Err(_err) if name == "libyuv" && Path::new("/usr/include/libyuv.h").exists() => {
             println!("cargo:rustc-link-lib=yuv");
             return vec![PathBuf::from("/usr/include")];
         }
@@ -94,7 +94,7 @@ fn link_homebrew_m1(name: &str) -> PathBuf {
     let entries = if let Ok(dir) = std::fs::read_dir(&path) {
         dir
     } else {
-        panic!("Could not find package in {}. Make sure your homebrew and package {} are all installed.", path.to_str().unwrap(),&name);
+        panic!("Could not find package in {}. Make sure your homebrew and package {} are all installed.", path.to_str().unwrap(), name);
     };
     let mut directories = entries
         .into_iter()

@@ -3371,7 +3371,6 @@ fn kill_process_by_pids(name: &str, pids: Vec<Pid>) -> ResultType<()> {
     Ok(())
 }
 
-
 pub fn get_tray_shortcut(
     install_dir: &str,
     exe: &str,

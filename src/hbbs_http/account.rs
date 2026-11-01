@@ -212,7 +212,6 @@ impl OidcSession {
         self.running = false;
     }
 
-
     fn auth_task(
         api_server: String,
         op: String,
