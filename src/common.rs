@@ -53,8 +53,11 @@ pub enum GrabState {
 pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Output = ()>;
 
 // the executable name of the portable version
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str =
     camellia_windows_bootstrap::PORTABLE_APP_NAME_ENV_KEY;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";
 
 pub const PLATFORM_WINDOWS: &str = "Windows";
 pub const PLATFORM_LINUX: &str = "Linux";
