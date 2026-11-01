@@ -1191,7 +1191,7 @@ async fn handle(data: Data, stream: &mut Connection) {
             }
         }
         Data::RemoveTrustedDevices(v) => {
-            Config::remove_trusted_devices(&v);
+            let _ = Config::remove_trusted_devices(&v);
         }
         Data::ClearTrustedDevices => {
             Config::clear_trusted_devices();
@@ -1803,7 +1803,7 @@ pub fn get_trusted_devices() -> String {
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn remove_trusted_devices(hwids: Vec<Bytes>) {
-    Config::remove_trusted_devices(&hwids);
+    let _ = Config::remove_trusted_devices(&hwids);
     allow_err!(set_data(&Data::RemoveTrustedDevices(hwids)));
 }
 

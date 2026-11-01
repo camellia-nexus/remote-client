@@ -57,7 +57,7 @@ pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Out
 pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str =
     camellia_windows_bootstrap::PORTABLE_APP_NAME_ENV_KEY;
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";
+pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "CAMELLIA_REMOTE_APPNAME";
 
 pub const PLATFORM_WINDOWS: &str = "Windows";
 pub const PLATFORM_LINUX: &str = "Linux";
@@ -1747,7 +1747,7 @@ async fn secure_tcp_silent(conn: &mut Stream, key: &str) -> ResultType<()> {
 }
 
 #[inline]
-fn get_pk(pk: &[u8]) -> Option<[u8; 32]> {
+pub fn get_pk(pk: &[u8]) -> Option<[u8; 32]> {
     if pk.len() == 32 {
         let mut tmp = [0u8; 32];
         tmp[..].copy_from_slice(&pk);

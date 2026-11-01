@@ -243,32 +243,16 @@ impl Client {
         }
         // to-do: remember the port for each peer, so that we can retry easier
         if camellia_remote_protocol::is_ip_str(peer) {
-            return Ok((
-                (
-                    connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT)
-                        .await?,
-                    true,
-                    None,
-                    None,
-                    "TCP",
-                ),
-                (0, "".to_owned()),
-                false,
-            ));
+            let mut conn =
+                connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT).await?;
+            let pk = Self::secure_direct_connection(&mut conn, key).await?;
+            return Ok(((conn, true, pk, None, "TCP"), (0, "".to_owned()), false));
         }
         // Allow connect to {domain}:{port}
         if camellia_remote_protocol::is_domain_port_str(peer) {
-            return Ok((
-                (
-                    connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?,
-                    true,
-                    None,
-                    None,
-                    "TCP",
-                ),
-                (0, "".to_owned()),
-                false,
-            ));
+            let mut conn = connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?;
+            let pk = Self::secure_direct_connection(&mut conn, key).await?;
+            return Ok(((conn, true, pk, None, "TCP"), (0, "".to_owned()), false));
         }
 
         let other_server = interface.get_lch().read().unwrap().other_server.clone();
@@ -788,6 +772,58 @@ impl Client {
             bail!("Handshake failed: encrypted transport was not activated");
         }
         Ok(Some(peer_signing_key.to_vec()))
+    }
+
+    async fn secure_direct_connection(conn: &mut Stream, key: &str) -> ResultType<Option<Vec<u8>>> {
+        let bytes = timeout(READ_TIMEOUT, conn.next())
+            .await?
+            .ok_or_else(|| anyhow!("Handshake failed: peer disconnected"))??;
+        let msg_in = Message::parse_from_bytes(&bytes)
+            .context("Handshake failed: malformed peer response")?;
+        let Some(message::Union::SignedId(si)) = msg_in.union else {
+            bail!("Handshake failed: signed peer key was required");
+        };
+
+        let their_pk_b = if !key.is_empty() {
+            if let Some(sign_pk) = get_rs_pk(key) {
+                let (_, pk) = decode_id_pk(&si.id, &sign_pk)
+                    .context("Handshake failed: invalid peer key signature")?;
+                pk
+            } else {
+                Self::decode_direct_signed_identity(&si.id)?
+            }
+        } else {
+            Self::decode_direct_signed_identity(&si.id)?
+        };
+
+        let (asymmetric_value, symmetric_value, session_key) =
+            create_symmetric_key_msg(their_pk_b)?;
+        let mut msg_out = Message::new();
+        msg_out.set_public_key(PublicKey {
+            asymmetric_value,
+            symmetric_value,
+            ..Default::default()
+        });
+        timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
+        conn.set_key(session_key, CipherRole::Initiator);
+        if !conn.is_secured() {
+            bail!("Handshake failed: encrypted transport was not activated");
+        }
+        Ok(None)
+    }
+
+    fn decode_direct_signed_identity(signed: &[u8]) -> ResultType<[u8; 32]> {
+        if signed.len() <= sign::SIGNATUREBYTES {
+            bail!("Handshake failed: signed identity payload too short");
+        }
+        let raw_id_pk = &signed[sign::SIGNATUREBYTES..];
+        let id_pk = IdPk::parse_from_bytes(raw_id_pk)
+            .context("Handshake failed: malformed IdPk in signed identity")?;
+        if let Some(pk) = crate::common::get_pk(&id_pk.pk) {
+            Ok(pk)
+        } else {
+            bail!("Handshake failed: invalid ephemeral public key length");
+        }
     }
 
     /// Request a relay connection to the server.

@@ -11,6 +11,57 @@ use totp_rs::{Algorithm, Secret, TOTP};
 
 lazy_static::lazy_static! {
     static ref CURRENT_2FA: Mutex<Option<(TOTPInfo, TOTP)>> = Mutex::new(None);
+    static ref CONSUMED_TOTP_STEPS: Mutex<std::collections::VecDeque<(u64, std::time::Instant)>> =
+        Mutex::new(std::collections::VecDeque::new());
+}
+
+pub fn verify_totp_single_use(totp: &TOTP, code: &str) -> bool {
+    let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(_) => return false,
+    };
+    let step = 30u64;
+    let current_step = now / step;
+
+    let steps_to_check = [
+        current_step.saturating_sub(1),
+        current_step,
+        current_step + 1,
+    ];
+    let mut matched_step = None;
+    for &s in &steps_to_check {
+        let t = s * step;
+        let expected = totp.generate(t);
+        if expected == code {
+            matched_step = Some(s);
+            break;
+        }
+    }
+
+    let Some(step_matched) = matched_step else {
+        return false;
+    };
+
+    let mut lock = CONSUMED_TOTP_STEPS.lock().unwrap();
+    let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(180);
+    while let Some((_, time)) = lock.front() {
+        if *time < cutoff {
+            lock.pop_front();
+        } else {
+            break;
+        }
+    }
+
+    if lock.iter().any(|(s, _)| *s == step_matched) {
+        camellia_remote_protocol::log::warn!(
+            "Rejected replayed TOTP code for step {}",
+            step_matched
+        );
+        return false;
+    }
+
+    lock.push_back((step_matched, std::time::Instant::now()));
+    true
 }
 
 const ISSUER: &str = "Camellia Remote";
@@ -218,5 +269,18 @@ mod tests {
         .unwrap();
 
         assert!(TOTPInfo::from_str(&storage).is_err());
+    }
+
+    #[test]
+    fn totp_single_use_rejects_replays() {
+        let info = TOTPInfo::gen_totp_info("camellia-test-device".to_owned(), 6).unwrap();
+        let totp = info.new_totp().unwrap();
+        let code = totp.generate_current().unwrap();
+
+        // First verification succeeds
+        assert!(verify_totp_single_use(&totp, &code));
+
+        // Immediate replay of same code must fail
+        assert!(!verify_totp_single_use(&totp, &code));
     }
 }

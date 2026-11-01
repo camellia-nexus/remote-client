@@ -57,6 +57,8 @@ static NOTIFIED_NEEDS_DEPLOY: AtomicBool = AtomicBool::new(false);
 const DEPLOY_RETRY_INTERVAL: i64 = 30_000;
 lazy_static::lazy_static! {
     static ref LAST_NOT_DEPLOYED_REGISTER: Mutex<Option<Instant>> = Mutex::new(None);
+    static ref RENDEZVOUS_DISPATCH_SEMAPHORE: Arc<tokio::sync::Semaphore> =
+        Arc::new(tokio::sync::Semaphore::new(16));
 }
 
 #[cfg(target_os = "android")]
@@ -239,7 +241,7 @@ impl RendezvousMediator {
                     }
                     Ok(register_pk_response::Result::NOT_DEPLOYED) => {
                         if !NEEDS_DEPLOY.load(Ordering::SeqCst) {
-                            log::warn!("Server requires deployment. Run `rustdesk --deploy --token <api_token>` on this device.");
+                            log::warn!("Server requires deployment. Run `camellia-remote --deploy --token <api_token>` on this device.");
                         }
                         NEEDS_DEPLOY.store(true, Ordering::SeqCst);
                         // Clear key_confirmed so the UI reflects the truth: this device is
@@ -262,21 +264,45 @@ impl RendezvousMediator {
             Some(rendezvous_message::Union::PunchHole(ph)) => {
                 let rz = self.clone();
                 let server = server.clone();
+                let permit = match RENDEZVOUS_DISPATCH_SEMAPHORE.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        log::warn!("Rendezvous punch hole dispatch quota reached (16 in-flight), dropping request");
+                        return Ok(());
+                    }
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     allow_err!(rz.handle_punch_hole(ph, server).await);
                 });
             }
             Some(rendezvous_message::Union::RequestRelay(rr)) => {
                 let rz = self.clone();
                 let server = server.clone();
+                let permit = match RENDEZVOUS_DISPATCH_SEMAPHORE.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        log::warn!("Rendezvous request relay dispatch quota reached (16 in-flight), dropping request");
+                        return Ok(());
+                    }
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     allow_err!(rz.handle_request_relay(rr, server).await);
                 });
             }
             Some(rendezvous_message::Union::FetchLocalAddr(fla)) => {
                 let rz = self.clone();
                 let server = server.clone();
+                let permit = match RENDEZVOUS_DISPATCH_SEMAPHORE.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        log::warn!("Rendezvous fetch local addr dispatch quota reached (16 in-flight), dropping request");
+                        return Ok(());
+                    }
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     allow_err!(rz.handle_intranet(fla, server).await);
                 });
             }
@@ -635,7 +661,7 @@ impl RendezvousMediator {
         // Throttle register_pk when the device is awaiting deployment: server
         // already told us we're not in its db; sending more often than every
         // DEPLOY_RETRY_INTERVAL ms is wasted traffic until the operator runs
-        // `rustdesk --deploy --token <api_token>`.
+        // `camellia-remote --deploy --token <api_token>`.
         if NEEDS_DEPLOY.load(Ordering::SeqCst) {
             let mut last = LAST_NOT_DEPLOYED_REGISTER.lock().await;
             if let Some(t) = *last {
@@ -786,7 +812,7 @@ async fn direct_server(server: ServerPtr) {
                             server,
                             camellia_remote_protocol::Stream::from(stream, local_addr),
                             addr,
-                            false,
+                            true,
                             ConnectionMeta::default(), // Direct connections don't have server-side user context.
                         )
                         .await

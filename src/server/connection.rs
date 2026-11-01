@@ -33,7 +33,7 @@ use camellia_remote_protocol::{
     config::{
         self, decode_permanent_password_h1_from_storage, decode_preset_password_h1_from_storage,
         keys, local_permanent_password_storage_is_usable_for_auth,
-        preset_permanent_password_storage_is_usable_for_auth, Config, TrustedDevice,
+        preset_permanent_password_storage_is_usable_for_auth, Config,
     },
     fs::{self, can_enable_overwrite_detection, JobType},
     futures::{SinkExt, StreamExt},
@@ -475,6 +475,22 @@ pub struct Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     terminal_user_token: Option<TerminalUserToken>,
     terminal_generic_service: Option<Box<GenericService>>,
+    auth_state: ConnectionAuthState,
+    login_permit: Option<crate::server::login_failure_check::LoginAdmissionPermit>,
+    connection_start_time: Instant,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    input_worker: Mutex<Option<(std_mpsc::Receiver<MessageInput>, Sender)>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionAuthState {
+    Unauthenticated,
+    AwaitingSecondFactor {
+        challenge: Vec<u8>,
+        expires_at: i64,
+        target_id: String,
+    },
+    Authorized,
 }
 
 impl ConnInner {
@@ -668,6 +684,11 @@ impl Connection {
             audit_heartbeat_revision: 0,
             last_audit_heartbeat: Instant::now(),
             file_audits: HashMap::new(),
+            auth_state: ConnectionAuthState::Unauthenticated,
+            login_permit: None,
+            connection_start_time: Instant::now(),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            input_worker: Mutex::new(Some((_rx_input, tx_cloned))),
         };
         let addr = camellia_remote_protocol::try_into_v4(addr);
         if !conn.on_open(addr).await {
@@ -718,8 +739,7 @@ impl Connection {
             },
         );
 
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
+        // RES-009: handle_input OS thread deferred until business authentication succeeds (self.authorized = true)
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
 
         #[cfg(feature = "unix-file-copy-paste")]
@@ -1190,6 +1210,11 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    if !conn.authorized && conn.connection_start_time.elapsed() >= Duration::from_secs(15) {
+                        conn.send_close_reason_no_retry("Pre-auth deadline exceeded").await;
+                        conn.on_close("pre-auth deadline", false).await;
+                        break;
+                    }
                     #[cfg(windows)]
                     conn.portable_check();
                     conn.maybe_post_conn_audit_heartbeat();
@@ -2691,6 +2716,10 @@ impl Connection {
             return false;
         }
         self.authorized = true;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some((rx, tx)) = self.input_worker.lock().unwrap().take() {
+            std::thread::spawn(move || Self::handle_input(rx, tx));
+        }
         let (conn_type, auth_conn_type) = if self.file_transfer.is_some() {
             (1, AuthConnType::FileTransfer)
         } else if self.port_forward_socket.is_some() {
@@ -3162,9 +3191,23 @@ impl Connection {
     async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {
         let mut msg_out = Message::new();
         let mut res = LoginResponse::new();
-        res.set_error(err.to_string());
-        if err.to_string() == crate::client::REQUIRE_2FA {
+        let err_str = err.to_string();
+        res.set_error(err_str.clone());
+        if err_str == crate::client::REQUIRE_2FA {
             res.enable_trusted_devices = Self::enable_trusted_devices();
+            let challenge = camellia_remote_protocol::rand::random::<[u8; 32]>();
+            let expires_at = camellia_remote_protocol::get_time() + 60_000;
+            let target_id = Config::get_id();
+            res.challenge = challenge.to_vec().into();
+            res.challenge_expires_at = expires_at;
+            res.target_id = target_id.clone();
+            self.auth_state = ConnectionAuthState::AwaitingSecondFactor {
+                challenge: challenge.to_vec(),
+                expires_at,
+                target_id,
+            };
+        } else {
+            self.auth_state = ConnectionAuthState::Unauthenticated;
         }
         msg_out.set_login_response(res);
         self.send(msg_out).await;
@@ -3485,20 +3528,8 @@ impl Connection {
         if let Some(o) = lr.option.as_ref() {
             self.options_in_login = Some(o.clone());
         }
-        if self.require_2fa.is_some() && !lr.hwid.is_empty() && Self::enable_trusted_devices() {
-            let devices = Config::get_trusted_devices();
-            if let Some(device) = devices.iter().find(|d| d.hwid == lr.hwid) {
-                if !device.outdate()
-                    && device.id == lr.my_id
-                    && device.name == lr.my_name
-                    && device.platform == lr.my_platform
-                {
-                    log::info!("2FA bypassed by trusted devices");
-                    self.set_conn_audit_two_factor(ConnAuditTwoFactor::TrustedDevice);
-                    self.require_2fa = None;
-                }
-            }
-        }
+        // AUTH-002: Insecure plaintext hwid bypass removed.
+        // Trusted device verification is performed via cryptographic challenge-signature in Auth2fa.
         self.video_ack_required = lr.video_ack_required;
     }
 
@@ -3797,36 +3828,121 @@ impl Connection {
             if !res {
                 return true;
             }
-            if let Some(totp) = self.require_2fa.as_ref() {
-                if let Ok(res) = totp.check_current(&tfa.code) {
-                    if res {
-                        self.update_failure(failure, true, 1);
-                        self.require_2fa.take();
-                        self.set_conn_audit_two_factor(ConnAuditTwoFactor::Totp);
-                        raii::AuthedConnID::set_session_2fa(self.session_key());
-                        if !self.send_logon_response_and_keep_alive().await {
-                            return false;
+
+            // AUTH-001: Enforce state machine. Only valid when awaiting 2FA.
+            let (challenge, expires_at, target_id) = match &self.auth_state {
+                ConnectionAuthState::AwaitingSecondFactor {
+                    challenge,
+                    expires_at,
+                    target_id,
+                } => (challenge.clone(), *expires_at, target_id.clone()),
+                _ => {
+                    log::warn!(
+                        "Auth2fa received while connection is not in AwaitingSecondFactor state (conn_id={})",
+                        self.inner.id()
+                    );
+                    self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
+                    self.send_login_error("Authentication state violation")
+                        .await;
+                    return true;
+                }
+            };
+
+            let now = camellia_remote_protocol::get_time();
+            if now > expires_at {
+                log::warn!("Auth2fa challenge expired (conn_id={})", self.inner.id());
+                self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
+                self.send_login_error("2FA challenge expired").await;
+                self.auth_state = ConnectionAuthState::Unauthenticated;
+                return true;
+            }
+
+            let mut auth_ok = false;
+            let mut used_trusted_device = false;
+
+            // AUTH-002: Verify cryptographic proof from trusted device
+            if Self::enable_trusted_devices()
+                && !tfa.device_signature.is_empty()
+                && !tfa.device_pk.is_empty()
+            {
+                let trusted_devices = Config::get_trusted_devices();
+                if let Some(dev) = trusted_devices.iter().find(|d| {
+                    (!d.device_id.is_empty() && d.device_id == tfa.device_id)
+                        || (!d.public_key.is_empty() && d.public_key == tfa.device_pk)
+                }) {
+                    if !dev.is_expired() && dev.public_key == tfa.device_pk {
+                        if let Some(pubkey) =
+                            camellia_remote_protocol::crypto::sign::PublicKey::from_slice(
+                                &tfa.device_pk,
+                            )
+                        {
+                            if camellia_remote_protocol::config::verify_device_proof(
+                                &challenge,
+                                &target_id,
+                                &self.lr.my_id,
+                                "default",
+                                &tfa.device_signature,
+                                &pubkey,
+                            )
+                            .is_ok()
+                            {
+                                auth_ok = true;
+                                used_trusted_device = true;
+                            }
                         }
-                        self.try_start_cm(
-                            self.lr.my_id.to_owned(),
-                            self.lr.my_name.to_owned(),
-                            self.authorized,
-                        );
-                        if !tfa.hwid.is_empty() && Self::enable_trusted_devices() {
-                            Config::add_trusted_device(TrustedDevice {
-                                hwid: tfa.hwid,
-                                time: camellia_remote_protocol::get_time(),
-                                id: self.lr.my_id.clone(),
-                                name: self.lr.my_name.clone(),
-                                platform: self.lr.my_platform.clone(),
-                            });
-                        }
-                    } else {
-                        self.update_failure(failure, false, 1);
-                        self.send_login_error(crate::client::LOGIN_MSG_2FA_WRONG)
-                            .await;
                     }
                 }
+            }
+
+            // Fallback: Verify single-use TOTP (anti-replay per AUTH-001)
+            if !auth_ok && !tfa.code.is_empty() {
+                if let Some(totp) = self.require_2fa.as_ref() {
+                    if crate::auth_2fa::verify_totp_single_use(totp, &tfa.code) {
+                        auth_ok = true;
+                        // Client requested trust_this_device with valid cryptographic identity
+                        if (tfa.trust_this_device || !tfa.hwid.is_empty())
+                            && Self::enable_trusted_devices()
+                            && !tfa.device_pk.is_empty()
+                        {
+                            let mut new_dev = camellia_remote_protocol::config::TrustedDevice::new(
+                                if !tfa.device_id.is_empty() {
+                                    tfa.device_id.clone()
+                                } else {
+                                    self.lr.my_id.clone()
+                                },
+                                tfa.device_pk.clone(),
+                                self.lr.my_name.clone(),
+                                self.lr.my_platform.clone(),
+                            );
+                            new_dev.hwid = tfa.hwid.clone();
+                            let _ = Config::add_trusted_device(new_dev);
+                        }
+                    }
+                }
+            }
+
+            if auth_ok {
+                self.update_failure_with_scope(failure, true, 1, FailureScope::Default);
+                self.require_2fa.take();
+                self.auth_state = ConnectionAuthState::Authorized;
+                if used_trusted_device {
+                    self.set_conn_audit_two_factor(ConnAuditTwoFactor::TrustedDevice);
+                } else {
+                    self.set_conn_audit_two_factor(ConnAuditTwoFactor::Totp);
+                }
+                raii::AuthedConnID::set_session_2fa(self.session_key());
+                if !self.send_logon_response_and_keep_alive().await {
+                    return false;
+                }
+                self.try_start_cm(
+                    self.lr.my_id.to_owned(),
+                    self.lr.my_name.to_owned(),
+                    self.authorized,
+                );
+            } else {
+                self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
+                self.send_login_error(crate::client::LOGIN_MSG_2FA_WRONG)
+                    .await;
             }
         } else if let Some(message::Union::TestDelay(t)) = msg.union {
             if t.from_client {
@@ -5046,17 +5162,20 @@ impl Connection {
         cur
     }
 
-    fn update_failure(&self, failure: ((i32, i32, i32), i32), remove: bool, i: usize) {
+    fn update_failure(&mut self, failure: ((i32, i32, i32), i32), remove: bool, i: usize) {
         self.update_failure_with_scope(failure, remove, i, FailureScope::Default);
     }
 
     fn update_failure_with_scope(
-        &self,
+        &mut self,
         (failure, time): ((i32, i32, i32), i32),
         remove: bool,
         i: usize,
         scope: FailureScope,
     ) {
+        if let Some(mut permit) = self.login_permit.take() {
+            permit.complete(remove);
+        }
         let os_credential_scope = matches!(scope, FailureScope::TerminalOsLogin);
         if os_credential_scope {
             if !remove {
@@ -5175,6 +5294,37 @@ impl Connection {
                 false
             };
             return (((0, 0, 0), time), res);
+        }
+
+        // Bounded atomic rate limiter (AUTH-003, RES-010)
+        let raw_ip = self.ip.split('%').next().unwrap_or(&self.ip).trim();
+        if let Ok(ip_addr) = raw_ip.parse::<std::net::IpAddr>() {
+            let (decision, permit) = {
+                let mut limiter_lock =
+                    crate::server::login_failure_check::GLOBAL_LOGIN_RATE_LIMITER
+                        .lock()
+                        .unwrap();
+                limiter_lock[i].check_and_reserve(ip_addr, get_time(), i)
+            };
+            if let Some(p) = permit {
+                self.login_permit = Some(p);
+                return (((0, 0, 0), time), true);
+            } else {
+                if let Some(msg) = decision.login_error {
+                    self.send_login_error(msg).await;
+                }
+                if let Some(audit_type) = decision.audit {
+                    self.post_alarm_audit(
+                        audit_type,
+                        json!({
+                            "ip": self.ip,
+                            "id": self.lr.my_id.clone(),
+                            "name": self.lr.my_name.clone(),
+                        }),
+                    );
+                }
+                return (((0, 0, 0), time), false);
+            }
         }
 
         // IPv6 addresses are cheap to make so we check prefix/netblock as well
@@ -7215,7 +7365,7 @@ fn try_activate_screen() {
     });
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlarmAuditType {
     IpWhitelist = 0,
     ExceedThirtyAttempts = 1,
