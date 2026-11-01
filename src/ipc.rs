@@ -552,10 +552,7 @@ pub fn is_root_owned_option(key: &str) -> bool {
 
 /// Merge a user-provided `Config2` into an authoritative root `Config2`, ensuring
 /// that root-owned security and network settings are strictly preserved.
-pub fn sanitize_user_config2_for_root(
-    user_config2: &Config2,
-    root_config2: &Config2,
-) -> Config2 {
+pub fn sanitize_user_config2_for_root(user_config2: &Config2, root_config2: &Config2) -> Config2 {
     let mut merged = root_config2.clone();
     let mut merged_options = std::collections::HashMap::new();
 

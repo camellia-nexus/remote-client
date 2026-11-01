@@ -777,9 +777,7 @@ async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Se
         match crate::ipc::connect_service(1000).await {
             Ok(mut conn) => {
                 if !sync_from_root(&mut conn, &mut cfg0, &mut is_root_config_empty).await {
-                    log::warn!(
-                        "initial config sync from root failed, reconnecting to ipc_service"
-                    );
+                    log::warn!("initial config sync from root failed, reconnecting to ipc_service");
                     continue;
                 }
                 // Notify startup waiter once initial sync phase finishes successfully.
@@ -797,21 +795,33 @@ async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Se
                     } else {
                         crate::ipc::sanitize_user_config_for_root(&cfg.0, &cfg.1, &cfg0.0, &cfg0.1)
                     };
-                    let should_sync = to_sync != cfg0 || (is_root_config_empty && !cfg.0.is_empty());
+                    let should_sync =
+                        to_sync != cfg0 || (is_root_config_empty && !cfg.0.is_empty());
                     if should_sync {
                         if is_root_config_empty {
                             log::info!("root config is empty, sync our config to root");
                         } else {
                             log::info!("config updated, sync to root");
                         }
-                        match conn.send(&Data::SyncConfig(Some(to_sync.clone().into()))).await {
+                        match conn
+                            .send(&Data::SyncConfig(Some(to_sync.clone().into())))
+                            .await
+                        {
                             Err(e) => {
                                 log::error!("sync config to root failed: {}", e);
                                 match crate::ipc::connect_service(1000).await {
                                     Ok(mut _conn) => {
                                         conn = _conn;
-                                        log::info!("reconnected to ipc_service, forcing re-sync from root");
-                                        if !sync_from_root(&mut conn, &mut cfg0, &mut is_root_config_empty).await {
+                                        log::info!(
+                                            "reconnected to ipc_service, forcing re-sync from root"
+                                        );
+                                        if !sync_from_root(
+                                            &mut conn,
+                                            &mut cfg0,
+                                            &mut is_root_config_empty,
+                                        )
+                                        .await
+                                        {
                                             break;
                                         }
                                     }
@@ -820,18 +830,18 @@ async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Se
                                     }
                                 }
                             }
-                            _ => {
-                                match conn.next_timeout(1000).await {
-                                    Ok(Some(_)) => {
-                                        cfg0 = to_sync;
-                                        is_root_config_empty = false;
-                                    }
-                                    _ => {
-                                        log::warn!("failed to receive sync ack from root, forcing re-sync");
-                                        break;
-                                    }
+                            _ => match conn.next_timeout(1000).await {
+                                Ok(Some(_)) => {
+                                    cfg0 = to_sync;
+                                    is_root_config_empty = false;
                                 }
-                            }
+                                _ => {
+                                    log::warn!(
+                                        "failed to receive sync ack from root, forcing re-sync"
+                                    );
+                                    break;
+                                }
+                            },
                         }
                     }
                 }

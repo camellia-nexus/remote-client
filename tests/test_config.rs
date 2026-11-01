@@ -17,11 +17,17 @@ fn test_config_is_root_owned_option() {
     assert!(is_root_owned_option("proxy-username"));
     assert!(is_root_owned_option("proxy-password"));
     assert!(is_root_owned_option(keys::OPTION_DEFAULT_CONNECT_PASSWORD));
-    assert!(is_root_owned_option(keys::OPTION_PRESET_ADDRESS_BOOK_PASSWORD));
-    assert!(is_root_owned_option(keys::OPTION_DISABLE_CHANGE_PERMANENT_PASSWORD));
+    assert!(is_root_owned_option(
+        keys::OPTION_PRESET_ADDRESS_BOOK_PASSWORD
+    ));
+    assert!(is_root_owned_option(
+        keys::OPTION_DISABLE_CHANGE_PERMANENT_PASSWORD
+    ));
     assert!(is_root_owned_option(keys::OPTION_DISABLE_CHANGE_ID));
     assert!(is_root_owned_option(keys::OPTION_DISABLE_UNLOCK_PIN));
-    assert!(is_root_owned_option(keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED));
+    assert!(is_root_owned_option(
+        keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED
+    ));
     assert!(is_root_owned_option(keys::OPTION_ENABLE_TRUSTED_DEVICES));
     assert!(is_root_owned_option(keys::OPTION_WHITELIST));
     assert!(is_root_owned_option(keys::OPTION_ID_WHITELIST));
@@ -71,10 +77,9 @@ fn test_config_sanitize_user_config2_for_root_preserves_root_security_settings()
         keys::OPTION_DEFAULT_CONNECT_PASSWORD.to_string(),
         "root-secret".to_string(),
     );
-    root_cfg2.options.insert(
-        keys::OPTION_THEME.to_string(),
-        "light".to_string(),
-    );
+    root_cfg2
+        .options
+        .insert(keys::OPTION_THEME.to_string(), "light".to_string());
 
     // User attempts to clobber root security/network settings and change the theme
     let mut user_cfg2 = Config2::default();
@@ -86,10 +91,9 @@ fn test_config_sanitize_user_config2_for_root_preserves_root_security_settings()
         keys::OPTION_RELAY_SERVER.to_string(),
         "evil-relay.com".to_string(),
     );
-    user_cfg2.options.insert(
-        keys::OPTION_KEY.to_string(),
-        "evil-key".to_string(),
-    );
+    user_cfg2
+        .options
+        .insert(keys::OPTION_KEY.to_string(), "evil-key".to_string());
     user_cfg2.options.insert(
         keys::OPTION_API_SERVER.to_string(),
         "https://api.evil.com".to_string(),
@@ -110,20 +114,21 @@ fn test_config_sanitize_user_config2_for_root_preserves_root_security_settings()
         keys::OPTION_DEFAULT_CONNECT_PASSWORD.to_string(),
         "attacker-pass".to_string(),
     );
-    user_cfg2.options.insert(
-        keys::OPTION_THEME.to_string(),
-        "dark".to_string(),
-    );
-    user_cfg2.options.insert(
-        keys::OPTION_CUSTOM_FPS.to_string(),
-        "120".to_string(),
-    );
+    user_cfg2
+        .options
+        .insert(keys::OPTION_THEME.to_string(), "dark".to_string());
+    user_cfg2
+        .options
+        .insert(keys::OPTION_CUSTOM_FPS.to_string(), "120".to_string());
 
     let sanitized = sanitize_user_config2_for_root(&user_cfg2, &root_cfg2);
 
     // All root-owned settings MUST match root_cfg2
     assert_eq!(
-        sanitized.options.get(keys::OPTION_CUSTOM_RENDEZVOUS_SERVER).unwrap(),
+        sanitized
+            .options
+            .get(keys::OPTION_CUSTOM_RENDEZVOUS_SERVER)
+            .unwrap(),
         "authoritative-rendezvous.org"
     );
     assert_eq!(
@@ -147,19 +152,22 @@ fn test_config_sanitize_user_config2_for_root_preserves_root_security_settings()
         "device-uuid-1"
     );
     assert_eq!(
-        sanitized.options.get(keys::OPTION_ENABLE_TRUSTED_DEVICES).unwrap(),
+        sanitized
+            .options
+            .get(keys::OPTION_ENABLE_TRUSTED_DEVICES)
+            .unwrap(),
         "Y"
     );
     assert_eq!(
-        sanitized.options.get(keys::OPTION_DEFAULT_CONNECT_PASSWORD).unwrap(),
+        sanitized
+            .options
+            .get(keys::OPTION_DEFAULT_CONNECT_PASSWORD)
+            .unwrap(),
         "root-secret"
     );
 
     // User-permitted options MUST be accepted
-    assert_eq!(
-        sanitized.options.get(keys::OPTION_THEME).unwrap(),
-        "dark"
-    );
+    assert_eq!(sanitized.options.get(keys::OPTION_THEME).unwrap(), "dark");
     assert_eq!(
         sanitized.options.get(keys::OPTION_CUSTOM_FPS).unwrap(),
         "120"
@@ -180,15 +188,16 @@ fn test_config_sanitize_user_config2_for_root_blocks_user_injection() {
         keys::OPTION_WHITELIST.to_string(),
         "injected-whitelist".to_string(),
     );
-    user_cfg2.options.insert(
-        keys::OPTION_THEME.to_string(),
-        "nord".to_string(),
-    );
+    user_cfg2
+        .options
+        .insert(keys::OPTION_THEME.to_string(), "nord".to_string());
 
     let sanitized = sanitize_user_config2_for_root(&user_cfg2, &root_cfg2);
 
     // Injected root-owned settings must NOT appear
-    assert!(!sanitized.options.contains_key(keys::OPTION_CUSTOM_RENDEZVOUS_SERVER));
+    assert!(!sanitized
+        .options
+        .contains_key(keys::OPTION_CUSTOM_RENDEZVOUS_SERVER));
     assert!(!sanitized.options.contains_key(keys::OPTION_WHITELIST));
 
     // Non-root setting is preserved
@@ -208,7 +217,8 @@ fn test_config_sanitize_user_config_for_root_preserves_root_identity() {
             "key_confirmed": true,
             "keys_confirmed": {}
         }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let user_config: Config = serde_json::from_str(
         r#"{
@@ -220,17 +230,14 @@ fn test_config_sanitize_user_config_for_root_preserves_root_identity() {
             "key_confirmed": false,
             "keys_confirmed": {}
         }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let root_config2 = Config2::default();
     let user_config2 = Config2::default();
 
-    let (merged_cfg, _) = sanitize_user_config_for_root(
-        &user_config,
-        &user_config2,
-        &root_config,
-        &root_config2,
-    );
+    let (merged_cfg, _) =
+        sanitize_user_config_for_root(&user_config, &user_config2, &root_config, &root_config2);
 
     // Root Config identity and credentials must be completely untouched
     assert_eq!(merged_cfg.id, "root-device-id");
@@ -252,17 +259,16 @@ fn test_config_sanitize_user_config_for_root_seeds_empty_root() {
             "key_confirmed": false,
             "keys_confirmed": {}
         }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let mut user_config2 = Config2::default();
-    user_config2.options.insert(keys::OPTION_THEME.to_string(), "dark".to_string());
+    user_config2
+        .options
+        .insert(keys::OPTION_THEME.to_string(), "dark".to_string());
 
-    let (merged_cfg, merged_cfg2) = sanitize_user_config_for_root(
-        &user_config,
-        &user_config2,
-        &root_config,
-        &root_config2,
-    );
+    let (merged_cfg, merged_cfg2) =
+        sanitize_user_config_for_root(&user_config, &user_config2, &root_config, &root_config2);
 
     // Empty root is bootstrapped by user config
     assert_eq!(merged_cfg.id, "initial-id");
@@ -285,5 +291,8 @@ fn test_config_import_config_empty_file_returns_error() {
 #[test]
 fn test_config_import_config_nonexistent_file_returns_error() {
     let result = camellia_remote::core_main::import_config("/nonexistent/path/never_existed.toml");
-    assert!(result.is_err(), "Importing nonexistent config must return Err");
+    assert!(
+        result.is_err(),
+        "Importing nonexistent config must return Err"
+    );
 }
