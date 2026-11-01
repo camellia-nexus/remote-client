@@ -37,7 +37,8 @@ use winapi::{
 use windows::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 
 use super::portable_service_sync::{
-    CaptureParameters, CaptureParametersSnapshot, SharedCaptureParameters, SharedSlotCounter,
+    CaptureParameters, CaptureParametersSnapshot, PortableInputQueue, SharedCaptureParameters,
+    SharedSlotCounter, PORTABLE_IPC_QUEUE_CAPACITY,
 };
 use super::video_qos;
 
@@ -963,7 +964,7 @@ pub mod client {
         static ref SHMEM: Arc<Mutex<Option<SharedMemory>>> = Default::default();
         static ref SHMEM_RUNTIME_NAME: Arc<Mutex<Option<String>>> = Default::default();
         static ref IPC_RUNTIME_TOKEN: Arc<Mutex<Option<String>>> = Default::default();
-        static ref SENDER : Mutex<mpsc::UnboundedSender<ipc::Data>> = Mutex::new(client::start_ipc_server());
+        static ref SENDER: Arc<PortableInputQueue> = client::start_ipc_server();
         static ref QUICK_SUPPORT: Arc<Mutex<bool>> = Default::default();
     }
 
@@ -1013,6 +1014,7 @@ pub mod client {
 
     #[inline]
     fn clear_runtime_shmem_state() {
+        SENDER.cancel_and_clear();
         let mut runtime_token = IPC_RUNTIME_TOKEN.lock().unwrap();
         let mut shmem_lock = SHMEM.lock().unwrap();
         if let Some(shmem) = shmem_lock.as_mut() {
@@ -1201,7 +1203,7 @@ pub mod client {
                 crate::portable_service::portable_service_shmem_arg(&shmem_name)
             );
             {
-                let _sender = SENDER.lock().unwrap();
+                let _sender = SENDER.clone();
             }
             match para {
                 StartPara::Direct => {
@@ -1420,16 +1422,16 @@ pub mod client {
         fn set_output_texture(&mut self, _texture: bool) {}
     }
 
-    pub(super) fn start_ipc_server() -> mpsc::UnboundedSender<Data> {
-        let (tx, rx) = mpsc::unbounded_channel::<Data>();
-        std::thread::spawn(move || start_ipc_server_async(rx));
-        tx
+    pub(super) fn start_ipc_server() -> Arc<PortableInputQueue> {
+        let queue = Arc::new(PortableInputQueue::new(PORTABLE_IPC_QUEUE_CAPACITY));
+        let queue_clone = queue.clone();
+        std::thread::spawn(move || start_ipc_server_async(queue_clone));
+        queue
     }
 
     #[tokio::main(flavor = "current_thread")]
-    async fn start_ipc_server_async(rx: mpsc::UnboundedReceiver<Data>) {
+    async fn start_ipc_server_async(queue: Arc<PortableInputQueue>) {
         use DataPortableService::*;
-        let rx = Arc::new(tokio::sync::Mutex::new(rx));
         let postfix = IPC_SUFFIX;
         let quick_support = QUICK_SUPPORT.lock().unwrap().clone();
 
@@ -1480,22 +1482,21 @@ pub mod client {
                                         continue;
                                     }
                                     log::info!("Got portable service ipc connection");
-                                    let rx_clone = rx.clone();
+                                    let queue_clone = queue.clone();
                                     tokio::spawn(async move {
                                         let mut stream = stream;
                                         let postfix = postfix.to_owned();
                                         let mut timer = crate::rustdesk_interval(tokio::time::interval(Duration::from_secs(1)));
                                         let mut nack = 0;
-                                        let mut rx = rx_clone.lock().await;
                                         loop {
                                             tokio::select! {
                                                 res = stream.next() => {
                                                     match res {
                                                         Err(err) => {
                                                             log::info!(
-                                                                "ipc{} connection closed: {}",
-                                                                postfix,
-                                                                err
+                                                                 "ipc{} connection closed: {}",
+                                                                 postfix,
+                                                                 err
                                                             );
                                                             break;
                                                         }
@@ -1537,13 +1538,14 @@ pub mod client {
                                                     }
                                                     stream.send(&Data::DataPortableService(Ping)).await.ok();
                                                 }
-                                                Some(data) = rx.recv() => {
+                                                Some(data) = queue_clone.recv() => {
                                                     allow_err!(stream.send(&data).await);
                                                 }
                                             }
                                         }
                                         *RUNNING.lock().unwrap() = false;
                                         *STARTING.lock().unwrap() = false;
+                                        queue_clone.cancel_and_clear();
                                     });
                                 }
                                 Err(err) => {
@@ -1561,10 +1563,7 @@ pub mod client {
     }
 
     fn ipc_send(data: Data) -> ResultType<()> {
-        let sender = SENDER.lock().unwrap();
-        sender
-            .send(data)
-            .map_err(|e| anyhow!("ipc send error:{:?}", e))
+        SENDER.send(data)
     }
 
     fn get_cursor_info_(shmem: &mut SharedMemory, pci: PCURSORINFO) -> BOOL {

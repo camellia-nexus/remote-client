@@ -91,6 +91,7 @@ class InputService : AccessibilityService() {
     // 100(tap timeout) + 400(long press timeout)
     private val longPressDuration = ViewConfiguration.getTapTimeout().toLong() + ViewConfiguration.getLongPressTimeout().toLong()
 
+    private val MAX_WHEEL_ACTIONS = 16
     private val wheelActionsQueue = LinkedList<GestureDescription>()
     private var isWheelActionsPolling = false
     private var isWaitingLongPress = false
@@ -198,7 +199,11 @@ class InputService : AccessibilityService() {
             )
             val builder = GestureDescription.Builder()
             builder.addStroke(stroke)
-            wheelActionsQueue.offer(builder.build())
+            synchronized(wheelActionsQueue) {
+                if (wheelActionsQueue.size < MAX_WHEEL_ACTIONS) {
+                    wheelActionsQueue.offer(builder.build())
+                }
+            }
             consumeWheelActions()
 
         }
@@ -217,7 +222,11 @@ class InputService : AccessibilityService() {
             )
             val builder = GestureDescription.Builder()
             builder.addStroke(stroke)
-            wheelActionsQueue.offer(builder.build())
+            synchronized(wheelActionsQueue) {
+                if (wheelActionsQueue.size < MAX_WHEEL_ACTIONS) {
+                    wheelActionsQueue.offer(builder.build())
+                }
+            }
             consumeWheelActions()
         }
     }
@@ -248,23 +257,43 @@ class InputService : AccessibilityService() {
 
     @RequiresApi(Build.VERSION_CODES.N)
     private fun consumeWheelActions() {
-        if (isWheelActionsPolling) {
-            return
-        } else {
-            isWheelActionsPolling = true
+        val nextGesture: GestureDescription?
+        synchronized(wheelActionsQueue) {
+            if (isWheelActionsPolling) {
+                return
+            }
+            nextGesture = wheelActionsQueue.poll()
+            if (nextGesture != null) {
+                isWheelActionsPolling = true
+            } else {
+                isWheelActionsPolling = false
+                return
+            }
         }
-        wheelActionsQueue.poll()?.let {
-            dispatchGesture(it, null, null)
-            timer.purge()
-            timer.schedule(object : TimerTask() {
-                override fun run() {
-                    isWheelActionsPolling = false
-                    consumeWheelActions()
+
+        nextGesture?.let { gesture ->
+            try {
+                dispatchGesture(gesture, null, null)
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to dispatch wheel gesture", e)
+            }
+            synchronized(timer) {
+                try {
+                    timer.purge()
+                    timer.schedule(object : TimerTask() {
+                        override fun run() {
+                            synchronized(wheelActionsQueue) {
+                                isWheelActionsPolling = false
+                            }
+                            consumeWheelActions()
+                        }
+                    }, WHEEL_DURATION + 10)
+                } catch (e: IllegalStateException) {
+                    synchronized(wheelActionsQueue) {
+                        isWheelActionsPolling = false
+                    }
                 }
-            }, WHEEL_DURATION + 10)
-        } ?: let {
-            isWheelActionsPolling = false
-            return
+            }
         }
     }
 
@@ -744,7 +773,23 @@ class InputService : AccessibilityService() {
         Log.d(logTag, "onServiceConnected!")
     }
 
+    private fun cleanupWheelAndTimer() {
+        synchronized(wheelActionsQueue) {
+            wheelActionsQueue.clear()
+            isWheelActionsPolling = false
+        }
+        synchronized(timer) {
+            try {
+                timer.cancel()
+                timer.purge()
+            } catch (e: Exception) {
+                Log.w(logTag, "Error cancelling timer", e)
+            }
+        }
+    }
+
     override fun onDestroy() {
+        cleanupWheelAndTimer()
         ctx = null
         // Keep this fallback even though onUnbind usually notifies first.
         notifyInputState()
@@ -752,9 +797,15 @@ class InputService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        cleanupWheelAndTimer()
         ctx = null
         notifyInputState()
         return super.onUnbind(intent)
+    }
+
+    override fun onRebind(intent: Intent?) {
+        timer = Timer()
+        super.onRebind(intent)
     }
 
     override fun onInterrupt() {}

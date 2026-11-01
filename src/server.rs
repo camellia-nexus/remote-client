@@ -63,6 +63,7 @@ pub mod input_service {
     pub const NAME_CURSOR: &'static str = "";
     pub const NAME_POS: &'static str = "";
     pub const NAME_WINDOW_FOCUS: &'static str = "";
+    pub fn release_all_input_state() {}
 }
 
 mod audit_outbox;

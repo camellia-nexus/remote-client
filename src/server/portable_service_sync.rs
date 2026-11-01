@@ -1,6 +1,15 @@
 use std::{
+    collections::VecDeque,
     hint::spin_loop,
-    sync::atomic::{AtomicI32, AtomicU32, Ordering},
+    sync::{
+        atomic::{AtomicI32, AtomicU32, Ordering},
+        Mutex,
+    },
+};
+
+use crate::ipc::{Data, DataPortableService};
+use camellia_remote_protocol::{
+    anyhow, message_proto::MouseEvent, protobuf::Message, tokio, ResultType,
 };
 
 /// A single-producer, single-consumer handoff for one shared-memory slot.
@@ -135,6 +144,145 @@ impl SharedCaptureParameters {
     }
 }
 
+pub const PORTABLE_IPC_QUEUE_CAPACITY: usize = 256;
+
+pub struct PortableInputQueue {
+    inner: Mutex<PortableQueueInner>,
+    notify: tokio::sync::Notify,
+}
+
+struct PortableQueueInner {
+    buffer: VecDeque<Data>,
+    capacity: usize,
+    closed: bool,
+}
+
+impl PortableInputQueue {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(PortableQueueInner {
+                buffer: VecDeque::with_capacity(capacity),
+                capacity,
+                closed: false,
+            }),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    pub fn send(&self, data: Data) -> ResultType<()> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("queue lock poisoned"))?;
+        if inner.closed {
+            return Err(anyhow::anyhow!("portable service queue is closed"));
+        }
+        inner.enqueue_with_coalescing(data);
+        drop(inner);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    pub async fn recv(&self) -> Option<Data> {
+        loop {
+            let notified = self.notify.notified();
+            {
+                let mut inner = self.inner.lock().ok()?;
+                if let Some(item) = inner.buffer.pop_front() {
+                    return Some(item);
+                }
+                if inner.closed {
+                    return None;
+                }
+            }
+            notified.await;
+        }
+    }
+
+    pub fn cancel_and_clear(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.buffer.clear();
+        }
+        self.notify.notify_waiters();
+    }
+
+    pub fn close(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.closed = true;
+            inner.buffer.clear();
+        }
+        self.notify.notify_waiters();
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().map(|i| i.buffer.len()).unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl PortableQueueInner {
+    fn is_pure_mouse_move(data: &Data) -> Option<(i32, i32)> {
+        if let Data::DataPortableService(DataPortableService::Mouse((bytes, conn, _, _, _, _))) =
+            data
+        {
+            if let Ok(evt) = MouseEvent::parse_from_bytes(bytes) {
+                let evt_type = evt.mask & crate::common::input::MOUSE_TYPE_MASK;
+                if evt_type == crate::common::input::MOUSE_TYPE_MOVE {
+                    return Some((*conn, evt.mask));
+                }
+            }
+        }
+        None
+    }
+
+    fn enqueue_with_coalescing(&mut self, data: Data) {
+        if let Some((conn, mask)) = Self::is_pure_mouse_move(&data) {
+            // Check if tail of buffer is a pure move for the same connection and same button mask
+            if let Some(back) = self.buffer.back_mut() {
+                if let Some((back_conn, back_mask)) = Self::is_pure_mouse_move(back) {
+                    if back_conn == conn && back_mask == mask {
+                        // Coalesce: replace tail in place with latest coordinates
+                        *back = data;
+                        return;
+                    }
+                }
+            }
+
+            // If queue is at capacity, drop oldest pure mouse move to make room
+            if self.buffer.len() >= self.capacity {
+                if let Some(pos) = self
+                    .buffer
+                    .iter()
+                    .position(|item| Self::is_pure_mouse_move(item).is_some())
+                {
+                    self.buffer.remove(pos);
+                } else {
+                    // Entire queue is filled with non-droppable events; drop this new move
+                    return;
+                }
+            }
+        } else {
+            // This is a button transition, key event, or other critical event.
+            // If queue is full, evict the oldest pure mouse move to preserve this event.
+            if self.buffer.len() >= self.capacity {
+                if let Some(pos) = self
+                    .buffer
+                    .iter()
+                    .position(|item| Self::is_pure_mouse_move(item).is_some())
+                {
+                    self.buffer.remove(pos);
+                }
+            }
+        }
+
+        // Push to buffer
+        self.buffer.push_back(data);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +389,111 @@ mod tests {
             }
         }
         handle.join().unwrap();
+    }
+
+    fn make_test_mouse_data(conn: i32, mask: i32, x: i32, y: i32) -> Data {
+        let mut evt = MouseEvent::new();
+        evt.mask = mask;
+        evt.x = x;
+        evt.y = y;
+        let bytes = evt.write_to_bytes().unwrap();
+        Data::DataPortableService(DataPortableService::Mouse((
+            bytes,
+            conn,
+            "test".to_string(),
+            0,
+            true,
+            true,
+        )))
+    }
+
+    fn make_test_key_data(_key: u32) -> Data {
+        let mut msg = camellia_remote_protocol::message_proto::KeyEvent::new();
+        msg.down = true;
+        let bytes = msg.write_to_bytes().unwrap();
+        Data::DataPortableService(DataPortableService::Key(bytes))
+    }
+
+    #[test]
+    fn test_portable_queue_coalesces_consecutive_pure_moves() {
+        let queue = PortableInputQueue::new(256);
+        // Enqueue 10 sequential moves with identical mask (0 = pure move)
+        for i in 1..=10 {
+            queue
+                .send(make_test_mouse_data(1, 0, i * 10, i * 20))
+                .unwrap();
+        }
+        // Consecutive pure moves for same connection must coalesce to 1
+        assert_eq!(queue.len(), 1);
+
+        // Verify the coordinates in the coalesced item are the latest (100, 200)
+        let mut inner = queue.inner.lock().unwrap();
+        let front = inner.buffer.pop_front().unwrap();
+        if let Data::DataPortableService(DataPortableService::Mouse((bytes, conn, _, _, _, _))) =
+            front
+        {
+            assert_eq!(conn, 1);
+            let evt = MouseEvent::parse_from_bytes(&bytes).unwrap();
+            assert_eq!(evt.x, 100);
+            assert_eq!(evt.y, 200);
+        } else {
+            panic!("Expected mouse data");
+        }
+    }
+
+    #[test]
+    fn test_portable_queue_preserves_button_transitions() {
+        let queue = PortableInputQueue::new(256);
+        // Move -> LeftDown -> DragMove1 -> DragMove2 -> LeftUp
+        let move1 = make_test_mouse_data(1, 0, 10, 10);
+        let left_down = make_test_mouse_data(1, 1 | (0x01 << 3), 10, 10); // DOWN event
+        let drag1 = make_test_mouse_data(1, 0x01 << 3, 20, 20); // Move with left button down
+        let drag2 = make_test_mouse_data(1, 0x01 << 3, 30, 30); // Move with left button down
+        let left_up = make_test_mouse_data(1, 2, 30, 30); // UP event
+
+        queue.send(move1).unwrap();
+        queue.send(left_down).unwrap();
+        queue.send(drag1).unwrap();
+        queue.send(drag2).unwrap();
+        queue.send(left_up).unwrap();
+
+        // drag1 and drag2 should coalesce into 1, but move1, left_down, and left_up must remain
+        assert_eq!(queue.len(), 4);
+    }
+
+    #[test]
+    fn test_portable_queue_preserves_keys() {
+        let queue = PortableInputQueue::new(256);
+        for i in 1..=5 {
+            queue.send(make_test_key_data(i)).unwrap();
+        }
+        // Key events must never coalesce
+        assert_eq!(queue.len(), 5);
+    }
+
+    #[test]
+    fn test_portable_queue_bounded_capacity() {
+        let queue = PortableInputQueue::new(8);
+        // Send alternating connection pure moves so they don't immediately coalesce at the tail
+        for i in 1..=20 {
+            let conn = (i % 2) + 1;
+            queue
+                .send(make_test_mouse_data(conn, 0, i * 5, i * 5))
+                .unwrap();
+        }
+        // Queue size must not exceed capacity
+        assert!(queue.len() <= 8);
+    }
+
+    #[test]
+    fn test_portable_queue_cancel_and_clear() {
+        let queue = PortableInputQueue::new(256);
+        queue.send(make_test_mouse_data(1, 0, 10, 10)).unwrap();
+        queue.send(make_test_key_data(42)).unwrap();
+        assert_eq!(queue.len(), 2);
+
+        queue.cancel_and_clear();
+        assert_eq!(queue.len(), 0);
+        assert!(queue.is_empty());
     }
 }

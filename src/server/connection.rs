@@ -298,6 +298,21 @@ struct StartCmIpcPara {
     tx_cm_stream_ready: mpsc::Sender<()>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HostCapability {
+    ControlInput,
+    TextClipboard,
+    FileClipboard,
+    FileTransferRead,
+    FileTransferWrite,
+    AudioPlayback,
+    VoiceCall,
+    DisplayMutation,
+    SystemPower,
+    SystemElevation,
+    Terminal,
+}
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum AuthConnType {
     Remote,
@@ -414,7 +429,7 @@ pub struct Connection {
     // by peer
     audio_sender: Option<MediaSender>,
     // audio by the remote peer/client
-    tx_input: std_mpsc::Sender<MessageInput>,
+    tx_input: std_mpsc::SyncSender<MessageInput>,
     // handle input messages
     video_ack_required: bool,
     server_audit_conn: String,
@@ -534,6 +549,7 @@ const MILLI1: Duration = Duration::from_millis(1);
 const SEND_TIMEOUT_VIDEO: u64 = 12_000;
 const SEND_TIMEOUT_OTHER: u64 = SEND_TIMEOUT_VIDEO * 10;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
+pub const INPUT_CHANNEL_CAPACITY: usize = 256;
 
 impl Connection {
     pub async fn start(
@@ -565,7 +581,7 @@ impl Connection {
         let (tx_to_cm, rx_to_cm) = mpsc::unbounded_channel::<ipc::Data>();
         let (tx, mut rx) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
-        let (tx_input, _rx_input) = std_mpsc::channel();
+        let (tx_input, _rx_input) = std_mpsc::sync_channel(INPUT_CHANNEL_CAPACITY);
         let (tx_from_authed, mut rx_from_authed) = mpsc::unbounded_channel::<ipc::Data>();
         let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -807,6 +823,9 @@ impl Connection {
                         }
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
+                            if !enabled {
+                                conn.revoke_permission_atomic(&name);
+                            }
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
                                 conn.send_permission(Permission::Keyboard, enabled).await;
@@ -3243,7 +3262,7 @@ impl Connection {
         show_cursor: bool,
     ) {
         self.tx_input
-            .send(MessageInput::Mouse(InputMouse {
+            .try_send(MessageInput::Mouse(InputMouse {
                 msg,
                 conn_id,
                 username,
@@ -3258,7 +3277,7 @@ impl Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn input_pointer(&self, msg: PointerDeviceEvent, conn_id: i32) {
         self.tx_input
-            .send(MessageInput::Pointer((msg, conn_id)))
+            .try_send(MessageInput::Pointer((msg, conn_id)))
             .ok();
     }
 
@@ -3583,6 +3602,10 @@ impl Connection {
             }
             if let Some(message) = self.authorized_scope_violation(&msg) {
                 return self.handle_authorized_scope_violation(message).await;
+            }
+            if let Err(cap_err) = self.check_message_capability(&msg) {
+                log::warn!("Rejected message capability check: {}", cap_err);
+                return true;
             }
         }
         // After handling CloseReason messages, proceed to process other message types
@@ -4245,7 +4268,9 @@ impl Connection {
                 }
                 #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
                 Some(message::Union::Cliprdr(clip)) => {
-                    if let Some(cliprdr::Union::Files(files)) = &clip.union {
+                    if !self.clipboard || !self.file || self.is_authed_view_camera_conn() {
+                        log::warn!("Rejected Cliprdr: clipboard or file capability denied");
+                    } else if let Some(cliprdr::Union::Files(files)) = &clip.union {
                         self.start_file_audit(
                             None,
                             FileAuditType::RemoteReceive,
@@ -4320,6 +4345,10 @@ impl Connection {
                     }
                 }
                 Some(message::Union::FileAction(fa)) => {
+                    if !self.file {
+                        log::warn!("Rejected FileAction: file capability denied");
+                        return true;
+                    }
                     let mut handle_fa = self.file_transfer.is_some();
                     if !handle_fa {
                         if let Some(file_action::Union::Send(s)) = fa.union.as_ref() {
@@ -4627,39 +4656,47 @@ impl Connection {
                         }
                     }
                 }
-                Some(message::Union::FileResponse(fr)) => match fr.union {
-                    Some(file_response::Union::Block(block)) => {
-                        self.send_fs(ipc::FS::WriteBlock {
-                            id: block.id,
-                            file_num: block.file_num,
-                            blk_id: block.blk_id,
-                            data: block.data,
-                            compressed: block.compressed,
-                        });
+                Some(message::Union::FileResponse(fr)) => {
+                    if !self.file {
+                        log::warn!("Rejected FileResponse: file capability denied");
+                        return true;
                     }
-                    Some(file_response::Union::Done(d)) => {
-                        self.send_fs(ipc::FS::WriteDone {
-                            id: d.id,
-                            file_num: d.file_num,
-                        });
+                    match fr.union {
+                        Some(file_response::Union::Block(block)) => {
+                            self.send_fs(ipc::FS::WriteBlock {
+                                id: block.id,
+                                file_num: block.file_num,
+                                blk_id: block.blk_id,
+                                data: block.data,
+                                compressed: block.compressed,
+                            });
+                        }
+                        Some(file_response::Union::Done(d)) => {
+                            self.send_fs(ipc::FS::WriteDone {
+                                id: d.id,
+                                file_num: d.file_num,
+                            });
+                        }
+                        Some(file_response::Union::Digest(d)) => {
+                            self.send_fs(ipc::FS::CheckDigest {
+                                id: d.id,
+                                file_num: d.file_num,
+                                file_size: d.file_size,
+                                last_modified: d.last_modified,
+                                is_upload: true,
+                                is_resume: d.is_resume,
+                            })
+                        }
+                        Some(file_response::Union::Error(e)) => {
+                            self.send_fs(ipc::FS::WriteError {
+                                id: e.id,
+                                file_num: e.file_num,
+                                err: e.error,
+                            });
+                        }
+                        _ => {}
                     }
-                    Some(file_response::Union::Digest(d)) => self.send_fs(ipc::FS::CheckDigest {
-                        id: d.id,
-                        file_num: d.file_num,
-                        file_size: d.file_size,
-                        last_modified: d.last_modified,
-                        is_upload: true,
-                        is_resume: d.is_resume,
-                    }),
-                    Some(file_response::Union::Error(e)) => {
-                        self.send_fs(ipc::FS::WriteError {
-                            id: e.id,
-                            file_num: e.file_num,
-                            err: e.error,
-                        });
-                    }
-                    _ => {}
-                },
+                }
                 Some(message::Union::Misc(misc)) => match misc.union {
                     Some(misc::Union::SwitchDisplay(s)) => {
                         self.handle_switch_display(s).await;
@@ -4672,8 +4709,12 @@ impl Connection {
                     }
                     #[cfg(windows)]
                     Some(misc::Union::ToggleVirtualDisplay(t)) => {
-                        if !self.view_camera {
+                        if !self.view_camera && self.keyboard {
                             self.toggle_virtual_display(t).await;
+                        } else {
+                            log::warn!(
+                                "Rejected ToggleVirtualDisplay: display mutation capability denied"
+                            );
                         }
                     }
                     Some(misc::Union::TogglePrivacyMode(t)) => {
@@ -4746,13 +4787,15 @@ impl Connection {
                         _ => {}
                     },
                     Some(misc::Union::AudioFormat(format)) => {
-                        if !self.disable_audio {
+                        if self.audio && !self.disable_audio {
                             // Drop the audio sender previously.
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
                             self.audio_sender
                                 .as_ref()
                                 .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
+                        } else {
+                            log::warn!("Rejected AudioFormat: audio playback capability denied");
                         }
                     }
                     #[cfg(feature = "flutter")]
@@ -4835,7 +4878,7 @@ impl Connection {
                     _ => {}
                 },
                 Some(message::Union::AudioFrame(frame)) => {
-                    if !self.disable_audio {
+                    if self.audio && !self.disable_audio {
                         if let Some(sender) = &self.audio_sender {
                             allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
                         } else {
@@ -4843,6 +4886,8 @@ impl Connection {
                                 "Processing audio frame without the voice call audio sender."
                             );
                         }
+                    } else {
+                        log::warn!("Rejected AudioFrame: audio playback capability denied");
                     }
                 }
                 Some(message::Union::VoiceCallRequest(request)) => {
@@ -6644,6 +6689,153 @@ impl Connection {
             return (!Self::is_connection_housekeeping_message(msg)).then_some("session.auth_type");
         };
         Self::authorized_message_scope_violation(conn_type, msg)
+    }
+
+    pub fn message_required_capability(msg: &Message) -> Option<HostCapability> {
+        match msg.union.as_ref() {
+            Some(message::Union::MouseEvent(_))
+            | Some(message::Union::PointerDeviceEvent(_))
+            | Some(message::Union::KeyEvent(_)) => Some(HostCapability::ControlInput),
+
+            Some(message::Union::Clipboard(_)) | Some(message::Union::MultiClipboards(_)) => {
+                Some(HostCapability::TextClipboard)
+            }
+
+            Some(message::Union::Cliprdr(_)) => Some(HostCapability::FileClipboard),
+
+            Some(message::Union::FileAction(fa)) => match fa.union.as_ref() {
+                Some(file_action::Union::Send(_))
+                | Some(file_action::Union::ReadDir(_))
+                | Some(file_action::Union::ReadEmptyDirs(_))
+                | Some(file_action::Union::AllFiles(_)) => Some(HostCapability::FileTransferRead),
+                _ => Some(HostCapability::FileTransferWrite),
+            },
+
+            Some(message::Union::FileResponse(_)) => Some(HostCapability::FileTransferWrite),
+
+            Some(message::Union::AudioFrame(_)) => Some(HostCapability::AudioPlayback),
+            Some(message::Union::VoiceCallRequest(_))
+            | Some(message::Union::VoiceCallResponse(_)) => Some(HostCapability::VoiceCall),
+
+            Some(message::Union::Misc(misc)) => match misc.union.as_ref() {
+                Some(misc::Union::ToggleVirtualDisplay(_)) => Some(HostCapability::DisplayMutation),
+                Some(misc::Union::ChangeResolution(_))
+                | Some(misc::Union::ChangeDisplayResolution(_)) => {
+                    Some(HostCapability::DisplayMutation)
+                }
+                Some(misc::Union::RestartRemoteDevice(_)) => Some(HostCapability::SystemPower),
+                Some(misc::Union::ElevationRequest(_)) => Some(HostCapability::SystemElevation),
+                Some(misc::Union::AudioFormat(_)) => Some(HostCapability::AudioPlayback),
+                _ => None,
+            },
+
+            Some(message::Union::TerminalAction(_)) => Some(HostCapability::Terminal),
+            _ => None,
+        }
+    }
+
+    pub fn check_message_capability(&self, msg: &Message) -> Result<(), &'static str> {
+        let Some(cap) = Self::message_required_capability(msg) else {
+            return Ok(());
+        };
+        self.check_host_capability(cap)
+    }
+
+    pub fn check_host_capability(&self, cap: HostCapability) -> Result<(), &'static str> {
+        match cap {
+            HostCapability::ControlInput => {
+                if !self.keyboard || self.is_authed_view_camera_conn() {
+                    return Err("capability.control_input.denied");
+                }
+            }
+            HostCapability::TextClipboard => {
+                if !self.clipboard || !self.should_handle_text_clipboard_message() {
+                    return Err("capability.text_clipboard.denied");
+                }
+            }
+            HostCapability::FileClipboard => {
+                if !self.clipboard || !self.file || self.is_authed_view_camera_conn() {
+                    return Err("capability.file_clipboard.denied");
+                }
+            }
+            HostCapability::FileTransferRead | HostCapability::FileTransferWrite => {
+                if !self.file
+                    || (self.file_transfer.is_none()
+                        && self.authed_conn_type() != Some(AuthConnType::Remote))
+                {
+                    return Err("capability.file_transfer.denied");
+                }
+            }
+            HostCapability::AudioPlayback => {
+                if !self.audio || self.disable_audio {
+                    return Err("capability.audio_playback.denied");
+                }
+            }
+            HostCapability::VoiceCall => {
+                if !self.audio {
+                    return Err("capability.voice_call.denied");
+                }
+            }
+            HostCapability::DisplayMutation => {
+                if !self.keyboard || self.view_camera {
+                    return Err("capability.display_mutation.denied");
+                }
+            }
+            HostCapability::SystemPower => {
+                if !self.restart {
+                    return Err("capability.system_power.denied");
+                }
+            }
+            HostCapability::SystemElevation => {
+                if self.view_camera || !self.keyboard {
+                    return Err("capability.system_elevation.denied");
+                }
+            }
+            HostCapability::Terminal => {
+                if !self.terminal {
+                    return Err("capability.terminal.denied");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn revoke_permission_atomic(&mut self, name: &str) {
+        if name == "keyboard" {
+            self.keyboard = false;
+            super::input_service::release_all_input_state();
+        } else if name == "audio" {
+            self.audio = false;
+            self.audio_sender = None;
+        } else if name == "file" {
+            self.file = false;
+            self.file_transfer = None;
+            for id in std::mem::take(&mut self.cm_read_job_ids) {
+                self.send_fs(ipc::FS::CancelRead {
+                    id,
+                    conn_id: self.inner.id(),
+                });
+            }
+            for job in std::mem::take(&mut self.read_jobs) {
+                self.send_fs(ipc::FS::CancelWrite { id: job.id });
+                let job_log = fs::serialize_transfer_job(&job, false, true, "");
+                self.update_file_audit_from_job_log(&job_log);
+                self.send_to_cm(ipc::Data::FileTransferLog((
+                    "transfer".to_string(),
+                    job_log,
+                )));
+            }
+            #[cfg(feature = "unix-file-copy-paste")]
+            self.try_empty_file_clipboard();
+        } else if name == "clipboard" {
+            self.clipboard = false;
+        } else if name == "restart" {
+            self.restart = false;
+        } else if name == "recording" {
+            self.recording = false;
+        } else if name == "block_input" {
+            self.block_input = false;
+        }
     }
 
     async fn update_scoped_login_options(&mut self) {

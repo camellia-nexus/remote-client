@@ -772,19 +772,18 @@ pub mod service {
                 // TODO: not supported for now
             }
             DataMouse::ScrollY(length) => {
-                let mut length = *length;
+                const MAX_UINPUT_SCROLL: usize = 20;
+                let count = (*length as i64)
+                    .unsigned_abs()
+                    .min(MAX_UINPUT_SCROLL as u64) as usize;
 
-                let scroll = if length < 0 {
+                let scroll = if *length < 0 {
                     mouce::ScrollDirection::Up
                 } else {
                     mouce::ScrollDirection::Down
                 };
 
-                if length < 0 {
-                    length = -length;
-                }
-
-                for _ in 0..length {
+                for _ in 0..count {
                     allow_err!(mouse.scroll_wheel(&scroll))
                 }
             }

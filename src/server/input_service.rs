@@ -22,7 +22,7 @@ use std::sync::mpsc;
 use std::{
     convert::TryFrom,
     ops::{Deref, DerefMut},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicI64, Ordering},
     thread,
     time::{self, Duration, Instant},
 };
@@ -871,7 +871,7 @@ fn release_record_key(record_key: KeysDown) {
     func();
 }
 
-fn fix_key_down_timeout(force: bool) {
+pub fn fix_key_down_timeout(force: bool) {
     let key_down = KEYS_DOWN.lock().unwrap();
     if key_down.is_empty() {
         return;
@@ -885,6 +885,21 @@ fn fix_key_down_timeout(force: bool) {
             release_record_key(record_key);
         }
     }
+}
+
+pub fn release_mouse_buttons() {
+    let mut en = ENIGO.lock().unwrap();
+    en.mouse_up(MouseButton::Left);
+    en.mouse_up(MouseButton::Right);
+    en.mouse_up(MouseButton::Middle);
+    en.mouse_up(MouseButton::Back);
+    en.mouse_up(MouseButton::Forward);
+}
+
+pub fn release_all_input_state() {
+    release_device_modifiers();
+    fix_key_down_timeout(true);
+    release_mouse_buttons();
 }
 
 // e.g. current state of ctrl is down, but ctrl not in modifier, we should change ctrl to up, to make modifier state sync between remote and local
@@ -1183,10 +1198,13 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
             _ => {}
         },
         MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
+            const MAX_WHEEL_DELTA: i32 = 1200;
+            let clamped_x = evt.x.clamp(-MAX_WHEEL_DELTA, MAX_WHEEL_DELTA);
+            let clamped_y = evt.y.clamp(-MAX_WHEEL_DELTA, MAX_WHEEL_DELTA);
             #[allow(unused_mut)]
-            let mut x = -evt.x;
+            let mut x = -clamped_x;
             #[allow(unused_mut)]
-            let mut y = evt.y;
+            let mut y = clamped_y;
             #[cfg(not(windows))]
             {
                 y = -y;
@@ -1219,8 +1237,8 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
 
             #[cfg(windows)]
             if !is_track_pad {
-                x *= WHEEL_DELTA as i32;
-                y *= WHEEL_DELTA as i32;
+                x = x.saturating_mul(WHEEL_DELTA as i32);
+                y = y.saturating_mul(WHEEL_DELTA as i32);
             }
 
             #[cfg(not(target_os = "macos"))]
@@ -1895,22 +1913,49 @@ fn record_pressed_key(record_key: KeysDown, down: bool) {
     }
 }
 
-fn is_function_key(ck: &EnumOrUnknown<ControlKey>) -> bool {
-    let mut res = false;
-    if ck.value() == ControlKey::CtrlAltDel.value() {
-        // have to spawn new thread because send_sas is tokio_main, the caller can not be tokio_main.
-        #[cfg(windows)]
-        std::thread::spawn(|| {
-            allow_err!(send_sas());
-        });
-        res = true;
-    } else if ck.value() == ControlKey::LockScreen.value() {
-        std::thread::spawn(|| {
-            lock_screen_2();
-        });
-        res = true;
+pub(crate) static LAST_FUNCTION_KEY_TIME: AtomicI64 = AtomicI64::new(0);
+pub(crate) static FUNCTION_KEY_BUSY: AtomicBool = AtomicBool::new(false);
+
+struct FunctionKeyBusyGuard;
+
+impl Drop for FunctionKeyBusyGuard {
+    fn drop(&mut self) {
+        FUNCTION_KEY_BUSY.store(false, Ordering::SeqCst);
     }
-    return res;
+}
+
+pub fn is_function_key(ck: &EnumOrUnknown<ControlKey>) -> bool {
+    let now = get_time();
+    if ck.value() == ControlKey::CtrlAltDel.value() {
+        if now.saturating_sub(LAST_FUNCTION_KEY_TIME.load(Ordering::Relaxed)) >= 1000
+            && !FUNCTION_KEY_BUSY.swap(true, Ordering::SeqCst)
+        {
+            LAST_FUNCTION_KEY_TIME.store(now, Ordering::Relaxed);
+            #[cfg(windows)]
+            std::thread::spawn(|| {
+                let _guard = FunctionKeyBusyGuard;
+                allow_err!(send_sas());
+            });
+            #[cfg(not(windows))]
+            {
+                let _guard = FunctionKeyBusyGuard;
+            }
+        }
+        true
+    } else if ck.value() == ControlKey::LockScreen.value() {
+        if now.saturating_sub(LAST_FUNCTION_KEY_TIME.load(Ordering::Relaxed)) >= 1000
+            && !FUNCTION_KEY_BUSY.swap(true, Ordering::SeqCst)
+        {
+            LAST_FUNCTION_KEY_TIME.store(now, Ordering::Relaxed);
+            std::thread::spawn(|| {
+                let _guard = FunctionKeyBusyGuard;
+                lock_screen_2();
+            });
+        }
+        true
+    } else {
+        false
+    }
 }
 
 /// Check if any hotkey modifier (Ctrl/Alt/Meta) is currently pressed.
