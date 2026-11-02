@@ -768,8 +768,21 @@ pub mod service {
                 };
                 allow_err!(mouse.click_button(&btn))
             }
-            DataMouse::ScrollX(_length) => {
-                // TODO: not supported for now
+            DataMouse::ScrollX(length) => {
+                const MAX_UINPUT_SCROLL: usize = 20;
+                let count = (*length as i64)
+                    .unsigned_abs()
+                    .min(MAX_UINPUT_SCROLL as u64) as usize;
+
+                let scroll = if *length < 0 {
+                    mouce::ScrollDirection::Left
+                } else {
+                    mouce::ScrollDirection::Right
+                };
+
+                for _ in 0..count {
+                    allow_err!(mouse.scroll_wheel(&scroll))
+                }
             }
             DataMouse::ScrollY(length) => {
                 const MAX_UINPUT_SCROLL: usize = 20;

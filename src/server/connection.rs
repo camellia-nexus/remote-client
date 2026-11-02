@@ -1330,10 +1330,37 @@ impl Connection {
         }
         #[cfg(target_os = "macos")]
         reset_input_ondisconn();
+        let mut pending_item: Option<MessageInput> = None;
         loop {
-            match receiver.recv_timeout(std::time::Duration::from_millis(500)) {
+            let recv_res = match pending_item.take() {
+                Some(item) => Ok(item),
+                None => receiver.recv_timeout(std::time::Duration::from_millis(500)),
+            };
+            match recv_res {
                 Ok(v) => match v {
-                    MessageInput::Mouse(mouse_input) => {
+                    MessageInput::Mouse(mut mouse_input) => {
+                        let is_pure_move = (mouse_input.msg.mask
+                            & crate::common::input::MOUSE_TYPE_MASK)
+                            == crate::common::input::MOUSE_TYPE_MOVE;
+                        if is_pure_move {
+                            while let Ok(next) = receiver.try_recv() {
+                                match next {
+                                    MessageInput::Mouse(next_mouse)
+                                        if next_mouse.conn_id == mouse_input.conn_id
+                                            && (next_mouse.msg.mask
+                                                & crate::common::input::MOUSE_TYPE_MASK)
+                                                == crate::common::input::MOUSE_TYPE_MOVE
+                                            && next_mouse.msg.mask == mouse_input.msg.mask =>
+                                    {
+                                        mouse_input = next_mouse;
+                                    }
+                                    other => {
+                                        pending_item = Some(other);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         handle_mouse(
                             &mouse_input.msg,
                             mouse_input.conn_id,

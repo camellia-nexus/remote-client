@@ -348,16 +348,11 @@ impl MouseControllable for Enigo {
     }
 
     fn mouse_scroll_x(&mut self, length: i32) {
-        let mut scroll_direction = -1; // 1 left -1 right;
-        let mut length = length;
-
-        if length < 0 {
-            length *= -1;
-            scroll_direction *= -1;
-        }
+        let scroll_direction = if length < 0 { 1 } else { -1 };
+        let count = (length as i64).unsigned_abs().min(20) as usize;
 
         if let Some(src) = self.event_source.as_ref() {
-            for _ in 0..length {
+            for _ in 0..count {
                 unsafe {
                     let mouse_ev = CGEventCreateScrollWheelEvent(
                         &src,
@@ -704,16 +699,11 @@ impl Enigo {
 
     #[inline]
     fn mouse_scroll_impl(&mut self, length: i32, is_track_pad: bool, is_horizontal: bool) {
-        let mut scroll_direction = -1; // 1 left -1 right;
-        let mut length = length;
-
-        if length < 0 {
-            length *= -1;
-            scroll_direction *= -1;
-        }
+        let scroll_direction = if length < 0 { 1 } else { -1 };
+        let count = (length as i64).unsigned_abs().min(20) as usize;
 
         if let Some(src) = self.event_source.as_ref() {
-            for _ in 0..length {
+            for _ in 0..count {
                 unsafe {
                     let units = if is_track_pad {
                         ScrollUnit::Pixel

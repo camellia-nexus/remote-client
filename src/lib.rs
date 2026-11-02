@@ -12,7 +12,7 @@ pub use platform::{
 };
 #[cfg(not(any(target_os = "ios")))]
 /// cbindgen:ignore
-mod server;
+pub mod server;
 #[cfg(not(any(target_os = "ios")))]
 pub use self::server::*;
 mod client;
