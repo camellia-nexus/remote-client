@@ -36,6 +36,7 @@ pub mod audio_service;
 pub mod terminal_helper;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod terminal_service;
+pub mod voice_call_manager;
 cfg_if::cfg_if! {
 if #[cfg(not(target_os = "ios"))] {
 mod clipboard_service;

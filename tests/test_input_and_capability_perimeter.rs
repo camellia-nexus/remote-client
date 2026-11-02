@@ -355,3 +355,33 @@ fn test_function_key_rate_limiting() {
     let backspace = EnumOrUnknown::new(ControlKey::Backspace);
     assert!(!is_function_key(&backspace));
 }
+
+#[test]
+fn test_keyboard_release_detection_priv009() {
+    // Normal key down / repeat / click
+    let down_event = (true, false);
+    let press_event = (false, true);
+    let repeat_event = (true, true);
+    // Key release
+    let up_event = (false, false);
+
+    let is_release = |(down, press): (bool, bool)| !down && !press;
+
+    assert!(!is_release(down_event));
+    assert!(!is_release(press_event));
+    assert!(!is_release(repeat_event));
+    assert!(is_release(up_event));
+}
+
+#[test]
+fn test_mouse_release_detection_priv009() {
+    let mask_down = MOUSE_TYPE_DOWN | (MOUSE_BUTTON_LEFT << 3);
+    let mask_up = MOUSE_TYPE_UP | (MOUSE_BUTTON_LEFT << 3);
+    let mask_move = MOUSE_TYPE_MOVE;
+
+    let is_release = |mask: i32| (mask & MOUSE_TYPE_MASK) == MOUSE_TYPE_UP;
+
+    assert!(!is_release(mask_down));
+    assert!(!is_release(mask_move));
+    assert!(is_release(mask_up));
+}

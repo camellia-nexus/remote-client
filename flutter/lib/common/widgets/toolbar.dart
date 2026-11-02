@@ -372,10 +372,9 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   final isWaylandPeer = pi.platform == kPeerPlatformLinux && pi.isWayland;
 
   List<TTextMenu> v = [];
+  final policy = ffiModel.effectiveControlPolicy;
   // elevation
-  if (isDefaultConn &&
-      perms['keyboard'] != false &&
-      ffi.elevationModel.showRequestMenu) {
+  if (policy.canRequestElevation && ffi.elevationModel.showRequestMenu) {
     v.add(
       TTextMenu(
         child: Text(translate('Request Elevation')),
@@ -385,7 +384,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // osAccount / osPassword
-  if (isDefaultConn && perms['keyboard'] != false) {
+  if (policy.canSendOsPassword) {
     v.add(
       TTextMenu(
         child: Row(
@@ -416,9 +415,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // paste
-  if (isDefaultConn &&
-      pi.platform != kPeerPlatformAndroid &&
-      perms['keyboard'] != false) {
+  if (policy.canSendClipboardKeystrokes) {
     v.add(
       TTextMenu(
         child: Text(translate('Send clipboard keystrokes')),
@@ -581,10 +578,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     v.add(TTextMenu(child: Offstage(), onPressed: () {}, divider: true));
   }
   // ctrlAltDel
-  if (isDefaultConn &&
-      !ffiModel.viewOnly &&
-      ffiModel.keyboard &&
-      (pi.platform == kPeerPlatformLinux || pi.sasEnabled)) {
+  if (policy.canCtrlAltDel) {
     v.add(
       TTextMenu(
         child: Text('${translate("Insert Ctrl + Alt + Del")}'),
@@ -607,7 +601,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // insertLock
-  if (isDefaultConn && !ffiModel.viewOnly && ffi.ffiModel.keyboard) {
+  if (policy.canLockScreen) {
     v.add(
       TTextMenu(
         child: Text(translate('Insert Lock')),
@@ -616,11 +610,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // blockUserInput
-  if (isDefaultConn &&
-      ffi.ffiModel.keyboard &&
-      ffi.ffiModel.permissions['block_input'] != false &&
-      pi.platform == kPeerPlatformWindows) // privacy-mode != true ??
-  {
+  if (policy.canBlockUserInput) {
     v.add(
       TTextMenu(
         child: Obx(
@@ -642,11 +632,8 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
     );
   }
   // switchSides
-  if (isDefaultConn &&
+  if (policy.canSwitchSides &&
       isDesktop &&
-      ffiModel.keyboard &&
-      pi.platform != kPeerPlatformAndroid &&
-      versionCmp(pi.version, '1.2.0') >= 0 &&
       bind.peerGetSessionsCount(id: id, connType: ffi.connType.index) == 1) {
     v.add(
       TTextMenu(

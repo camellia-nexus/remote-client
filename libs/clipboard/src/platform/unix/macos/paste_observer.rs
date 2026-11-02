@@ -172,7 +172,7 @@ impl PasteObserver {
 
     pub fn stop(&mut self) {
         if let Some(tx_handle_fsevent_thread) = &self.tx_handle_fsevent_thread {
-            self.observer_info = Default::default();
+            *self.observer_info.lock().unwrap() = None;
             tx_handle_fsevent_thread.tx.send(FseventControl::Stop).ok();
         }
     }

@@ -91,8 +91,9 @@ impl VoiceCallWorker {
                 false,
             );
 
-            // Step 2: Synchronously reset voice call input device
-            crate::audio_service::set_voice_call_input_device(None, true);
+            // Step 2: Synchronously release voice call from VoiceCallManager if owner
+            crate::server::voice_call_manager::VOICE_CALL_MANAGER
+                .release_call_if_owner(self.conn_inner.id());
         }
 
         // Step 3: Trigger cancellation token
@@ -297,6 +298,10 @@ impl<T: InvokeUiSession> Remote<T> {
                         rx_clip_client_holder.1 = Some(crate::SimpleCallOnReturn {
                             b: true,
                             f: Box::new(move || {
+                                clipboard::operation::ClipboardOpGuard::abort_for_connection(
+                                    client_conn_id,
+                                    0,
+                                );
                                 clipboard::remove_channel_by_conn_id(client_conn_id);
                             }),
                         });
@@ -568,10 +573,16 @@ impl<T: InvokeUiSession> Remote<T> {
         // iOS does not have this server.
         #[cfg(not(any(target_os = "ios")))]
         {
-            crate::audio_service::set_voice_call_input_device(get_default_sound_input(), false);
+            let conn_id = CLIENT_SERVER.write().unwrap().get_new_id();
+            let _ = crate::server::voice_call_manager::VOICE_CALL_MANAGER.try_register_call(
+                conn_id,
+                crate::server::voice_call_manager::generate_call_id(),
+                1,
+            );
+            crate::server::voice_call_manager::VOICE_CALL_MANAGER
+                .set_voice_call_input_device(get_default_sound_input(), Some(conn_id));
             let (tx_audio_data, mut rx_audio_data) =
                 camellia_remote_protocol::tokio::sync::mpsc::unbounded_channel();
-            let conn_id = CLIENT_SERVER.write().unwrap().get_new_id();
             let client_conn_inner = ConnInner::new(conn_id, Some(tx_audio_data), None);
             CLIENT_SERVER.write().unwrap().subscribe(
                 audio_service::NAME,
@@ -2661,6 +2672,40 @@ impl<T: InvokeUiSession> Remote<T> {
             log::warn!("failed to decode cliprdr msg from server peer");
             return;
         };
+
+        match &clip {
+            clipboard::ClipboardFile::FormatList { .. } => {
+                clipboard::operation::ClipboardOpGuard::initiate_operation(
+                    self.client_conn_id,
+                    0,
+                    true,
+                    0,
+                );
+            }
+            clipboard::ClipboardFile::FormatDataResponse { .. } => {
+                if let Err(e) =
+                    clipboard::operation::ClipboardOpGuard::validate_format_data_response(
+                        self.client_conn_id,
+                        0,
+                    )
+                {
+                    log::warn!("FormatDataResponse rejected: {}", e);
+                    return;
+                }
+            }
+            clipboard::ClipboardFile::FileContentsResponse { .. } => {
+                if let Err(e) =
+                    clipboard::operation::ClipboardOpGuard::validate_file_contents_response(
+                        self.client_conn_id,
+                        0,
+                    )
+                {
+                    log::warn!("FileContentsResponse rejected: {}", e);
+                    return;
+                }
+            }
+            _ => {}
+        }
 
         let is_stopping_allowed = clip.is_beginning_message();
         let file_transfer_enabled = self.handler.is_file_clipboard_required();

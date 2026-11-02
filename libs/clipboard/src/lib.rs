@@ -16,6 +16,9 @@ use camellia_remote_protocol::{
 use serde_derive::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod operation;
+pub use operation::*;
+
 #[cfg(any(
     target_os = "windows",
     all(target_os = "macos", feature = "unix-file-copy-paste")
@@ -27,6 +30,13 @@ pub mod platform;
     all(target_os = "macos", feature = "unix-file-copy-paste")
 ))]
 pub use context_send::*;
+
+static CONNECTION_GENERATION_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+pub fn next_connection_generation() -> u64 {
+    CONNECTION_GENERATION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
 
 #[cfg(target_os = "windows")]
 const ERR_CODE_SERVER_FUNCTION_NONE: u32 = 0x00000001;
@@ -310,7 +320,7 @@ pub fn send_data(conn_id: i32, data: ClipboardFile) -> Result<(), CliprdrError> 
     return send_data_to_channel(conn_id, data);
     #[cfg(not(target_os = "windows"))]
     if conn_id == 0 {
-        let _ = send_data_to_all(data);
+        send_data_to_all(data);
         Ok(())
     } else {
         send_data_to_channel(conn_id, data)

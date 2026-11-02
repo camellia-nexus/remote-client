@@ -22,10 +22,6 @@ pub const NAME: &'static str = "audio";
 pub const AUDIO_DATA_SIZE_U8: usize = 960 * 4; // 10ms in 48000 stereo
 static RESTARTING: AtomicBool = AtomicBool::new(false);
 
-lazy_static::lazy_static! {
-    static ref VOICE_CALL_INPUT_DEVICE: Arc::<Mutex::<Option<String>>> = Default::default();
-}
-
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub fn new() -> GenericService {
     let svc = EmptyExtraFieldService::new(NAME.to_owned(), true);
@@ -42,29 +38,17 @@ pub fn new() -> GenericService {
 
 #[inline]
 pub fn get_voice_call_input_device() -> Option<String> {
-    VOICE_CALL_INPUT_DEVICE.lock().unwrap().clone()
+    crate::server::voice_call_manager::VOICE_CALL_MANAGER.get_voice_call_input_device()
 }
 
 #[inline]
-pub fn set_voice_call_input_device(device: Option<String>, set_if_present: bool) {
-    if !set_if_present && VOICE_CALL_INPUT_DEVICE.lock().unwrap().is_some() {
-        return;
-    }
-
-    if *VOICE_CALL_INPUT_DEVICE.lock().unwrap() == device {
-        return;
-    }
-    *VOICE_CALL_INPUT_DEVICE.lock().unwrap() = device;
-    restart();
+pub fn set_voice_call_input_device(device: Option<String>, _set_if_present: bool) {
+    crate::server::voice_call_manager::VOICE_CALL_MANAGER.set_voice_call_input_device(device, None);
 }
 
 #[inline]
 fn get_audio_input() -> String {
-    VOICE_CALL_INPUT_DEVICE
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap_or(Config::get_option("audio-input"))
+    Config::get_option("audio-input")
 }
 
 pub fn restart() {

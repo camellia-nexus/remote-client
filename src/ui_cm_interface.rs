@@ -322,28 +322,52 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_started(&self, id: i32) {
-        if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
-            client.incoming_voice_call = false;
-            client.in_voice_call = true;
-            self.ui_handler.update_voice_call_state(client);
+        let client_opt = {
+            let mut lock = CLIENTS.write().unwrap();
+            if let Some(client) = lock.get_mut(&id) {
+                client.incoming_voice_call = false;
+                client.in_voice_call = true;
+                Some(client.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(client) = client_opt {
+            self.ui_handler.update_voice_call_state(&client);
         }
     }
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_incoming(&self, id: i32) {
-        if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
-            client.incoming_voice_call = true;
-            client.in_voice_call = false;
-            self.ui_handler.update_voice_call_state(client);
+        let client_opt = {
+            let mut lock = CLIENTS.write().unwrap();
+            if let Some(client) = lock.get_mut(&id) {
+                client.incoming_voice_call = true;
+                client.in_voice_call = false;
+                Some(client.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(client) = client_opt {
+            self.ui_handler.update_voice_call_state(&client);
         }
     }
 
     #[cfg(not(target_os = "ios"))]
     fn voice_call_closed(&self, id: i32, _reason: &str) {
-        if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
-            client.incoming_voice_call = false;
-            client.in_voice_call = false;
-            self.ui_handler.update_voice_call_state(client);
+        let client_opt = {
+            let mut lock = CLIENTS.write().unwrap();
+            if let Some(client) = lock.get_mut(&id) {
+                client.incoming_voice_call = false;
+                client.in_voice_call = false;
+                Some(client.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(client) = client_opt {
+            self.ui_handler.update_voice_call_state(&client);
         }
     }
 }

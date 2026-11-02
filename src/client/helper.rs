@@ -1,7 +1,4 @@
-use camellia_remote_protocol::{
-    get_time,
-    message_proto::{Message, VoiceCallRequest, VoiceCallResponse},
-};
+use camellia_remote_protocol::message_proto::{Message, VoiceCallRequest, VoiceCallResponse};
 use scrap::CodecFormat;
 use std::collections::HashMap;
 
@@ -19,7 +16,7 @@ pub struct QualityStatus {
 pub fn new_voice_call_request(is_connect: bool) -> Message {
     let mut req = VoiceCallRequest::new();
     req.is_connect = is_connect;
-    req.req_timestamp = get_time();
+    req.req_timestamp = crate::server::voice_call_manager::generate_call_id();
     let mut msg = Message::new();
     msg.set_voice_call_request(req);
     msg
@@ -30,7 +27,7 @@ pub fn new_voice_call_response(request_timestamp: i64, accepted: bool) -> Messag
     let mut resp = VoiceCallResponse::new();
     resp.accepted = accepted;
     resp.req_timestamp = request_timestamp;
-    resp.ack_timestamp = get_time();
+    resp.ack_timestamp = crate::server::voice_call_manager::generate_call_id();
     let mut msg = Message::new();
     msg.set_voice_call_response(resp);
     msg

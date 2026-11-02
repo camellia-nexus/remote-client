@@ -144,6 +144,26 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
         return true
     }
 
+    private fun stopAudioThreadGracefully() {
+        audioRecordStat = false
+        try {
+            audioRecorder?.stop()
+        } catch (e: Exception) {
+            Log.w(logTag, "audioRecorder stop warning: $e")
+        }
+        try {
+            audioThread?.join(2000)
+            if (audioThread?.isAlive == true) {
+                Log.w(logTag, "audioThread did not terminate within 2000ms; interrupting")
+                audioThread?.interrupt()
+                audioThread?.join(500)
+            }
+        } catch (e: InterruptedException) {
+            Log.w(logTag, "Interrupted waiting for audioThread: $e")
+        }
+        audioThread = null
+    }
+
     @RequiresApi(Build.VERSION_CODES.M)
     fun switchToVoiceCall(mediaProjection: MediaProjection?): Boolean {
         audioRecorder?.let {
@@ -151,9 +171,7 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
                 return true
             }
         }
-        audioRecordStat = false
-        audioThread?.join()
-        audioThread = null
+        stopAudioThreadGracefully()
 
         if (!createAudioRecorder(true, mediaProjection)) {
             Log.e(logTag, "createAudioRecorder fail")
@@ -170,8 +188,7 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
                 return true
             }
         }
-        audioRecordStat = false
-        audioThread?.join()
+        stopAudioThreadGracefully()
 
         if (!createAudioRecorder(false, mediaProjection)) {
             Log.e(logTag, "createAudioRecorder fail")
@@ -185,15 +202,11 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
         if (isAudioStart() || isVideoStart()) {
             return
         }
-        audioRecordStat = false
-        audioThread?.join()
-        audioThread = null
+        stopAudioThreadGracefully()
     }
 
     fun destroy() {
         Log.d(logTag, "destroy audio record handle")
-
-        audioRecordStat = false
-        audioThread?.join()
+        stopAudioThreadGracefully()
     }
 }

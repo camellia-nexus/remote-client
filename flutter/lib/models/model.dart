@@ -28,6 +28,8 @@ import 'package:camellia_remote_app/models/terminal_model.dart';
 import 'package:camellia_remote_app/plugin/event.dart';
 import 'package:camellia_remote_app/plugin/manager.dart';
 import 'package:camellia_remote_app/plugin/widgets/desc_ui.dart';
+import 'package:camellia_remote_app/models/effective_control_policy.dart';
+export 'package:camellia_remote_app/models/effective_control_policy.dart';
 import 'package:camellia_remote_app/common/shared_state.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/http_service.dart' as http;
@@ -279,9 +281,28 @@ class FfiModel with ChangeNotifier {
       }
     }
 
+    _controlGeneration++;
     debugPrint('updatePermission: $_permissions');
     notifyListeners();
   }
+
+  int _controlGeneration = 0;
+  int get controlGeneration => _controlGeneration;
+
+  void incrementControlGeneration() {
+    _controlGeneration++;
+    notifyListeners();
+  }
+
+  EffectiveControlPolicy get effectiveControlPolicy => EffectiveControlPolicy(
+        generation: _controlGeneration,
+        keyboardPerm: keyboard,
+        viewOnly: _viewOnly,
+        isViewCamera: parent.target?.connType == ConnType.viewCamera,
+        connType: parent.target?.connType ?? ConnType.defaultConn,
+        permissions: _permissions,
+        pi: _pi,
+      );
 
   bool get keyboard => _permissions['keyboard'] != false;
 
@@ -2181,6 +2202,7 @@ class FfiModel with ChangeNotifier {
     }
     if (_viewOnly != value) {
       _viewOnly = value;
+      _controlGeneration++;
       notifyListeners();
     }
   }

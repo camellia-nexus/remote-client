@@ -211,6 +211,13 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().conn_type.eq(&ConnType::VIEW_CAMERA)
     }
 
+    pub fn can_control_remote(&self) -> bool {
+        self.is_default()
+            && !self.is_view_camera()
+            && *self.server_keyboard_enabled.read().unwrap()
+            && !self.lc.read().unwrap().view_only.v
+    }
+
     pub fn is_terminal(&self) -> bool {
         self.lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL)
     }

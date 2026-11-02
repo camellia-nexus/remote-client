@@ -445,6 +445,8 @@ pub struct Connection {
     from_switch: bool,
     voice_call_request_timestamp: Option<NonZeroI64>,
     voice_calling: bool,
+    pub voice_call_generation: u64,
+    pub conn_generation: u64,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -511,6 +513,11 @@ pub enum ConnectionAuthState {
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
         Self { id, tx, tx_video }
+    }
+
+    #[inline]
+    pub fn id(&self) -> i32 {
+        self.id
     }
 }
 
@@ -663,6 +670,8 @@ impl Connection {
             audio_worker: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
+            voice_call_generation: 0,
+            conn_generation: clipboard::next_connection_generation(),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -769,6 +778,7 @@ impl Connection {
                 crate::SimpleCallOnReturn {
                     b: true,
                     f: Box::new(move || {
+                        clipboard::operation::ClipboardOpGuard::abort_for_connection(id, 0);
                         clipboard::remove_channel_by_conn_id(id);
                     }),
                 },
@@ -872,8 +882,12 @@ impl Connection {
                             } else if &name == "file" {
                                 conn.file = enabled;
                                 conn.send_permission(Permission::File, enabled).await;
-                                #[cfg(feature = "unix-file-copy-paste")]
                                 if !enabled {
+                                    clipboard::ClipboardOpGuard::abort_for_connection(
+                                        conn.inner.id(),
+                                        conn.conn_generation,
+                                    );
+                                    #[cfg(feature = "unix-file-copy-paste")]
                                     conn.try_empty_file_clipboard();
                                 }
                                 #[cfg(feature = "unix-file-copy-paste")]
@@ -3203,7 +3217,7 @@ impl Connection {
     }
 
     fn peer_keyboard_enabled(&self) -> bool {
-        self.keyboard && !self.disable_keyboard
+        !self.view_camera && self.keyboard && !self.disable_keyboard
     }
 
     fn clipboard_enabled(&self) -> bool {
@@ -4091,8 +4105,16 @@ impl Connection {
                         return true;
                     }
                     #[cfg(any(target_os = "android", target_os = "ios"))]
-                    if let Err(e) = call_main_service_pointer_input("mouse", me.mask, me.x, me.y) {
-                        log::debug!("call_main_service_pointer_input fail:{}", e);
+                    {
+                        let evt_type = me.mask & crate::input::MOUSE_TYPE_MASK;
+                        let is_release = evt_type == crate::input::MOUSE_TYPE_UP;
+                        if self.peer_keyboard_enabled() || is_release {
+                            if let Err(e) =
+                                call_main_service_pointer_input("mouse", me.mask, me.x, me.y)
+                            {
+                                log::debug!("call_main_service_pointer_input fail:{}", e);
+                            }
+                        }
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.peer_keyboard_enabled() {
@@ -4130,32 +4152,49 @@ impl Connection {
                         return true;
                     }
                     #[cfg(any(target_os = "android", target_os = "ios"))]
-                    if let Err(e) = match pde.union {
-                        Some(pointer_device_event::Union::TouchEvent(touch)) => match touch.union {
-                            Some(touch_event::Union::PanStart(pan_start)) => {
-                                call_main_service_pointer_input(
-                                    "touch",
-                                    4,
-                                    pan_start.x,
-                                    pan_start.y,
-                                )
+                    {
+                        let is_release = match pde.union {
+                            Some(pointer_device_event::Union::TouchEvent(ref touch)) => {
+                                match touch.union {
+                                    Some(touch_event::Union::PanEnd(_)) => true,
+                                    _ => false,
+                                }
                             }
-                            Some(touch_event::Union::PanUpdate(pan_update)) => {
-                                call_main_service_pointer_input(
-                                    "touch",
-                                    5,
-                                    pan_update.x,
-                                    pan_update.y,
-                                )
+                            _ => false,
+                        };
+                        if self.peer_keyboard_enabled() || is_release {
+                            if let Err(e) = match pde.union {
+                                Some(pointer_device_event::Union::TouchEvent(touch)) => {
+                                    match touch.union {
+                                        Some(touch_event::Union::PanStart(pan_start)) => {
+                                            call_main_service_pointer_input(
+                                                "touch",
+                                                4,
+                                                pan_start.x,
+                                                pan_start.y,
+                                            )
+                                        }
+                                        Some(touch_event::Union::PanUpdate(pan_update)) => {
+                                            call_main_service_pointer_input(
+                                                "touch",
+                                                5,
+                                                pan_update.x,
+                                                pan_update.y,
+                                            )
+                                        }
+                                        Some(touch_event::Union::PanEnd(pan_end)) => {
+                                            call_main_service_pointer_input(
+                                                "touch", 6, pan_end.x, pan_end.y,
+                                            )
+                                        }
+                                        _ => Ok(()),
+                                    }
+                                }
+                                _ => Ok(()),
+                            } {
+                                log::debug!("call_main_service_pointer_input fail:{}", e);
                             }
-                            Some(touch_event::Union::PanEnd(pan_end)) => {
-                                call_main_service_pointer_input("touch", 6, pan_end.x, pan_end.y)
-                            }
-                            _ => Ok(()),
-                        },
-                        _ => Ok(()),
-                    } {
-                        log::debug!("call_main_service_pointer_input fail:{}", e);
+                        }
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.peer_keyboard_enabled() {
@@ -4169,6 +4208,10 @@ impl Connection {
                 #[cfg(any(target_os = "android"))]
                 Some(message::Union::KeyEvent(mut me)) => {
                     if self.is_authed_view_camera_conn() {
+                        return true;
+                    }
+                    let is_release = !me.down && !me.press;
+                    if !self.peer_keyboard_enabled() && !is_release {
                         return true;
                     }
                     let key = match me.mode.enum_value() {
@@ -4343,6 +4386,39 @@ impl Connection {
                             "clipboard",
                         );
                     } else if let Some(clip) = msg_2_clip(clip) {
+                        match &clip {
+                            clipboard::ClipboardFile::FormatList { .. } => {
+                                clipboard::operation::ClipboardOpGuard::initiate_operation(
+                                    self.inner.id(),
+                                    self.conn_generation,
+                                    false,
+                                    0,
+                                );
+                            }
+                            clipboard::ClipboardFile::FormatDataResponse { .. } => {
+                                if let Err(e) =
+                                    clipboard::operation::ClipboardOpGuard::validate_format_data_response(
+                                        self.inner.id(),
+                                        self.conn_generation,
+                                    )
+                                {
+                                    log::warn!("Host FormatDataResponse rejected: {}", e);
+                                    return true;
+                                }
+                            }
+                            clipboard::ClipboardFile::FileContentsResponse { .. } => {
+                                if let Err(e) =
+                                    clipboard::operation::ClipboardOpGuard::validate_file_contents_response(
+                                        self.inner.id(),
+                                        self.conn_generation,
+                                    )
+                                {
+                                    log::warn!("Host FileContentsResponse rejected: {}", e);
+                                    return true;
+                                }
+                            }
+                            _ => {}
+                        }
                         #[cfg(target_os = "windows")]
                         {
                             self.send_to_cm(ipc::Data::ClipboardFile(clip));
@@ -4833,19 +4909,34 @@ impl Connection {
                         }
                     }
                     #[cfg(windows)]
-                    Some(misc::Union::ElevationRequest(r)) => match r.union {
-                        Some(elevation_request::Union::Direct(_)) => {
-                            self.handle_elevation_request(portable_client::StartPara::Direct)
-                                .await;
+                    Some(misc::Union::ElevationRequest(r)) => {
+                        if !self.peer_keyboard_enabled() {
+                            log::warn!("Rejected ElevationRequest: peer keyboard control disabled");
+                            let mut misc = Misc::new();
+                            misc.set_elevation_response(
+                                "elevation denied: permission disabled".to_string(),
+                            );
+                            let mut msg = Message::new();
+                            msg.set_misc(misc);
+                            self.send(msg).await;
+                        } else {
+                            match r.union {
+                                Some(elevation_request::Union::Direct(_)) => {
+                                    self.handle_elevation_request(
+                                        portable_client::StartPara::Direct,
+                                    )
+                                    .await;
+                                }
+                                Some(elevation_request::Union::Logon(r)) => {
+                                    self.handle_elevation_request(
+                                        portable_client::StartPara::Logon(r.username, r.password),
+                                    )
+                                    .await;
+                                }
+                                _ => {}
+                            }
                         }
-                        Some(elevation_request::Union::Logon(r)) => {
-                            self.handle_elevation_request(portable_client::StartPara::Logon(
-                                r.username, r.password,
-                            ))
-                            .await;
-                        }
-                        _ => {}
-                    },
+                    }
                     Some(misc::Union::AudioFormat(format)) => {
                         if self.audio && !self.disable_audio {
                             if self.audio_worker.is_none() {
@@ -4950,10 +5041,25 @@ impl Connection {
                 }
                 Some(message::Union::VoiceCallRequest(request)) => {
                     if request.is_connect {
-                        self.voice_call_request_timestamp = Some(
-                            NonZeroI64::new(request.req_timestamp)
-                                .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
-                        );
+                        let call_id = NonZeroI64::new(request.req_timestamp).unwrap_or_else(|| {
+                            NonZeroI64::new(crate::server::voice_call_manager::generate_call_id())
+                                .unwrap()
+                        });
+                        if let Some(owner) =
+                            crate::server::voice_call_manager::VOICE_CALL_MANAGER.get_owner()
+                        {
+                            if owner.conn_id != self.inner.id() {
+                                log::warn!(
+                                    "Rejecting VoiceCallRequest from conn_id={}: active call owned by conn_id={}",
+                                    self.inner.id(),
+                                    owner.conn_id
+                                );
+                                let resp = new_voice_call_response(call_id.get(), false);
+                                self.send(resp).await;
+                                return true;
+                            }
+                        }
+                        self.voice_call_request_timestamp = Some(call_id);
                         // Notify the connection manager.
                         self.send_to_cm(Data::VoiceCallIncoming);
                     } else {
@@ -5784,16 +5890,32 @@ impl Connection {
 
     pub async fn handle_voice_call(&mut self, accepted: bool) {
         if let Some(ts) = self.voice_call_request_timestamp.take() {
-            let msg = new_voice_call_response(ts.get(), accepted);
             if accepted {
-                crate::audio_service::set_voice_call_input_device(
+                self.voice_call_generation =
+                    crate::server::voice_call_manager::next_voice_call_generation();
+                if let Err(e) = crate::server::voice_call_manager::VOICE_CALL_MANAGER
+                    .try_register_call(self.inner.id(), ts.get(), self.voice_call_generation)
+                {
+                    log::warn!(
+                        "Failed to register voice call for conn_id={}: {}",
+                        self.inner.id(),
+                        e
+                    );
+                    let msg = new_voice_call_response(ts.get(), false);
+                    self.send(msg).await;
+                    self.send_to_cm(Data::CloseVoiceCall("busy".to_owned()));
+                    self.voice_calling = false;
+                    return;
+                }
+                crate::server::voice_call_manager::VOICE_CALL_MANAGER.set_voice_call_input_device(
                     crate::get_default_sound_input(),
-                    false,
+                    Some(self.inner.id()),
                 );
                 self.send_to_cm(Data::StartVoiceCall);
             } else {
                 self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
             }
+            let msg = new_voice_call_response(ts.get(), accepted);
             self.send(msg).await;
             self.voice_calling = accepted;
             if self.is_authed_view_camera_conn() {
@@ -5811,9 +5933,12 @@ impl Connection {
     }
 
     pub async fn close_voice_call(&mut self) {
-        crate::audio_service::set_voice_call_input_device(None, true);
-        // Notify the connection manager that the voice call has been closed.
-        self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
+        if crate::server::voice_call_manager::VOICE_CALL_MANAGER
+            .release_call_if_owner(self.inner.id())
+        {
+            // Notify the connection manager that the voice call has been closed.
+            self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
+        }
         self.voice_calling = false;
         if self.is_authed_view_camera_conn() {
             if let Some(s) = self.server.upgrade() {
@@ -5952,7 +6077,14 @@ impl Connection {
         }
         if let Ok(q) = o.disable_keyboard.enum_value() {
             if q != BoolOption::NotSet {
-                self.disable_keyboard = q == BoolOption::Yes;
+                let becoming_disabled = q == BoolOption::Yes;
+                self.disable_keyboard = becoming_disabled;
+                if becoming_disabled {
+                    super::input_service::release_all_input_state();
+                    #[cfg(target_os = "android")]
+                    self.pressed_modifiers.clear();
+                    self.tx_input.send(MessageInput::BlockOff).ok();
+                }
                 if let Some(s) = self.server.upgrade() {
                     s.write().unwrap().subscribe(
                         super::clipboard_service::NAME,
@@ -5978,7 +6110,7 @@ impl Connection {
             < camellia_remote_protocol::get_version_number("1.2.4")
         {
             if let Ok(q) = o.privacy_mode.enum_value() {
-                if self.keyboard {
+                if self.peer_keyboard_enabled() {
                     match q {
                         BoolOption::Yes => {
                             self.turn_on_privacy("".to_owned()).await;
@@ -5992,7 +6124,7 @@ impl Connection {
             }
         }
         if let Ok(q) = o.block_input.enum_value() {
-            if self.keyboard && self.block_input {
+            if self.peer_keyboard_enabled() && self.block_input {
                 match q {
                     BoolOption::Yes => {
                         self.tx_input.send(MessageInput::BlockOn).ok();
@@ -6068,7 +6200,7 @@ impl Connection {
     }
 
     async fn turn_on_privacy(&mut self, impl_key: String) {
-        if !self.is_authed_remote_conn() || !self.privacy_mode {
+        if !self.is_authed_remote_conn() || !self.privacy_mode || !self.peer_keyboard_enabled() {
             let msg_out = crate::common::make_privacy_mode_msg(
                 back_notification::PrivacyModeState::PrvOnFailedDenied,
                 impl_key,
@@ -6207,16 +6339,13 @@ impl Connection {
             return;
         }
         self.closed = true;
-        // If voice A,B -> C, and A,B has voice call
-        // B disconnects, C will reset the voice call input.
-        //
-        // It may be acceptable, because it's not a common case,
-        // and it's immediately known when the input device changes.
-        // C can change the input device manually in cm interface.
-        //
-        // We can add a (Vec<conn_id>, input device) to avoid this.
-        // But it's not necessary now and we have to consider two audio services(client, server).
-        crate::audio_service::set_voice_call_input_device(None, true);
+        if crate::server::voice_call_manager::VOICE_CALL_MANAGER
+            .release_call_if_owner(self.inner.id())
+        {
+            self.send_to_cm(Data::CloseVoiceCall("Owner disconnected".to_owned()));
+        }
+        clipboard::ClipboardOpGuard::abort_for_connection(self.inner.id(), self.conn_generation);
+        clipboard::remove_channel_by_conn_id(self.inner.id());
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock && self.lock_after_session_end && self.keyboard {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -6863,7 +6992,7 @@ impl Connection {
                 }
             }
             HostCapability::SystemElevation => {
-                if self.view_camera || !self.keyboard {
+                if !self.peer_keyboard_enabled() {
                     return Err("capability.system_elevation.denied");
                 }
             }
@@ -6880,6 +7009,9 @@ impl Connection {
         if name == "keyboard" {
             self.keyboard = false;
             super::input_service::release_all_input_state();
+            #[cfg(target_os = "android")]
+            self.pressed_modifiers.clear();
+            self.tx_input.send(MessageInput::BlockOff).ok();
         } else if name == "audio" {
             self.audio = false;
             if let Some(mut worker) = self.audio_worker.take() {

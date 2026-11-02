@@ -737,7 +737,11 @@ class InputModel {
   }
 
   KeyEventResult handleRawKeyEvent(RawKeyEvent e) {
-    if (isViewOnly) return KeyEventResult.handled;
+    final isRelease = e is RawKeyUpEvent;
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl && !isRelease) return KeyEventResult.handled;
     if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
@@ -823,7 +827,11 @@ class InputModel {
   }
 
   KeyEventResult handleKeyEvent(KeyEvent e) {
-    if (isViewOnly) return KeyEventResult.handled;
+    final isRelease = e is KeyUpEvent;
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl && !isRelease) return KeyEventResult.handled;
     if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
       if (isDesktop) {
@@ -1049,7 +1057,11 @@ class InputModel {
   /// [down] indicates the key's state(down or up).
   /// [press] indicates a click event(down and up).
   void inputKey(String name, {bool? down, bool? press}) {
-    if (!keyboardPerm) return;
+    final isRelease = (down == false) && (press == false);
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl && !isRelease) return;
     if (isViewCamera) return;
     bind.sessionInputKey(
       sessionId: sessionId,
@@ -1121,6 +1133,10 @@ class InputModel {
 
   /// Send scroll event with scroll distance [y].
   Future<void> scroll(int y) async {
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl) return;
     if (isViewCamera) return;
     await bind.sessionSendMouse(
       sessionId: sessionId,
@@ -1154,7 +1170,11 @@ class InputModel {
 
   /// Send mouse press event.
   Future<void> sendMouse(String type, MouseButtons button) async {
-    if (!keyboardPerm) return;
+    final isRelease = type == _kMouseEventUp || type == 'up';
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl && !isRelease) return;
     if (isViewCamera) return;
     await _sendMouseUnchecked(type, button);
   }
@@ -1189,7 +1209,10 @@ class InputModel {
 
   /// Send mouse movement event with distance in [x] and [y].
   Future<void> moveMouse(double x, double y) async {
-    if (!keyboardPerm) return;
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl) return;
     if (isViewCamera) return;
     var x2 = x.toInt();
     var y2 = y.toInt();
@@ -1206,7 +1229,10 @@ class InputModel {
   /// Accumulates fractional deltas to avoid losing slow/fine movements.
   /// Only sends events when relative mouse mode is enabled and supported.
   Future<void> sendMobileRelativeMouseMove(double dx, double dy) async {
-    if (!keyboardPerm) return;
+    final canControl =
+        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+            false;
+    if (!canControl) return;
     if (isViewCamera) return;
     // Only send relative mouse events when relative mode is enabled and supported.
     if (!isRelativeMouseModeSupported || !relativeMouseMode.value) return;
@@ -1938,10 +1964,16 @@ class InputModel {
       edgeScroll: edgeScroll,
     );
     if (evtToPeer != null) {
-      bind.sessionSendMouse(
-        sessionId: sessionId,
-        msg: json.encode(modify(evtToPeer)),
-      );
+      final canControl =
+          parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
+              false;
+      final isUp = evtToPeer['type'] == kMouseEventTypeUp;
+      if (canControl || isUp) {
+        bind.sessionSendMouse(
+          sessionId: sessionId,
+          msg: json.encode(modify(evtToPeer)),
+        );
+      }
     }
     return evtToPeer;
   }

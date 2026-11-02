@@ -561,12 +561,18 @@ pub fn session_set_trackpad_speed(session_id: SessionID, value: i32) {
 
 pub fn session_lock_screen(session_id: SessionID) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() {
+            return;
+        }
         session.lock_screen();
     }
 }
 
 pub fn session_ctrl_alt_del(session_id: SessionID) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() {
+            return;
+        }
         session.ctrl_alt_del();
     }
 }
@@ -583,6 +589,9 @@ pub fn session_handle_flutter_key_event(
     down_or_up: bool,
 ) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() && down_or_up {
+            return;
+        }
         let keyboard_mode = session.get_keyboard_mode();
         session.handle_flutter_key_event(
             &keyboard_mode,
@@ -603,6 +612,9 @@ pub fn session_handle_flutter_raw_key_event(
     down_or_up: bool,
 ) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() && down_or_up {
+            return;
+        }
         let keyboard_mode = session.get_keyboard_mode();
         session.handle_flutter_raw_key_event(
             &keyboard_mode,
@@ -656,6 +668,10 @@ pub fn session_input_key(
     command: bool,
 ) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        let is_release = !down && !press;
+        if !session.can_control_remote() && !is_release {
+            return;
+        }
         // #[cfg(any(target_os = "android", target_os = "ios"))]
         session.input_key(&name, down, press, alt, ctrl, shift, command);
     }
@@ -663,6 +679,9 @@ pub fn session_input_key(
 
 pub fn session_input_string(session_id: SessionID, value: String) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() {
+            return;
+        }
         // #[cfg(any(target_os = "android", target_os = "ios"))]
         session.input_string(&value);
     }
@@ -720,6 +739,9 @@ pub fn session_get_peer_option(session_id: SessionID, name: String) -> String {
 
 pub fn session_input_os_password(session_id: SessionID, value: String) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        if !session.can_control_remote() {
+            return;
+        }
         session.input_os_password(value, true);
     }
 }

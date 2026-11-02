@@ -379,6 +379,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   // handle mobile virtual keyboard
   void handleSoftKeyboardInput(String newValue) {
+    if (!gFFI.ffiModel.effectiveControlPolicy.canControlRemote) {
+      return;
+    }
     if (!inputModel.keyboardInputAllowed) {
       return;
     }
@@ -390,6 +393,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void inputChar(String char) {
+    if (!gFFI.ffiModel.effectiveControlPolicy.canControlRemote) {
+      return;
+    }
     if (!inputModel.keyboardInputAllowed) {
       return;
     }
@@ -402,6 +408,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void openKeyboard() {
+    if (!gFFI.ffiModel.effectiveControlPolicy.canControlRemote) {
+      return;
+    }
     final allowWaylandKeyboard = mainGetPeerBoolOptionSync(
       widget.id,
       kPeerOptionAllowWaylandKeyboard,
@@ -563,7 +572,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Widget getRawPointerAndKeyBody(Widget child) {
     final ffiModel = Provider.of<FfiModel>(context);
     return RawPointerMouseRegion(
-      cursor: ffiModel.keyboard ? SystemMouseCursors.none : MouseCursor.defer,
+      cursor: ffiModel.effectiveControlPolicy.canControlRemote
+          ? SystemMouseCursors.none
+          : MouseCursor.defer,
       inputModel: inputModel,
       // Disable RawKeyFocusScope before the connecting is established.
       // The "Delete" key on the soft keyboard may be grabbed when inputting the password dialog.
@@ -579,7 +590,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget getBottomAppBar() {
     final ffiModel = Provider.of<FfiModel>(context);
-    final canInput = !isWebDesktop && !ffiModel.viewOnly && ffiModel.keyboard;
+    final canInput =
+        !isWebDesktop && ffiModel.effectiveControlPolicy.canControlRemote;
     final actions = <Widget>[
       _RemoteDockButton(
         icon: Icons.close_rounded,

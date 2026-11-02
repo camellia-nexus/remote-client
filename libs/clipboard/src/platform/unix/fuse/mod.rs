@@ -148,6 +148,7 @@ pub fn init_fuse_context(is_client: bool) -> Result<(), CliprdrError> {
         mount_point,
         session,
         conn_id: 0,
+        conn_generation: 0,
     };
     *fuse_context_lock = Some(ctx);
     Ok(())
@@ -176,20 +177,28 @@ pub fn handle_file_content_response(
     is_client: bool,
     clip: ClipboardFile,
 ) -> Result<(), CliprdrError> {
-    // we don't know its corresponding request, no resend can be performed
     let ctx = if is_client {
         FUSE_CONTEXT_CLIENT.lock()
     } else {
         FUSE_CONTEXT_SERVER.lock()
     };
-    ctx.as_ref()
-        .ok_or(CliprdrError::CliprdrInit)?
-        .tx
-        .send(clip)
-        .map_err(|e| {
-            log::error!("failed to send file contents response to fuse: {:?}", e);
-            CliprdrError::ClipboardInternalError
-        })?;
+    let ctx_ref = ctx.as_ref().ok_or(CliprdrError::CliprdrInit)?;
+    if let Some(op) = crate::operation::GLOBAL_CLIPBOARD_OP_MGR.read().as_ref() {
+        if ctx_ref.conn_id != 0 && op.conn_id != ctx_ref.conn_id {
+            log::warn!(
+                "Dropping cross-session FileContentsResponse: ctx.conn_id={}, op.conn_id={}",
+                ctx_ref.conn_id,
+                op.conn_id
+            );
+            return Err(CliprdrError::InvalidRequest {
+                description: "Connection mismatch for FUSE file content".to_string(),
+            });
+        }
+    }
+    ctx_ref.tx.send(clip).map_err(|e| {
+        log::error!("failed to send file contents response to fuse: {:?}", e);
+        CliprdrError::ClipboardInternalError
+    })?;
     Ok(())
 }
 
@@ -212,6 +221,7 @@ struct FuseContext {
     session: Mutex<Option<fuser::BackgroundSession>>,
     // Indicates the connection ID of that set the clipboard content
     conn_id: i32,
+    conn_generation: u64,
 }
 
 // this function must be called after the main IPC is up
@@ -479,6 +489,11 @@ impl FuseContext {
             let mut fuse_guard = self.server.lock();
             fuse_guard.load_file_list(files)?;
             self.conn_id = conn_id;
+            self.conn_generation = crate::operation::GLOBAL_CLIPBOARD_OP_MGR
+                .read()
+                .as_ref()
+                .map(|op| op.conn_generation)
+                .unwrap_or(0);
 
             fuse_guard.list_root()
         };

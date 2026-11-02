@@ -318,18 +318,28 @@ impl PasteboardContext {
         }
 
         let mut task_lock = self.paste_task.lock().unwrap();
-        let target_dir = PASTE_OBSERVER_INFO
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|task| task.target_path.clone());
-        // unreachable in normal case
-        let Some(target_dir) = target_dir.as_ref().map(|d| Path::new(d).parent()).flatten() else {
+        let observer_info = PASTE_OBSERVER_INFO.lock().unwrap().take();
+        let Some(info) = observer_info else {
+            return Err(CliprdrError::InvalidRequest {
+                description: "No active paste observer target".to_string(),
+            });
+        };
+        if info.conn_id != 0 && info.conn_id != conn_id {
+            log::warn!(
+                "Rejected cross-session FormatDataResponse: expected conn_id={}, received conn_id={}",
+                info.conn_id,
+                conn_id
+            );
+            return Err(CliprdrError::InvalidRequest {
+                description: "Connection mismatch for paste target".to_string(),
+            });
+        }
+        let target_dir = Path::new(&info.target_path).parent();
+        let Some(target_dir) = target_dir else {
             return Err(CliprdrError::CommonError {
                 description: "failed to get parent path".to_string(),
             });
         };
-        // unreachable in normal case
         if !target_dir.exists() {
             return Err(CliprdrError::CommonError {
                 description: "target path does not exist".to_string(),
@@ -339,21 +349,9 @@ impl PasteboardContext {
         match FileDescription::parse_file_descriptors(format_data, conn_id) {
             Ok(files) => {
                 let result = task_lock.start(target_dir, files);
-                if result.is_err() {
-                    PASTE_OBSERVER_INFO
-                        .lock()
-                        .unwrap()
-                        .replace(PasteObserverInfo::default());
-                }
                 result
             }
-            Err(e) => {
-                PASTE_OBSERVER_INFO
-                    .lock()
-                    .unwrap()
-                    .replace(PasteObserverInfo::default());
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
