@@ -4,7 +4,10 @@ use arboard::{ClipboardData, ClipboardFormat};
 use arboard::{LinuxClipboardKind, SetExtLinux};
 use camellia_remote_protocol::{bail, log, message_proto::*, ResultType};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::Duration,
 };
 
@@ -37,10 +40,10 @@ const CLIPBOARD_GET_MAX_RETRY: usize = 3;
 const CLIPBOARD_GET_RETRY_INTERVAL_DUR: Duration = Duration::from_millis(33);
 
 #[cfg(not(target_os = "android"))]
-fn valid_rgba_dimensions(width: i32, height: i32, data_len: usize) -> Option<(usize, usize)> {
+pub fn valid_rgba_dimensions(width: i32, height: i32, data_len: usize) -> Option<(usize, usize)> {
     let width = usize::try_from(width).ok()?;
     let height = usize::try_from(height).ok()?;
-    if width == 0 || height == 0 {
+    if width == 0 || height == 0 || width > 16384 || height > 16384 {
         return None;
     }
     let expected_len = width.checked_mul(height)?.checked_mul(4)?;
@@ -150,22 +153,90 @@ pub fn check_clipboard_files(
     None
 }
 
+#[cfg(not(target_os = "android"))]
+enum ClipboardWorkerJob {
+    Update {
+        generation: u64,
+        data: Vec<ClipboardData>,
+        side: ClipboardSide,
+    },
+    #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
+    UpdateFiles {
+        files: Vec<String>,
+        side: ClipboardSide,
+    },
+    #[cfg(feature = "unix-file-copy-paste")]
+    EmptyFiles { side: ClipboardSide, conn_id: i32 },
+}
+
+#[cfg(not(target_os = "android"))]
+struct ClipboardWorker {
+    tx: std::sync::mpsc::SyncSender<ClipboardWorkerJob>,
+    current_gen: Arc<AtomicU64>,
+}
+
+#[cfg(not(target_os = "android"))]
+static CLIPBOARD_WORKER: OnceLock<ClipboardWorker> = OnceLock::new();
+
+#[cfg(not(target_os = "android"))]
+fn get_clipboard_worker() -> &'static ClipboardWorker {
+    CLIPBOARD_WORKER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel(32);
+        let current_gen = Arc::new(AtomicU64::new(0));
+        let worker_gen = Arc::clone(&current_gen);
+        std::thread::Builder::new()
+            .name("clipboard_worker".to_string())
+            .spawn(move || {
+                while let Ok(job) = rx.recv() {
+                    match job {
+                        ClipboardWorkerJob::Update {
+                            generation,
+                            data,
+                            side,
+                        } => {
+                            let latest = worker_gen.load(Ordering::Acquire);
+                            if generation < latest {
+                                log::debug!(
+                                    "Dropping stale clipboard update: gen {generation} < latest {latest}"
+                                );
+                                continue;
+                            }
+                            do_update_clipboard_(data, side);
+                        }
+                        #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
+                        ClipboardWorkerJob::UpdateFiles { files, side } => {
+                            do_update_clipboard_(vec![ClipboardData::FileUrl(files)], side);
+                        }
+                        #[cfg(feature = "unix-file-copy-paste")]
+                        ClipboardWorkerJob::EmptyFiles { side, conn_id } => {
+                            if let Err(e) = try_empty_clipboard_files_sync(side, conn_id) {
+                                log::error!("Failed to empty clipboard files: {}", e);
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("Failed to spawn clipboard worker thread");
+        ClipboardWorker { tx, current_gen }
+    })
+}
+
 #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
 pub fn update_clipboard_files(files: Vec<String>, side: ClipboardSide) {
     if !files.is_empty() {
-        std::thread::spawn(move || {
-            do_update_clipboard_(vec![ClipboardData::FileUrl(files)], side);
-        });
+        let worker = get_clipboard_worker();
+        let _ = worker
+            .tx
+            .try_send(ClipboardWorkerJob::UpdateFiles { files, side });
     }
 }
 
 #[cfg(feature = "unix-file-copy-paste")]
-pub fn try_empty_clipboard_files(_side: ClipboardSide, _conn_id: i32) {
-    std::thread::spawn(move || {
-        if let Err(e) = try_empty_clipboard_files_sync(_side, _conn_id) {
-            log::error!("Failed to empty clipboard files: {}", e);
-        }
-    });
+pub fn try_empty_clipboard_files(side: ClipboardSide, conn_id: i32) {
+    let worker = get_clipboard_worker();
+    let _ = worker
+        .tx
+        .try_send(ClipboardWorkerJob::EmptyFiles { side, conn_id });
 }
 
 #[cfg(feature = "unix-file-copy-paste")]
@@ -238,15 +309,6 @@ pub fn check_clipboard_cm() -> ResultType<MultiClipboards> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn update_clipboard_(multi_clipboards: Vec<Clipboard>, side: ClipboardSide) {
-    let to_update_data = proto::from_multi_clipboards(multi_clipboards);
-    if to_update_data.is_empty() {
-        return;
-    }
-    do_update_clipboard_(to_update_data, side);
-}
-
-#[cfg(not(target_os = "android"))]
 fn do_update_clipboard_(mut to_update_data: Vec<ClipboardData>, side: ClipboardSide) {
     let mut ctx = CLIPBOARD_CTX.lock().unwrap();
     if ctx.is_none() {
@@ -294,9 +356,25 @@ pub fn set_text_clipboard_with_owner_sync(text: &str, side: ClipboardSide) -> Re
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn update_clipboard(multi_clipboards: Vec<Clipboard>, side: ClipboardSide) {
-    std::thread::spawn(move || {
-        update_clipboard_(multi_clipboards, side);
+pub fn update_clipboard(mut multi_clipboards: Vec<Clipboard>, side: ClipboardSide) {
+    if multi_clipboards.len() > proto::MAX_CLIPBOARD_ITEMS {
+        log::warn!(
+            "MultiClipboards has {} items, truncating to max {}",
+            multi_clipboards.len(),
+            proto::MAX_CLIPBOARD_ITEMS
+        );
+        multi_clipboards.truncate(proto::MAX_CLIPBOARD_ITEMS);
+    }
+    let to_update_data = proto::from_multi_clipboards(multi_clipboards);
+    if to_update_data.is_empty() {
+        return;
+    }
+    let worker = get_clipboard_worker();
+    let gen = worker.current_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let _ = worker.tx.try_send(ClipboardWorkerJob::Update {
+        generation: gen,
+        data: to_update_data,
+        side,
     });
 }
 
@@ -621,7 +699,7 @@ impl std::fmt::Display for ClipboardSide {
 }
 
 pub use proto::get_msg_if_not_support_multi_clip;
-mod proto {
+pub mod proto {
     #[cfg(not(target_os = "android"))]
     use arboard::ClipboardData;
     use camellia_remote_protocol::{
@@ -629,6 +707,13 @@ mod proto {
         log,
         message_proto::{Clipboard, ClipboardFormat, Message, MultiClipboards},
     };
+
+    pub const MAX_CLIPBOARD_ITEMS: usize = 16;
+    pub const MAX_CLIPBOARD_COMPRESSED_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+    pub const MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+    pub const MAX_CLIPBOARD_TOTAL_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+    pub const MAX_SPECIAL_NAME_LEN: usize = 256;
+    pub const MAX_SPECIAL_PAYLOAD_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 
     fn compress_or_raw(raw: Vec<u8>) -> (bool, Vec<u8>) {
         match compress_func(&raw) {
@@ -683,7 +768,15 @@ mod proto {
         }
     }
 
-    fn special_to_proto(d: Vec<u8>, s: String) -> Option<Clipboard> {
+    pub fn special_to_proto(d: Vec<u8>, s: String) -> Option<Clipboard> {
+        if s.len() > MAX_SPECIAL_NAME_LEN || d.len() > MAX_SPECIAL_PAYLOAD_BYTES {
+            log::warn!(
+                "Special clipboard format '{}' or payload ({} bytes) exceeds bounds",
+                s,
+                d.len()
+            );
+            return None;
+        }
         let compressed = match compress_func(&d) {
             Ok(compressed) => compressed,
             Err(err) => {
@@ -692,11 +785,7 @@ mod proto {
             }
         };
         let compress = compressed.len() < d.len();
-        let content = if compress {
-            compressed
-        } else {
-            s.bytes().collect::<Vec<u8>>()
-        };
+        let content = if compress { compressed } else { d };
         Some(Clipboard {
             compress,
             content: content.into(),
@@ -731,16 +820,39 @@ mod proto {
     }
 
     #[cfg(not(target_os = "android"))]
-    fn from_clipboard(clipboard: Clipboard) -> Option<ClipboardData> {
+    pub fn from_clipboard(clipboard: Clipboard) -> Option<ClipboardData> {
         let data = if clipboard.compress {
+            if clipboard.content.len() > MAX_CLIPBOARD_COMPRESSED_BYTES {
+                log::warn!(
+                    "Dropping clipboard payload: compressed length {} exceeds budget",
+                    clipboard.content.len()
+                );
+                return None;
+            }
             match decompress(&clipboard.content) {
-                Ok(data) => data,
+                Ok(data) => {
+                    if data.len() > MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+                        log::warn!(
+                            "Dropping clipboard payload: decompressed length {} exceeds budget",
+                            data.len()
+                        );
+                        return None;
+                    }
+                    data
+                }
                 Err(err) => {
                     log::warn!("Dropping malformed compressed clipboard payload: {err}");
                     return None;
                 }
             }
         } else {
+            if clipboard.content.len() > MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+                log::warn!(
+                    "Dropping clipboard payload: uncompressed length {} exceeds budget",
+                    clipboard.content.len()
+                );
+                return None;
+            }
             clipboard.content.to_vec()
         };
         match clipboard.format.enum_value() {
@@ -763,6 +875,16 @@ mod proto {
                 std::str::from_utf8(&data).unwrap_or_default(),
             ))),
             Ok(ClipboardFormat::Special) => {
+                if clipboard.special_name.len() > MAX_SPECIAL_NAME_LEN
+                    || data.len() > MAX_SPECIAL_PAYLOAD_BYTES
+                {
+                    log::warn!(
+                        "Dropping special clipboard payload: name len {} or data len {} exceeds bounds",
+                        clipboard.special_name.len(),
+                        data.len()
+                    );
+                    return None;
+                }
                 Some(ClipboardData::Special((clipboard.special_name, data)))
             }
             _ => None,
@@ -771,10 +893,30 @@ mod proto {
 
     #[cfg(not(target_os = "android"))]
     pub fn from_multi_clipboards(multi_clipboards: Vec<Clipboard>) -> Vec<ClipboardData> {
-        multi_clipboards
-            .into_iter()
-            .filter_map(from_clipboard)
-            .collect()
+        let mut total_bytes = 0usize;
+        let mut result = Vec::new();
+        for item in multi_clipboards.into_iter().take(MAX_CLIPBOARD_ITEMS) {
+            if let Some(cd) = from_clipboard(item) {
+                let item_bytes = match &cd {
+                    ClipboardData::Text(t) => t.len(),
+                    ClipboardData::Rtf(r) => r.len(),
+                    ClipboardData::Html(h) => h.len(),
+                    ClipboardData::Image(img) => img.bytes().len(),
+                    ClipboardData::Special((_, d)) => d.len(),
+                    _ => 0,
+                };
+                total_bytes = total_bytes.saturating_add(item_bytes);
+                if total_bytes > MAX_CLIPBOARD_TOTAL_DECOMPRESSED_BYTES {
+                    log::warn!(
+                        "Cumulative clipboard items exceed batch budget ({} bytes), truncating remaining items",
+                        total_bytes
+                    );
+                    break;
+                }
+                result.push(cd);
+            }
+        }
+        result
     }
 
     pub fn get_msg_if_not_support_multi_clip(
@@ -813,6 +955,57 @@ mod proto {
 
             assert!(from_clipboard(clipboard).is_none());
         }
+
+        #[test]
+        fn special_to_proto_uncompressed_preserves_original_content_data001() {
+            let special_name = "application/x-custom-format".to_string();
+            // 4 bytes: compressed form is larger than raw, so compress is false
+            let raw_data = vec![1, 2, 3, 4];
+            let proto = special_to_proto(raw_data.clone(), special_name.clone())
+                .expect("special_to_proto should succeed");
+            assert!(!proto.compress, "small payload should not be compressed");
+            assert_eq!(proto.special_name, special_name);
+            assert_eq!(
+                &proto.content[..],
+                raw_data.as_slice(),
+                "uncompressed special content must be the raw data, not the format name"
+            );
+
+            let restored = from_clipboard(proto).expect("from_clipboard should restore payload");
+            match restored {
+                ClipboardData::Special((name, data)) => {
+                    assert_eq!(name, special_name);
+                    assert_eq!(data, raw_data);
+                }
+                other => panic!("expected Special, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn special_to_proto_compressed_preserves_original_content_data001() {
+            let special_name = "application/x-custom-format".to_string();
+            // Large compressible payload
+            let raw_data = vec![42u8; 10000];
+            let proto = special_to_proto(raw_data.clone(), special_name.clone())
+                .expect("special_to_proto should succeed");
+            assert!(proto.compress, "repetitive payload should be compressed");
+            assert_eq!(proto.special_name, special_name);
+
+            let restored = from_clipboard(proto).expect("from_clipboard should restore payload");
+            match restored {
+                ClipboardData::Special((name, data)) => {
+                    assert_eq!(name, special_name);
+                    assert_eq!(data, raw_data);
+                }
+                other => panic!("expected Special, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn special_to_proto_oversized_name_or_data_is_rejected() {
+            let long_name = "x".repeat(MAX_SPECIAL_NAME_LEN + 1);
+            assert!(special_to_proto(vec![1, 2, 3], long_name).is_none());
+        }
     }
 }
 
@@ -837,14 +1030,36 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
     use camellia_remote_protocol::protobuf::Message;
 
     if cb.compress {
+        if cb.content.len() > proto::MAX_CLIPBOARD_COMPRESSED_BYTES {
+            log::warn!(
+                "Android clipboard compressed payload ({} bytes) exceeds budget",
+                cb.content.len()
+            );
+            return;
+        }
         cb.content = match camellia_remote_protocol::compress::decompress(&cb.content) {
-            Ok(content) => content.into(),
+            Ok(content) => {
+                if content.len() > proto::MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+                    log::warn!(
+                        "Android clipboard decompressed payload ({} bytes) exceeds budget",
+                        content.len()
+                    );
+                    return;
+                }
+                content.into()
+            }
             Err(err) => {
                 log::warn!("Dropping malformed compressed Android clipboard payload: {err}");
                 return;
             }
         };
         cb.compress = false;
+    } else if cb.content.len() > proto::MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+        log::warn!(
+            "Android clipboard uncompressed payload ({} bytes) exceeds budget",
+            cb.content.len()
+        );
+        return;
     }
     let multi_clips = MultiClipboards {
         clipboards: vec![cb],
@@ -859,10 +1074,43 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
 pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
     use camellia_remote_protocol::protobuf::Message;
 
+    if mcb.clipboards.len() > proto::MAX_CLIPBOARD_ITEMS {
+        log::warn!(
+            "Android MultiClipboards has {} items, truncating to {}",
+            mcb.clipboards.len(),
+            proto::MAX_CLIPBOARD_ITEMS
+        );
+        mcb.clipboards.truncate(proto::MAX_CLIPBOARD_ITEMS);
+    }
+    let mut total_decompressed = 0usize;
     for cb in mcb.clipboards.iter_mut() {
         if cb.compress {
+            if cb.content.len() > proto::MAX_CLIPBOARD_COMPRESSED_BYTES {
+                log::warn!(
+                    "Android clipboard compressed item ({} bytes) exceeds budget",
+                    cb.content.len()
+                );
+                return;
+            }
             cb.content = match camellia_remote_protocol::compress::decompress(&cb.content) {
-                Ok(content) => content.into(),
+                Ok(content) => {
+                    if content.len() > proto::MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+                        log::warn!(
+                            "Android clipboard decompressed item ({} bytes) exceeds budget",
+                            content.len()
+                        );
+                        return;
+                    }
+                    total_decompressed = total_decompressed.saturating_add(content.len());
+                    if total_decompressed > proto::MAX_CLIPBOARD_TOTAL_DECOMPRESSED_BYTES {
+                        log::warn!(
+                            "Android clipboard cumulative decompressed items exceed total budget ({} bytes)",
+                            total_decompressed
+                        );
+                        return;
+                    }
+                    content.into()
+                }
                 Err(err) => {
                     log::warn!(
                         "Dropping multi-clipboard message with malformed compressed payload: {err}"
@@ -871,6 +1119,22 @@ pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
                 }
             };
             cb.compress = false;
+        } else {
+            if cb.content.len() > proto::MAX_CLIPBOARD_ITEM_DECOMPRESSED_BYTES {
+                log::warn!(
+                    "Android clipboard uncompressed item ({} bytes) exceeds budget",
+                    cb.content.len()
+                );
+                return;
+            }
+            total_decompressed = total_decompressed.saturating_add(cb.content.len());
+            if total_decompressed > proto::MAX_CLIPBOARD_TOTAL_DECOMPRESSED_BYTES {
+                log::warn!(
+                    "Android clipboard cumulative items exceed total budget ({} bytes)",
+                    total_decompressed
+                );
+                return;
+            }
         }
     }
     if let Ok(bytes) = mcb.write_to_bytes() {

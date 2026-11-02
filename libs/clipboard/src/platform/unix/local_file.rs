@@ -30,6 +30,11 @@ use std::{
 };
 use utf16string::WString;
 
+pub const MAX_CLIPBOARD_RECURSION_DEPTH: usize = 64;
+pub const MAX_CLIPBOARD_FILE_ENTRIES: usize = 10_000;
+pub const MAX_CLIPBOARD_NAME_BYTES: usize = 520;
+pub const MAX_CLIPBOARD_PDU_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FileIdentity {
     device: u64,
@@ -261,7 +266,7 @@ impl LocalFile {
             err,
         }
     }
-    pub fn as_bin(&self) -> Vec<u8> {
+    pub fn as_bin(&self) -> Result<Vec<u8>, CliprdrError> {
         let mut buf = BytesMut::with_capacity(592);
 
         let read_only_flag = if self.read_only { 0x1 } else { 0 };
@@ -289,19 +294,33 @@ impl LocalFile {
         let size_high = (self.size >> 32) as u32;
         let size_low = (self.size & (u32::MAX as u64)) as u32;
 
-        let path = self
+        let stripped = self
             .path
             .strip_prefix(&self.relative_root)
-            .unwrap_or(&self.path)
-            .to_string_lossy()
-            .into_owned();
+            .unwrap_or(&self.path);
+        let path = if stripped.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            stripped.to_string_lossy().into_owned()
+        };
 
         let wstr: WString<utf16string::LE> = WString::from(&path);
         let name = wstr.as_bytes();
 
+        let name_len = name.len();
+        if name_len > MAX_CLIPBOARD_NAME_BYTES {
+            return Err(CliprdrError::InvalidRequest {
+                description: format!(
+                    "descriptor name length ({}) exceeds max 520 bytes: {}",
+                    name_len,
+                    self.path.display()
+                ),
+            });
+        }
+
         log::trace!(
             "put file to list: name_len {}, name {}",
-            name.len(),
+            name_len,
             &self.name
         );
 
@@ -334,11 +353,10 @@ impl LocalFile {
         // file size (low)
         buf.put_u32_le(size_low);
         // put name and padding to 520 bytes
-        let name_len = name.len();
         buf.put(name);
         buf.put(&vec![0u8; 520 - name_len][..]);
 
-        buf.to_vec()
+        Ok(buf.to_vec())
     }
 
     #[inline]
@@ -406,7 +424,26 @@ pub(super) fn construct_file_list(paths: &[PathBuf]) -> Result<Vec<LocalFile>, C
         relative_path: PathBuf,
         file_list: &mut Vec<LocalFile>,
         visited_directories: &mut HashSet<FileIdentity>,
+        depth: usize,
     ) -> Result<(), CliprdrError> {
+        if depth > MAX_CLIPBOARD_RECURSION_DEPTH {
+            return Err(CliprdrError::InvalidRequest {
+                description: format!(
+                    "directory recursion depth exceeds maximum allowed limit of {}: {}",
+                    MAX_CLIPBOARD_RECURSION_DEPTH,
+                    path.display()
+                ),
+            });
+        }
+        if file_list.len() >= MAX_CLIPBOARD_FILE_ENTRIES {
+            return Err(CliprdrError::InvalidRequest {
+                description: format!(
+                    "total file entries count exceeds maximum allowed limit of {}: {}",
+                    MAX_CLIPBOARD_FILE_ENTRIES,
+                    path.display()
+                ),
+            });
+        }
         let entry_name = relative_path
             .file_name()
             .ok_or_else(|| CliprdrError::InvalidRequest {
@@ -468,6 +505,7 @@ pub(super) fn construct_file_list(paths: &[PathBuf]) -> Result<Vec<LocalFile>, C
                     relative_path.join(entry_name),
                     file_list,
                     visited_directories,
+                    depth + 1,
                 )?;
             }
             let final_identity = directory
@@ -528,6 +566,7 @@ pub(super) fn construct_file_list(paths: &[PathBuf]) -> Result<Vec<LocalFile>, C
             PathBuf::from(entry_name),
             &mut file_list,
             &mut visited_directories,
+            0,
         )?;
     }
     Ok(file_list)
@@ -640,7 +679,7 @@ mod file_list_test {
         let mut pdu = BytesMut::with_capacity(4 + 592 * tree.len());
         pdu.put_u32_le(tree.len() as u32);
         for file in tree {
-            pdu.put(file.as_bin().as_slice());
+            pdu.put(file.as_bin()?.as_slice());
         }
 
         let parsed = FileDescription::parse_file_descriptors(pdu.to_vec(), 0)?;
@@ -919,6 +958,49 @@ mod file_list_test {
 
         let files = construct_file_list(&[selected])?;
         assert_eq!(files.iter().filter(|file| !file.is_dir).count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn as_bin_rejects_name_exceeding_520_bytes_without_panic() {
+        let long_name = "a".repeat(522);
+        let path = PathBuf::from(format!("/tmp/test/{}", long_name));
+        let local_file = LocalFile {
+            relative_root: PathBuf::from("/tmp/test"),
+            path: path.clone(),
+            handle: None,
+            offset: AtomicU64::new(0),
+            name: "test".to_string(),
+            size: 0,
+            last_write_time: UNIX_EPOCH,
+            is_dir: false,
+            read_only: false,
+            hidden: false,
+            system: false,
+            archive: false,
+            normal: true,
+            perm: 0o644,
+            source: None,
+        };
+        let res = local_file.as_bin();
+        assert!(
+            res.is_err(),
+            "as_bin must reject path exceeding 520 bytes without panic"
+        );
+    }
+
+    #[test]
+    fn construct_file_list_rejects_deep_recursion() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = TestDir::new("deep-tree")?;
+        let mut cur = temp.join("selected");
+        fs::create_dir(&cur)?;
+        // Create 66 nested directories (exceeds MAX_CLIPBOARD_RECURSION_DEPTH = 64)
+        for i in 0..66 {
+            cur = cur.join(format!("level_{}", i));
+            fs::create_dir(&cur)?;
+        }
+        let res = construct_file_list(&[temp.join("selected")]);
+        assert!(res.is_err(), "construct_file_list must reject directory tree deeper than MAX_CLIPBOARD_RECURSION_DEPTH");
         Ok(())
     }
 }

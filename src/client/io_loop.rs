@@ -284,7 +284,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let (_tx_holder, mut rx_clip_client) = mpsc::unbounded_channel::<i32>();
 
                 #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
-                let (_tx_holder, rx) = mpsc::unbounded_channel();
+                let (_tx_holder, rx) = mpsc::channel(1);
                 #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
                 let mut rx_clip_client_holder = (Arc::new(TokioMutex::new(rx)), None);
                 #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]

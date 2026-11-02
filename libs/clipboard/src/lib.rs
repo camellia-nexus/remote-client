@@ -1,16 +1,15 @@
 use std::sync::{Arc, Mutex, RwLock};
 
+use camellia_remote_protocol::log;
 #[cfg(any(
     target_os = "windows",
     all(target_os = "macos", feature = "unix-file-copy-paste")
 ))]
 use camellia_remote_protocol::ResultType;
-#[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
-use camellia_remote_protocol::{allow_err, log};
 use camellia_remote_protocol::{
     lazy_static,
     tokio::sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        mpsc::{channel, Receiver, Sender},
         Mutex as TokioMutex,
     },
 };
@@ -88,6 +87,8 @@ pub enum CliprdrError {
     FileError { path: String, err: std::io::Error },
     #[error("invalid request: {description}")]
     InvalidRequest { description: String },
+    #[error("cliprdr channel full or congested (conn_id: {conn_id})")]
+    Backpressure { conn_id: i32 },
     #[error("common request: {description}")]
     CommonError { description: String },
     #[error("unknown cliprdr error")]
@@ -206,12 +207,15 @@ pub enum ClipboardFile {
     },
 }
 
+pub const CLIPRDR_CHANNEL_BOUND: usize = 64;
+pub const MAX_CLIPRDR_PAYLOAD_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+
 struct MsgChannel {
     peer_id: String,
     conn_id: i32,
     #[allow(dead_code)]
-    sender: UnboundedSender<ClipboardFile>,
-    receiver: Arc<TokioMutex<UnboundedReceiver<ClipboardFile>>>,
+    sender: Sender<ClipboardFile>,
+    receiver: Arc<TokioMutex<Receiver<ClipboardFile>>>,
 }
 
 lazy_static::lazy_static! {
@@ -252,14 +256,12 @@ fn get_conn_id() -> i32 {
     *lock
 }
 
-pub fn get_rx_cliprdr_client(
-    peer_id: &str,
-) -> (i32, Arc<TokioMutex<UnboundedReceiver<ClipboardFile>>>) {
+pub fn get_rx_cliprdr_client(peer_id: &str) -> (i32, Arc<TokioMutex<Receiver<ClipboardFile>>>) {
     let mut lock = VEC_MSG_CHANNEL.write().unwrap();
     match lock.iter().find(|x| x.peer_id == peer_id) {
         Some(msg_channel) => (msg_channel.conn_id, msg_channel.receiver.clone()),
         None => {
-            let (sender, receiver) = unbounded_channel();
+            let (sender, receiver) = channel(CLIPRDR_CHANNEL_BOUND);
             let receiver = Arc::new(TokioMutex::new(receiver));
             let receiver2 = receiver.clone();
             let conn_id = get_conn_id();
@@ -275,12 +277,12 @@ pub fn get_rx_cliprdr_client(
     }
 }
 
-pub fn get_rx_cliprdr_server(conn_id: i32) -> Arc<TokioMutex<UnboundedReceiver<ClipboardFile>>> {
+pub fn get_rx_cliprdr_server(conn_id: i32) -> Arc<TokioMutex<Receiver<ClipboardFile>>> {
     let mut lock = VEC_MSG_CHANNEL.write().unwrap();
     match lock.iter().find(|x| x.conn_id == conn_id) {
         Some(msg_channel) => msg_channel.receiver.clone(),
         None => {
-            let (sender, receiver) = unbounded_channel();
+            let (sender, receiver) = channel(CLIPRDR_CHANNEL_BOUND);
             let receiver = Arc::new(TokioMutex::new(receiver));
             let receiver2 = receiver.clone();
             let msg_channel = MsgChannel {
@@ -302,7 +304,6 @@ pub fn remove_channel_by_conn_id(conn_id: i32) {
     }
 }
 
-#[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
 #[inline]
 pub fn send_data(conn_id: i32, data: ClipboardFile) -> Result<(), CliprdrError> {
     #[cfg(target_os = "windows")]
@@ -317,20 +318,49 @@ pub fn send_data(conn_id: i32, data: ClipboardFile) -> Result<(), CliprdrError> 
 }
 
 #[inline]
-#[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
 fn send_data_to_channel(conn_id: i32, data: ClipboardFile) -> Result<(), CliprdrError> {
-    if let Some(msg_channel) = VEC_MSG_CHANNEL
-        .read()
-        .unwrap()
-        .iter()
-        .find(|x| x.conn_id == conn_id)
-    {
-        msg_channel
-            .sender
-            .send(data)
-            .map_err(|e| CliprdrError::CommonError {
-                description: e.to_string(),
-            })
+    let payload_len = match &data {
+        ClipboardFile::FormatDataResponse { format_data, .. } => format_data.len(),
+        ClipboardFile::FileContentsResponse { requested_data, .. } => requested_data.len(),
+        ClipboardFile::Files { files } => files.iter().map(|(f, _)| f.len()).sum(),
+        _ => 0,
+    };
+    if payload_len > MAX_CLIPRDR_PAYLOAD_BYTES {
+        log::warn!(
+            "Cliprdr payload too large ({} bytes > {}), dropping",
+            payload_len,
+            MAX_CLIPRDR_PAYLOAD_BYTES
+        );
+        return Err(CliprdrError::InvalidRequest {
+            description: format!(
+                "cliprdr payload exceeds max budget of {} bytes",
+                MAX_CLIPRDR_PAYLOAD_BYTES
+            ),
+        });
+    }
+
+    let sender = {
+        let lock = VEC_MSG_CHANNEL.read().unwrap();
+        lock.iter()
+            .find(|x| x.conn_id == conn_id)
+            .map(|x| x.sender.clone())
+    };
+
+    if let Some(sender) = sender {
+        match sender.try_send(data) {
+            Ok(()) => Ok(()),
+            Err(camellia_remote_protocol::tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                log::warn!(
+                    "Cliprdr channel for conn_id {conn_id} is full ({CLIPRDR_CHANNEL_BOUND} messages queued), backpressure triggered"
+                );
+                Err(CliprdrError::Backpressure { conn_id })
+            }
+            Err(camellia_remote_protocol::tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(CliprdrError::InvalidRequest {
+                    description: "channel closed".to_string(),
+                })
+            }
+        }
     } else {
         Err(CliprdrError::InvalidRequest {
             description: "conn_id not found".to_string(),
@@ -341,20 +371,30 @@ fn send_data_to_channel(conn_id: i32, data: ClipboardFile) -> Result<(), Cliprdr
 #[inline]
 #[cfg(target_os = "windows")]
 pub fn send_data_exclude(conn_id: i32, data: ClipboardFile) {
-    // Need more tests to see if it's necessary to handle the error.
-    for msg_channel in VEC_MSG_CHANNEL.read().unwrap().iter() {
-        if msg_channel.conn_id != conn_id {
-            allow_err!(msg_channel.sender.send(data.clone()));
+    let senders: Vec<(i32, Sender<ClipboardFile>)> = {
+        let lock = VEC_MSG_CHANNEL.read().unwrap();
+        lock.iter()
+            .filter(|x| x.conn_id != conn_id)
+            .map(|x| (x.conn_id, x.sender.clone()))
+            .collect()
+    };
+    for (target_id, sender) in senders {
+        if let Err(e) = sender.try_send(data.clone()) {
+            log::debug!("send_data_exclude failed for conn_id {target_id}: {:?}", e);
         }
     }
 }
 
 #[inline]
-#[cfg(feature = "unix-file-copy-paste")]
 fn send_data_to_all(data: ClipboardFile) {
-    // Need more tests to see if it's necessary to handle the error.
-    for msg_channel in VEC_MSG_CHANNEL.read().unwrap().iter() {
-        allow_err!(msg_channel.sender.send(data.clone()));
+    let senders: Vec<(i32, Sender<ClipboardFile>)> = {
+        let lock = VEC_MSG_CHANNEL.read().unwrap();
+        lock.iter().map(|x| (x.conn_id, x.sender.clone())).collect()
+    };
+    for (target_id, sender) in senders {
+        if let Err(e) = sender.try_send(data.clone()) {
+            log::debug!("send_data_to_all failed for conn_id {target_id}: {:?}", e);
+        }
     }
 }
 

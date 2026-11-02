@@ -6,6 +6,8 @@ use crate::ipc::{self, Data};
 use crate::{clipboard::ClipboardSide, ipc::ClipboardNonFile};
 #[cfg(not(any(target_os = "ios")))]
 use camellia_remote_protocol::fs::serialize_transfer_job;
+#[cfg(target_os = "windows")]
+use camellia_remote_protocol::tokio::sync::mpsc::channel;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use camellia_remote_protocol::tokio::sync::mpsc::unbounded_channel;
 use camellia_remote_protocol::{
@@ -509,7 +511,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
         } else {
             log::debug!("Clipboard is enabled from client peer, actually useless: type 2");
             let rx_clip2;
-            (_tx_clip, rx_clip2) = unbounded_channel::<clipboard::ClipboardFile>();
+            (_tx_clip, rx_clip2) = channel::<clipboard::ClipboardFile>(1);
             rx_clip_holder = (Arc::new(TokioMutex::new(rx_clip2)), None);
             rx_clip = rx_clip_holder.0.lock().await;
         }

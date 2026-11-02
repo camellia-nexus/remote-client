@@ -1,14 +1,16 @@
 use super::local_file::LocalFile;
 use crate::{
-    platform::unix::local_file::construct_file_list, validate_file_contents_request, ClipboardFile,
-    CliprdrError, ValidatedFileContentsRequest,
+    platform::unix::local_file::{
+        construct_file_list, MAX_CLIPBOARD_FILE_ENTRIES, MAX_CLIPBOARD_PDU_BYTES,
+    },
+    validate_file_contents_request, ClipboardFile, CliprdrError, ValidatedFileContentsRequest,
 };
 use camellia_remote_protocol::{
     bytes::{BufMut, BytesMut},
     log,
 };
 use parking_lot::Mutex;
-use std::{path::PathBuf, sync::Arc, time::SystemTime, usize};
+use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
 lazy_static::lazy_static! {
     // local files are cached, this value should not be changed when copying files
@@ -96,13 +98,33 @@ impl ClipFiles {
         Ok(())
     }
 
-    fn build_file_list_pdu(&mut self) {
-        let mut data = BytesMut::with_capacity(4 + 592 * self.file_list.len());
+    fn build_file_list_pdu(&mut self) -> Result<(), CliprdrError> {
+        if self.file_list.len() > MAX_CLIPBOARD_FILE_ENTRIES {
+            return Err(CliprdrError::InvalidRequest {
+                description: format!(
+                    "file list entries ({}) exceed limit of {}",
+                    self.file_list.len(),
+                    MAX_CLIPBOARD_FILE_ENTRIES
+                ),
+            });
+        }
+        let estimated_size = 4 + 592 * self.file_list.len();
+        if estimated_size > MAX_CLIPBOARD_PDU_BYTES {
+            return Err(CliprdrError::InvalidRequest {
+                description: format!(
+                    "estimated file list PDU size ({}) exceeds limit of {} bytes",
+                    estimated_size, MAX_CLIPBOARD_PDU_BYTES
+                ),
+            });
+        }
+        let mut data = BytesMut::with_capacity(estimated_size);
         data.put_u32_le(self.file_list.len() as u32);
         for file in self.file_list.iter() {
-            data.put(file.as_bin().as_slice());
+            let bin = file.as_bin()?;
+            data.put(bin.as_slice());
         }
-        self.files_pdu = data.to_vec()
+        self.files_pdu = data.to_vec();
+        Ok(())
     }
 
     fn get_files_for_audit(&self, request: &FileContentsRequest) -> Option<ClipboardFile> {
@@ -322,7 +344,8 @@ pub fn sync_files(files: &[String]) -> Result<(), CliprdrError> {
         return Ok(());
     }
     files_lock.sync_files(files, current)?;
-    Ok(files_lock.build_file_list_pdu())
+    files_lock.build_file_list_pdu()?;
+    Ok(())
 }
 
 pub fn get_file_list_pdu() -> Vec<u8> {
