@@ -27,11 +27,16 @@ use super::terminal_helper::{
     WIN_WAIT_OBJECT_0,
 };
 
-const MAX_OUTPUT_BUFFER_SIZE: usize = 1024 * 1024; // 1MB per terminal
+pub const MAX_OUTPUT_BUFFER_SIZE: usize = 1024 * 1024; // 1MB per terminal
 const MAX_BUFFER_LINES: usize = 10000;
-const MAX_SERVICES: usize = 100; // Maximum number of persistent terminal services
+const MAX_LINE_CHUNK_SIZE: usize = 4096; // 4KB per chunk to prevent unbounded single-line replay buffer growth
+pub const MAX_SERVICES: usize = 32; // Maximum number of persistent terminal services
+pub const MAX_SESSIONS_PER_SERVICE: usize = 8; // Maximum terminal sessions per service
+pub const MAX_TOTAL_TERMINAL_SESSIONS: usize = 32; // Maximum total terminal sessions across all services
+pub const MAX_TERMINAL_DATA_PAYLOAD: usize = 64 * 1024; // 64 KiB max payload per TerminalData wire message
 const SERVICE_IDLE_TIMEOUT: Duration = Duration::from_secs(3600); // 1 hour idle timeout
-const CHANNEL_BUFFER_SIZE: usize = 500; // Channel buffer size. Max per-message size ~4KB (reader buffer), so worst case ~500*4KB ≈ 2MB/terminal. Increased from 100 to reduce data loss during disconnects.
+const PERSISTENT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 3600); // 4 hours idle timeout for disconnected persistent sessions
+const CHANNEL_BUFFER_SIZE: usize = 128; // Bounded channel buffer size to prevent memory bloat
 const COMPRESS_THRESHOLD: usize = 512; // Compress terminal data larger than this
                                        // Default max bytes for reconnection buffer replay.
 const DEFAULT_RECONNECT_BUFFER_BYTES: usize = 8 * 1024;
@@ -159,7 +164,7 @@ pub fn is_service_specified_user(service_id: &str) -> Option<bool> {
 }
 
 /// Get or create a persistent terminal service
-fn get_or_create_service(
+pub fn get_or_create_service(
     service_id: String,
     is_persistent: bool,
     is_specified_user: bool,
@@ -199,13 +204,20 @@ fn get_or_create_service(
 }
 
 /// Remove a service from the global registry
-fn remove_service(service_id: &str) {
-    let mut services = TERMINAL_SERVICES.lock().unwrap();
-    if let Some(service) = services.remove(service_id) {
+pub fn remove_service(service_id: &str) {
+    let removed_service = {
+        let mut services = TERMINAL_SERVICES.lock().unwrap();
+        services.remove(service_id)
+    };
+
+    if let Some(service) = removed_service {
         log::info!("Removed service: {}", service_id);
-        // Close all terminals in the service
-        let sessions = service.lock().unwrap().sessions.clone();
-        for (_, session) in sessions.iter() {
+        // Extract session references and close all terminals OUTSIDE the global registry lock
+        let sessions = {
+            let mut svc = service.lock().unwrap();
+            std::mem::take(&mut svc.sessions)
+        };
+        for (_, session) in sessions {
             let mut session = session.lock().unwrap();
             session.stop();
         }
@@ -234,33 +246,66 @@ pub fn get_service(service_id: &str) -> Option<Arc<Mutex<PersistentTerminalServi
     services.get(service_id).cloned()
 }
 
-/// Clean up inactive services
+/// Clean up inactive services and detached idle persistent sessions
 pub fn cleanup_inactive_services() {
     let services = TERMINAL_SERVICES.lock().unwrap();
     let now = Instant::now();
-    let mut to_remove = Vec::new();
+    let mut to_remove_services = Vec::new();
+    let mut idle_sessions_to_stop = Vec::new();
 
     for (service_id, service) in services.iter() {
-        if let Ok(svc) = service.lock() {
+        if let Ok(mut svc) = service.lock() {
+            // Check individual disconnected persistent sessions for idle expiration
+            if svc.is_persistent {
+                let mut idle_session_ids = Vec::new();
+                for (&term_id, session_arc) in svc.sessions.iter() {
+                    if let Ok(session) = session_arc.lock() {
+                        if matches!(session.state, SessionState::Closed)
+                            && now.duration_since(session.last_activity)
+                                > PERSISTENT_SESSION_IDLE_TIMEOUT
+                        {
+                            idle_session_ids.push(term_id);
+                        }
+                    }
+                }
+                for term_id in idle_session_ids {
+                    if let Some(session_arc) = svc.sessions.remove(&term_id) {
+                        log::info!(
+                            "Cleaning up idle disconnected terminal session {} in service {}",
+                            term_id,
+                            service_id
+                        );
+                        idle_sessions_to_stop.push(session_arc);
+                    }
+                }
+            }
+
             // Remove non-persistent services after idle timeout
             if !svc.is_persistent && now.duration_since(svc.last_activity) > SERVICE_IDLE_TIMEOUT {
-                to_remove.push(service_id.clone());
+                to_remove_services.push(service_id.clone());
                 log::info!("Cleaning up idle non-persistent service: {}", service_id);
             }
-            // Remove persistent services with no active terminals after longer timeout
+            // Remove persistent services with no active terminals after timeout
             else if svc.is_persistent
                 && svc.sessions.is_empty()
-                && now.duration_since(svc.last_activity) > SERVICE_IDLE_TIMEOUT * 2
+                && now.duration_since(svc.last_activity) > SERVICE_IDLE_TIMEOUT
             {
-                to_remove.push(service_id.clone());
+                to_remove_services.push(service_id.clone());
                 log::info!("Cleaning up empty persistent service: {}", service_id);
             }
         }
     }
 
-    // Remove outside of iteration to avoid deadlock
+    // Stop idle sessions outside of service lock
+    for session_arc in idle_sessions_to_stop {
+        if let Ok(mut session) = session_arc.lock() {
+            session.stop();
+        }
+    }
+
+    // Remove services outside of registry lock to avoid deadlock
     drop(services);
-    for id in to_remove {
+    for id in to_remove_services {
         remove_service(&id);
     }
 }
@@ -327,13 +372,22 @@ fn ensure_cleanup_task() {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub fn get_terminal_session_count(include_zombie_tasks: bool) -> usize {
-    let mut c = TERMINAL_SERVICES.lock().unwrap().len();
+    let services = match TERMINAL_SERVICES.lock() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let mut count: usize = services
+        .values()
+        .filter_map(|s| s.lock().ok())
+        .map(|svc| svc.sessions.len())
+        .sum();
     if include_zombie_tasks {
-        c += TERMINAL_TASKS.lock().unwrap().len();
+        if let Ok(tasks) = TERMINAL_TASKS.lock() {
+            count += tasks.len();
+        }
     }
-    c
+    count
 }
 
 /// User token wrapper for cross-module use.
@@ -429,14 +483,14 @@ fn run(sp: TerminalService, service_id: String) -> ResultType<()> {
 }
 
 /// Output buffer for terminal session
-struct OutputBuffer {
+pub struct OutputBuffer {
     lines: VecDeque<Vec<u8>>,
     total_size: usize,
     last_line_incomplete: bool,
 }
 
 impl OutputBuffer {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             lines: VecDeque::new(),
             total_size: 0,
@@ -444,7 +498,7 @@ impl OutputBuffer {
         }
     }
 
-    fn append(&mut self, data: &[u8]) {
+    pub fn append(&mut self, data: &[u8]) {
         if data.is_empty() {
             return;
         }
@@ -455,44 +509,85 @@ impl OutputBuffer {
             if let Some(last_line) = self.lines.back_mut() {
                 // Find first newline in new data
                 if let Some(newline_pos) = data.iter().position(|&b| b == b'\n') {
-                    last_line.extend_from_slice(&data[..=newline_pos]);
-                    self.total_size += newline_pos + 1;
+                    let addition = &data[..=newline_pos];
+                    last_line.extend_from_slice(addition);
+                    self.total_size += addition.len();
                     start = newline_pos + 1;
                     self.last_line_incomplete = false;
                 } else {
-                    // Still no newline, append all
+                    // Still no newline, append all of data
                     last_line.extend_from_slice(data);
                     self.total_size += data.len();
-                    return;
+                    start = data.len();
+                    self.last_line_incomplete = true;
+                }
+            }
+        }
+
+        // Split oversized incomplete last line if it exceeds MAX_LINE_CHUNK_SIZE
+        if self.last_line_incomplete {
+            if let Some(last_line) = self.lines.back_mut() {
+                if last_line.len() > MAX_LINE_CHUNK_SIZE {
+                    let oversized = std::mem::take(last_line);
+                    let first_chunk_len = MAX_LINE_CHUNK_SIZE.min(oversized.len());
+                    *last_line = oversized[..first_chunk_len].to_vec();
+                    let mut chunk_start = first_chunk_len;
+                    while chunk_start < oversized.len() {
+                        let next_len = (oversized.len() - chunk_start).min(MAX_LINE_CHUNK_SIZE);
+                        let chunk = oversized[chunk_start..chunk_start + next_len].to_vec();
+                        self.lines.push_back(chunk);
+                        chunk_start += next_len;
+                    }
                 }
             }
         }
 
         // Process remaining data
-        let remaining = &data[start..];
-        let ends_with_newline = remaining.last() == Some(&b'\n');
+        if start < data.len() {
+            let remaining = &data[start..];
+            let ends_with_newline = remaining.last() == Some(&b'\n');
 
-        // Split by lines
-        let lines: Vec<&[u8]> = remaining.split(|&b| b == b'\n').collect();
+            // Split by lines
+            let lines: Vec<&[u8]> = remaining.split(|&b| b == b'\n').collect();
 
-        for (i, line) in lines.iter().enumerate() {
-            if i == lines.len() - 1 && !ends_with_newline && !line.is_empty() {
-                // Last line without newline
-                self.last_line_incomplete = true;
-            }
-
-            if !line.is_empty() || i < lines.len() - 1 {
-                let mut line_data = line.to_vec();
-                if i < lines.len() - 1 || ends_with_newline {
-                    line_data.push(b'\n');
+            for (i, line) in lines.iter().enumerate() {
+                let is_last = i == lines.len() - 1;
+                if is_last && !ends_with_newline {
+                    // Last line without newline
+                    self.last_line_incomplete = !line.is_empty();
                 }
 
-                self.total_size += line_data.len();
-                self.lines.push_back(line_data);
+                if !line.is_empty() || !is_last || ends_with_newline {
+                    let has_trailing_newline = !is_last || ends_with_newline;
+                    let line_len = line.len() + if has_trailing_newline { 1 } else { 0 };
+
+                    if line_len <= MAX_LINE_CHUNK_SIZE {
+                        let mut line_data = Vec::with_capacity(line_len);
+                        line_data.extend_from_slice(line);
+                        if has_trailing_newline {
+                            line_data.push(b'\n');
+                        }
+                        self.total_size += line_data.len();
+                        self.lines.push_back(line_data);
+                    } else {
+                        // Line exceeds chunk size, split into chunks of at most MAX_LINE_CHUNK_SIZE
+                        let mut offset = 0;
+                        while offset < line.len() {
+                            let end = (offset + MAX_LINE_CHUNK_SIZE).min(line.len());
+                            let mut chunk = line[offset..end].to_vec();
+                            if end == line.len() && has_trailing_newline {
+                                chunk.push(b'\n');
+                            }
+                            self.total_size += chunk.len();
+                            self.lines.push_back(chunk);
+                            offset = end;
+                        }
+                    }
+                }
             }
         }
 
-        // Trim old data if buffer is too large
+        // Trim old data if buffer is too large (enforcing hard upper bound on total bytes and lines)
         while self.total_size > MAX_OUTPUT_BUFFER_SIZE || self.lines.len() > MAX_BUFFER_LINES {
             if let Some(removed) = self.lines.pop_front() {
                 if removed.len() > self.total_size {
@@ -521,7 +616,7 @@ impl OutputBuffer {
         }
     }
 
-    fn get_recent(&self, max_bytes: usize) -> Vec<u8> {
+    pub fn get_recent(&self, max_bytes: usize) -> Vec<u8> {
         if max_bytes == 0 {
             return Vec::new();
         }
@@ -571,6 +666,14 @@ impl OutputBuffer {
         }
 
         result
+    }
+
+    pub fn total_size(&self) -> usize {
+        self.total_size
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
     }
 }
 
@@ -774,17 +877,13 @@ impl TerminalSession {
         self.last_activity = Instant::now();
     }
 
-    // This helper function is to ensure that the threads are joined before the child process is dropped.
-    // Though this is not strictly necessary on macOS.
+    // Teardown the terminal session cleanly without hanging on channels or PTY I/O
     fn stop(&mut self) {
         self.state = SessionState::Closed;
         self.exiting.store(true, Ordering::SeqCst);
 
-        // Drop the input channel to signal writer thread to exit
+        // Signal writer thread to exit using non-blocking try_send
         if let Some(input_tx) = self.input_tx.take() {
-            // Send a final newline to ensure the reader can read some data, and then exit.
-            // This is required on Windows and Linux.
-            // Although `self.pty_pair = None;` is called below, we can still send a final newline here.
             #[cfg(target_os = "windows")]
             let final_msg = if self.is_helper_mode {
                 encode_helper_message(MSG_TYPE_DATA, b"\r\n")
@@ -794,36 +893,23 @@ impl TerminalSession {
             #[cfg(not(target_os = "windows"))]
             let final_msg = b"\r\n".to_vec();
 
-            if let Err(e) = input_tx.send(final_msg) {
-                log::warn!("Failed to send final newline to the terminal: {}", e);
-            }
+            // Non-blocking try_send so stop() never hangs on full channel
+            let _ = input_tx.try_send(final_msg);
             drop(input_tx);
         }
         self.output_rx = None;
 
-        // CRITICAL: In helper mode, we must terminate the helper process BEFORE joining threads!
-        // The reader thread is blocking on output_pipe.read(), which only returns EOF when
-        // the helper process exits. If we try to join the reader thread first, we deadlock.
-        //
-        // Sequence for helper mode:
-        // 1. Signal exiting and close input channel (done above)
-        // 2. Terminate helper process (causes output pipe EOF)
-        // 3. Join reader thread (now unblocked due to EOF)
-        // 4. Join writer thread
+        // In Windows helper mode, terminate helper process before joining threads
         #[cfg(target_os = "windows")]
         if self.is_helper_mode {
             if let Some(helper_handle) = self.helper_process_handle.take() {
                 let handle = helper_handle.as_raw();
                 log::debug!("Helper mode: terminating helper process before joining threads...");
-
-                // Give helper a very short time to exit gracefully (it should detect pipe close)
-                // But don't wait too long - we need to unblock the reader thread
                 let wait_result = unsafe { WinWaitForSingleObject(handle, 100) };
 
                 if wait_result == WIN_WAIT_OBJECT_0 {
                     log::debug!("Helper process exited gracefully");
                 } else {
-                    // Force terminate to unblock reader thread
                     log::debug!("Force terminating helper process to unblock reader thread");
                     unsafe {
                         let _ = WinTerminateProcess(handle, 0);
@@ -836,39 +922,26 @@ impl TerminalSession {
             }
         }
 
-        // 1. Windows (non-helper mode)
-        //    `pty_pair` uses pipe. https://github.com/rustdesk-org/wezterm/blob/80174f8009f41565f0fa8c66dab90d4f9211ae16/pty/src/win/conpty.rs#L16
-        //     `read()` may stuck at https://github.com/rustdesk-org/wezterm/blob/80174f8009f41565f0fa8c66dab90d4f9211ae16/filedescriptor/src/windows.rs#L345
-        //     We can close the pipe to signal the reader thread to exit.
-        //     After https://github.com/rustdesk-org/wezterm/blob/80174f8009f41565f0fa8c66dab90d4f9211ae16/pty/src/win/psuedocon.rs#L86, the reader reads `[27, 91, 63, 57, 48, 48, 49, 108, 27, 91, 63, 49, 48, 48, 52, 108]` in my tests.
-        // 2. Linux
-        //    `pty_pair` uses `libc::openpty`. https://github.com/rustdesk-org/wezterm/blob/80174f8009f41565f0fa8c66dab90d4f9211ae16/pty/src/unix.rs#L32
-        //    We can also call the drop method first. https://github.com/rustdesk-org/wezterm/blob/80174f8009f41565f0fa8c66dab90d4f9211ae16/pty/src/unix.rs#L352
-        //    The reader will get [13, 10] after dropping the `pty_pair`.
-        // 3. macOS
-        //    No stuck cases have been found so far, more testing is needed.
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        {
-            self.pty_pair = None;
+        // Drop master PTY pair unconditionally across all platforms (Linux, Windows, macOS).
+        // Closing the master PTY ensures the reader receives EOF or EIO immediately.
+        self.pty_pair = None;
+
+        // CRITICAL: Terminate child process BEFORE joining reader/writer threads!
+        // Killing the child releases the slave PTY and causes the OS to signal EOF/EIO on the master PTY,
+        // which immediately unblocks reader_thread if it was blocked in read().
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            add_to_reaper(child);
         }
 
-        // Wait for threads to finish
-        // The reader thread should join before the writer thread on Windows.
+        // Wait for reader thread to finish (unblocked by child termination and PTY drop)
         if let Some(reader_thread) = self.reader_thread.take() {
             let _ = reader_thread.join();
         }
 
-        // The read can read the last "\r\n" after the writer thread (not the child process) exits
-        // on Linux in my tests.
-        // But we still send "\r\n" to the writer thread and let the reader thread exit first for safety.
+        // Wait for writer thread to finish (unblocked by input_tx drop)
         if let Some(writer_thread) = self.writer_thread.take() {
             let _ = writer_thread.join();
-        }
-
-        if let Some(mut child) = self.child.take() {
-            // Kill the process
-            let _ = child.kill();
-            add_to_reaper(child);
         }
     }
 }
@@ -1143,6 +1216,43 @@ impl TerminalServiceProxy {
             return Ok(Some(response));
         }
 
+        // Check session limits before creating any new terminal session (direct PTY or helper mode)
+        if service.sessions.len() >= MAX_SESSIONS_PER_SERVICE {
+            log::warn!(
+                "Terminal service {} reached session limit ({} >= {})",
+                service.service_id,
+                service.sessions.len(),
+                MAX_SESSIONS_PER_SERVICE
+            );
+            let mut opened = TerminalOpened::new();
+            opened.terminal_id = open.terminal_id;
+            opened.success = false;
+            opened.message = format!(
+                "Maximum terminal sessions per service ({}) reached",
+                MAX_SESSIONS_PER_SERVICE
+            );
+            response.set_opened(opened);
+            return Ok(Some(response));
+        }
+
+        let total_sessions = get_terminal_session_count(false);
+        if total_sessions >= MAX_TOTAL_TERMINAL_SESSIONS {
+            log::warn!(
+                "Global terminal session limit reached ({} >= {})",
+                total_sessions,
+                MAX_TOTAL_TERMINAL_SESSIONS
+            );
+            let mut opened = TerminalOpened::new();
+            opened.terminal_id = open.terminal_id;
+            opened.success = false;
+            opened.message = format!(
+                "Global terminal session limit ({}) reached",
+                MAX_TOTAL_TERMINAL_SESSIONS
+            );
+            response.set_opened(opened);
+            return Ok(Some(response));
+        }
+
         // Windows with user_token: use helper process to run shell as the logged-in user
         // This solves the ConPTY + CreateProcessAsUserW incompatibility issue where
         // vim, Claude Code, and other TUI applications hang when ConPTY is created
@@ -1152,18 +1262,20 @@ impl TerminalServiceProxy {
             return self.handle_open_with_helper(service, open);
         }
 
+        let rows = (open.rows as u16).clamp(1, 1000);
+        let cols = (open.cols as u16).clamp(1, 1000);
+
         // Create new terminal session
         log::info!(
             "Creating new terminal {} for service {}",
             open.terminal_id,
             service.service_id
         );
-        let mut session =
-            TerminalSession::new(open.terminal_id, open.rows as u16, open.cols as u16);
+        let mut session = TerminalSession::new(open.terminal_id, rows, cols);
 
         let pty_size = PtySize {
-            rows: open.rows as u16,
-            cols: open.cols as u16,
+            rows,
+            cols,
             pixel_width: 0,
             pixel_height: 0,
         };
@@ -1379,13 +1491,15 @@ impl TerminalServiceProxy {
             service.service_id
         );
 
-        let mut session =
-            TerminalSession::new(open.terminal_id, open.rows as u16, open.cols as u16);
+        let rows = (open.rows as u16).clamp(1, 1000);
+        let cols = (open.cols as u16).clamp(1, 1000);
+
+        let mut session = TerminalSession::new(open.terminal_id, rows, cols);
 
         // Generate unique pipe names for this terminal
         let pipe_id = uuid::Uuid::new_v4();
-        let input_pipe_name = format!(r"\\.\pipe\rustdesk_term_in_{}", pipe_id);
-        let output_pipe_name = format!(r"\\.\pipe\rustdesk_term_out_{}", pipe_id);
+        let input_pipe_name = format!(r"\\.\pipe\camellia_remote_term_in_{}", pipe_id);
+        let output_pipe_name = format!(r"\\.\pipe\camellia_remote_term_out_{}", pipe_id);
 
         log::debug!(
             "Creating pipes: input={}, output={}",
@@ -1602,8 +1716,13 @@ impl TerminalServiceProxy {
         if let Some(session_arc) = session {
             let mut session = session_arc.lock().unwrap();
             session.update_activity();
-            session.rows = resize.rows as u16;
-            session.cols = resize.cols as u16;
+
+            // Clamp rows and cols to reasonable bounds to prevent zero/overflow
+            let rows = (resize.rows as u16).clamp(1, 1000);
+            let cols = (resize.cols as u16).clamp(1, 1000);
+
+            session.rows = rows;
+            session.cols = cols;
 
             // Note: we do NOT clear the sigwinch phase here. The server-side two-phase
             // SIGWINCH mechanism in read_outputs() is self-contained (temp resize → restore
@@ -1614,11 +1733,11 @@ impl TerminalServiceProxy {
             #[cfg(target_os = "windows")]
             {
                 if session.is_helper_mode {
-                    // Helper mode: send resize command via message protocol
+                    // Helper mode: send resize command via message protocol (non-blocking)
                     if let Some(input_tx) = &session.input_tx {
-                        let msg = encode_resize_message(resize.rows as u16, resize.cols as u16);
-                        if let Err(e) = input_tx.send(msg) {
-                            log::error!("Failed to send resize to helper: {}", e);
+                        let msg = encode_resize_message(rows, cols);
+                        if let Err(e) = input_tx.try_send(msg) {
+                            log::warn!("Failed to send resize to helper: {}", e);
                         }
                     } else {
                         log::warn!(
@@ -1628,25 +1747,25 @@ impl TerminalServiceProxy {
                     }
                 } else {
                     // Direct PTY mode
-                    Self::resize_pty(&session, resize)?;
+                    Self::resize_pty_clamped(&session, rows, cols)?;
                 }
             }
 
             // Non-Windows: always direct PTY mode
             #[cfg(not(target_os = "windows"))]
             {
-                Self::resize_pty(&session, resize)?;
+                Self::resize_pty_clamped(&session, rows, cols)?;
             }
         }
         Ok(None)
     }
 
-    /// Resize PTY directly (used for non-helper mode)
-    fn resize_pty(session: &TerminalSession, resize: &ResizeTerminal) -> Result<()> {
+    /// Resize PTY directly with clamped dimensions (used for non-helper mode)
+    fn resize_pty_clamped(session: &TerminalSession, rows: u16, cols: u16) -> Result<()> {
         if let Some(pty_pair) = &session.pty_pair {
             pty_pair.master.resize(PtySize {
-                rows: resize.rows as u16,
-                cols: resize.cols as u16,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })?;
@@ -1660,6 +1779,19 @@ impl TerminalServiceProxy {
         data: &TerminalData,
     ) -> Result<Option<TerminalResponse>> {
         if let Some(session_arc) = session {
+            // Enforce maximum payload size per message (64 KiB)
+            let payload = if data.data.len() > MAX_TERMINAL_DATA_PAYLOAD {
+                log::warn!(
+                    "Terminal {} received oversized data payload ({} bytes > {} bytes), truncating",
+                    data.terminal_id,
+                    data.data.len(),
+                    MAX_TERMINAL_DATA_PAYLOAD
+                );
+                &data.data[..MAX_TERMINAL_DATA_PAYLOAD]
+            } else {
+                &data.data[..]
+            };
+
             let input = {
                 let mut session = session_arc.lock().unwrap();
                 session.update_activity();
@@ -1667,12 +1799,12 @@ impl TerminalServiceProxy {
                     // Encode data for helper mode or send raw for direct PTY mode
                     #[cfg(target_os = "windows")]
                     let msg = if session.is_helper_mode {
-                        encode_helper_message(MSG_TYPE_DATA, &data.data)
+                        encode_helper_message(MSG_TYPE_DATA, payload)
                     } else {
-                        data.data.to_vec()
+                        payload.to_vec()
                     };
                     #[cfg(not(target_os = "windows"))]
-                    let msg = data.data.to_vec();
+                    let msg = payload.to_vec();
 
                     Some((input_tx, msg))
                 } else {
@@ -1681,13 +1813,18 @@ impl TerminalServiceProxy {
             };
 
             if let Some((input_tx, msg)) = input {
-                // Send outside the session lock; SyncSender::send can block when full.
-                if let Err(e) = input_tx.send(msg) {
-                    log::error!(
-                        "Failed to send data to terminal {}: {}",
-                        data.terminal_id,
-                        e
-                    );
+                // Non-blocking try_send outside the session lock to prevent connection freeze
+                match input_tx.try_send(msg) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        log::warn!(
+                            "Terminal {} input queue full (backpressure), dropping input payload",
+                            data.terminal_id
+                        );
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        log::debug!("Terminal {} input channel closed", data.terminal_id);
+                    }
                 }
             }
         }
@@ -1705,13 +1842,9 @@ impl TerminalServiceProxy {
         // Always close and remove the terminal
         if let Some(session_arc) = service.sessions.remove(&close.terminal_id) {
             let mut session = session_arc.lock().unwrap();
-            let exit_code = if let Some(mut child) = session.child.take() {
-                child.kill()?;
-                add_to_reaper(child);
-                -1 // -1 indicates forced termination
-            } else {
-                0
-            };
+            let has_child = session.child.is_some();
+            session.stop();
+            let exit_code = if has_child { -1 } else { 0 };
 
             let mut closed = TerminalClosed::new();
             closed.terminal_id = close.terminal_id;
@@ -2083,7 +2216,11 @@ impl TerminalServiceProxy {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_utf8_split_point, OutputBuffer, Utf8ChunkAccumulator, MAX_BUFFER_LINES};
+    use super::{
+        find_utf8_split_point, OutputBuffer, Utf8ChunkAccumulator, MAX_BUFFER_LINES,
+        MAX_LINE_CHUNK_SIZE, MAX_OUTPUT_BUFFER_SIZE, MAX_SESSIONS_PER_SERVICE,
+        MAX_TERMINAL_DATA_PAYLOAD, MAX_TOTAL_TERMINAL_SESSIONS,
+    };
 
     #[test]
     fn utf8_split_point_returns_full_len_for_complete_input() {
@@ -2191,5 +2328,54 @@ mod tests {
 
         let actual_size: usize = buffer.lines.iter().map(|line| line.len()).sum();
         assert_eq!(buffer.total_size, actual_size);
+    }
+
+    #[test]
+    fn output_buffer_without_newlines_enforces_strict_byte_limit() {
+        let mut buffer = OutputBuffer::new();
+
+        // Append 2 MiB of data with zero newlines (RES-022)
+        let chunk = vec![b'x'; 2 * 1024 * 1024];
+        buffer.append(&chunk);
+
+        assert!(
+            buffer.total_size <= MAX_OUTPUT_BUFFER_SIZE,
+            "total_size ({}) exceeded MAX_OUTPUT_BUFFER_SIZE ({})",
+            buffer.total_size,
+            MAX_OUTPUT_BUFFER_SIZE
+        );
+        let actual_size: usize = buffer.lines.iter().map(|line| line.len()).sum();
+        assert_eq!(buffer.total_size, actual_size);
+
+        // Verify get_recent returns exactly the requested bytes and non-empty
+        let recent = buffer.get_recent(8192);
+        assert_eq!(recent.len(), 8192);
+        assert!(recent.iter().all(|&b| b == b'x'));
+    }
+
+    #[test]
+    fn output_buffer_incremental_chunks_without_newlines_enforces_hard_cap() {
+        let mut buffer = OutputBuffer::new();
+
+        buffer.append(b"initial_incomplete");
+
+        // Append 500 chunks of 4 KiB with no newlines
+        let chunk = vec![b'z'; 4096];
+        for _ in 0..500 {
+            buffer.append(&chunk);
+            assert!(buffer.total_size <= MAX_OUTPUT_BUFFER_SIZE);
+        }
+
+        let actual_size: usize = buffer.lines.iter().map(|line| line.len()).sum();
+        assert_eq!(buffer.total_size, actual_size);
+        assert!(buffer.total_size <= MAX_OUTPUT_BUFFER_SIZE);
+        assert!(buffer.lines.len() <= MAX_BUFFER_LINES);
+    }
+
+    #[test]
+    fn terminal_constants_and_limits_consistency() {
+        assert!(MAX_SESSIONS_PER_SERVICE <= MAX_TOTAL_TERMINAL_SESSIONS);
+        assert!(MAX_TERMINAL_DATA_PAYLOAD <= 1024 * 1024);
+        assert!(MAX_LINE_CHUNK_SIZE <= MAX_OUTPUT_BUFFER_SIZE);
     }
 }
