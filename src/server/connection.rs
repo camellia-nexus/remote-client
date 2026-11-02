@@ -5713,6 +5713,23 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn change_resolution(&mut self, d: Option<usize>, r: &Resolution) {
+        // RES-027: Strictly validate resolution bounds to prevent negative casts and invalid modes
+        const MIN_RESOLUTION_DIMENSION: i32 = 100;
+        const MAX_RESOLUTION_DIMENSION: i32 = 16384;
+
+        if r.width < MIN_RESOLUTION_DIMENSION
+            || r.width > MAX_RESOLUTION_DIMENSION
+            || r.height < MIN_RESOLUTION_DIMENSION
+            || r.height > MAX_RESOLUTION_DIMENSION
+        {
+            log::warn!(
+                "Rejecting out-of-bounds resolution change request: {}x{}",
+                r.width,
+                r.height
+            );
+            return;
+        }
+
         if self.keyboard {
             if let Ok(displays) = display_service::try_get_displays() {
                 let display_idx = d.unwrap_or(self.display_idx);

@@ -1588,8 +1588,17 @@ pub fn current_resolution(name: &str) -> ResultType<Resolution> {
     bail!("Failed to find current resolution for {}", name);
 }
 
+lazy_static::lazy_static! {
+    static ref XRANDR_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
 pub fn change_resolution_directly(name: &str, width: usize, height: usize) -> ResultType<()> {
-    Command::new("xrandr")
+    // RES-027: Serialize xrandr executions to prevent process storms and wait with deadline to reap zombies
+    let _guard = XRANDR_MUTEX
+        .lock()
+        .map_err(|_| anyhow!("xrandr mutex poisoned"))?;
+
+    let mut child = Command::new("xrandr")
         .args(vec![
             "--output",
             name,
@@ -1597,7 +1606,28 @@ pub fn change_resolution_directly(name: &str, width: usize, height: usize) -> Re
             &format!("{}x{}", width, height),
         ])
         .spawn()?;
-    Ok(())
+
+    // Wait with bounded deadline to reap child exit status and prevent zombie accumulation
+    let start = Instant::now();
+    let timeout = Duration::from_secs(3);
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                if !status.success() {
+                    bail!("xrandr exited with non-zero status: {}", status);
+                }
+                return Ok(());
+            }
+            None => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("xrandr execution timed out after 3s");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 #[inline]

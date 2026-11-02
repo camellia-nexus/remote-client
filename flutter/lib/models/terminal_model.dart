@@ -37,10 +37,21 @@ class TerminalModel with ChangeNotifier {
   void Function()? clearAltLock;
 
   final _inputBuffer = <String>[];
+  static const int _kMaxPreopenBufferChars = 16 * 1024;
+  int _preopenBufferedChars = 0;
+  int _openGeneration = 0;
 
   /// Exposes buffered input only for lifecycle regression tests.
   @visibleForTesting
   int get debugBufferedInputCount => _inputBuffer.length;
+
+  /// Exposes pre-open buffered characters only for lifecycle regression tests.
+  @visibleForTesting
+  int get debugPreopenBufferedChars => _preopenBufferedChars;
+
+  /// Exposes open generation only for lifecycle regression tests.
+  @visibleForTesting
+  int get debugOpenGeneration => _openGeneration;
 
   // Buffer for output data received before terminal view has valid dimensions.
   // This prevents NaN errors when writing to terminal before layout is complete.
@@ -122,8 +133,23 @@ class TerminalModel with ChangeNotifier {
         debugPrint('[TerminalModel] Error sending terminal input: $e');
       }
     } else {
-      debugPrint('[TerminalModel] Terminal not opened yet, buffering input');
-      _inputBuffer.add(data);
+      final available = _kMaxPreopenBufferChars - _preopenBufferedChars;
+      if (available <= 0) {
+        debugPrint(
+            '[TerminalModel] Pre-open input buffer full ($_kMaxPreopenBufferChars chars), dropping input');
+        return;
+      }
+      if (data.length <= available) {
+        debugPrint('[TerminalModel] Terminal not opened yet, buffering input');
+        _inputBuffer.add(data);
+        _preopenBufferedChars += data.length;
+      } else {
+        debugPrint(
+            '[TerminalModel] Terminal not opened yet, buffering partial input ($available of ${data.length} chars)');
+        final chunk = data.substring(0, available);
+        _inputBuffer.add(chunk);
+        _preopenBufferedChars += chunk.length;
+      }
     }
   }
 
@@ -371,6 +397,12 @@ class TerminalModel with ChangeNotifier {
   }
 
   void _handleTerminalOpened(Map<String, dynamic> evt) {
+    if (_disposed) {
+      debugPrint(
+          '[TerminalModel] Terminal opened response ignored for disposed model');
+      return;
+    }
+
     final bool success = getSuccessFromEvt(evt);
     final String message = evt['message']?.toString() ?? '';
     final String? serviceId = evt['service_id']?.toString();
@@ -379,6 +411,7 @@ class TerminalModel with ChangeNotifier {
         '[TerminalModel] Terminal opened response: success=$success, message=$message, service_id=$serviceId');
 
     if (success) {
+      _openGeneration++;
       _terminalOpened = true;
 
       // On reconnect, the server may replay recent output. That replay can include
@@ -399,10 +432,10 @@ class TerminalModel with ChangeNotifier {
 
       // Process any buffered input
       _processBufferedInputAsync().then((_) {
-        notifyListeners();
+        if (!_disposed) notifyListeners();
       }).catchError((e) {
         debugPrint('[TerminalModel] Error processing buffered input: $e');
-        notifyListeners();
+        if (!_disposed) notifyListeners();
       });
 
       final persistentSessions =
@@ -420,15 +453,24 @@ class TerminalModel with ChangeNotifier {
             }));
       }
     } else {
+      _inputBuffer.clear();
+      _preopenBufferedChars = 0;
       _writeToTerminal('Failed to open terminal: $message\r\n');
     }
   }
 
   Future<void> _processBufferedInputAsync() async {
+    final gen = _openGeneration;
     final buffer = List<String>.from(_inputBuffer);
     _inputBuffer.clear();
+    _preopenBufferedChars = 0;
 
     for (final data in buffer) {
+      if (_disposed || _openGeneration != gen) {
+        debugPrint(
+            '[TerminalModel] Aborting buffered input flush: model disposed or generation changed');
+        return;
+      }
       try {
         await bind.sessionSendTerminalInput(
           sessionId: parent.sessionId,
@@ -582,6 +624,7 @@ class TerminalModel with ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _openGeneration++;
     terminal.onOutput = null;
     terminal.onResize = null;
     isCtrlLocked = null;
@@ -592,6 +635,7 @@ class TerminalModel with ChangeNotifier {
     onClosed = null;
     // Clear buffers to free memory
     _inputBuffer.clear();
+    _preopenBufferedChars = 0;
     _pendingOutputChunks.clear();
     _pendingOutputSuppressFlags.clear();
     _pendingOutputSize = 0;

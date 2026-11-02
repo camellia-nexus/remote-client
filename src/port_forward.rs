@@ -1,19 +1,36 @@
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use crate::client::*;
 use camellia_remote_protocol::{
     allow_err, bail,
-    config::READ_TIMEOUT,
     futures::{SinkExt, StreamExt},
     log,
     message_proto::*,
     protobuf::Message as _,
     rendezvous_proto::ConnType,
-    tcp, timeout,
+    tcp,
     tokio::{self, net::TcpStream, sync::mpsc},
-    tokio_util::codec::{BytesCodec, Framed},
+    tokio_util::{
+        codec::{BytesCodec, Framed},
+        sync::CancellationToken,
+    },
     ResultType, Stream,
 };
+
+pub const MAX_ACTIVE_TUNNELS_PER_LISTENER: usize = 32;
+pub const MAX_GLOBAL_ACTIVE_TUNNELS: usize = 128;
+pub const MAX_PRELOGIN_BUFFER_BYTES: usize = 64 * 1024; // 64 KiB
+pub const PRELOGIN_DEADLINE: Duration = Duration::from_secs(30);
+
+lazy_static::lazy_static! {
+    static ref GLOBAL_TUNNEL_SEMAPHORE: Arc<tokio::sync::Semaphore> =
+        Arc::new(tokio::sync::Semaphore::new(MAX_GLOBAL_ACTIVE_TUNNELS));
+}
+
+pub fn get_global_available_permits() -> usize {
+    GLOBAL_TUNNEL_SEMAPHORE.available_permits()
+}
 
 fn run_rdp(port: u16) {
     std::process::Command::new("cmdkey")
@@ -61,41 +78,100 @@ pub async fn listen(
         run_rdp(addr.port());
     }
     let mut ui_receiver = ui_receiver;
+    let listener_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_ACTIVE_TUNNELS_PER_LISTENER));
+    let cancel_token = CancellationToken::new();
+
     loop {
         tokio::select! {
-            Ok((forward, addr)) = listener.accept() => {
-                log::info!("new connection from {:?}", addr);
-                lc.write().unwrap().port_forward = (remote_host.clone(), remote_port);
-                let id = id.clone();
-                let password = password.clone();
-                let mut forward = Framed::new(forward, BytesCodec::new());
-                let mut close_port_forward = false;
-                match connect_and_login(&id, &password, &mut ui_receiver, interface.clone(), &mut forward, key, token, is_rdp, &mut close_port_forward).await {
-                    Ok(Some(stream)) => {
-                        let interface = interface.clone();
-                        tokio::spawn(async move {
-                            if let Err(err) = run_forward(forward, stream).await {
-                                interface.msgbox("error", "Error", &err.to_string(), "");
+            accept_res = listener.accept() => {
+                match accept_res {
+                    Ok((forward, addr)) => {
+                        log::info!("new connection from {:?}", addr);
+
+                        // Bound active tunnel capacity per listener and globally (RES-024)
+                        let global_permit = match GLOBAL_TUNNEL_SEMAPHORE.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                log::warn!(
+                                    "Global port forward capacity reached ({} tunnels), dropping connection from {:?}",
+                                    MAX_GLOBAL_ACTIVE_TUNNELS,
+                                    addr
+                                );
+                                continue;
                             }
-                            log::info!("connection from {:?} closed", addr);
-                       });
+                        };
+                        let listener_permit = match listener_semaphore.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                log::warn!(
+                                    "Listener port forward capacity reached ({} tunnels), dropping connection from {:?}",
+                                    MAX_ACTIVE_TUNNELS_PER_LISTENER,
+                                    addr
+                                );
+                                continue;
+                            }
+                        };
+
+                        lc.write().unwrap().port_forward = (remote_host.clone(), remote_port);
+                        let id = id.clone();
+                        let password = password.clone();
+                        let mut forward = Framed::new(forward, BytesCodec::new());
+                        let mut close_port_forward = false;
+                        let tunnel_cancel = cancel_token.child_token();
+
+                        match connect_and_login(
+                            &id,
+                            &password,
+                            &mut ui_receiver,
+                            interface.clone(),
+                            &mut forward,
+                            key,
+                            token,
+                            is_rdp,
+                            &mut close_port_forward,
+                            &tunnel_cancel,
+                        ).await {
+                            Ok(Some(stream)) => {
+                                let interface = interface.clone();
+                                tokio::spawn(async move {
+                                    let _gp = global_permit;
+                                    let _lp = listener_permit;
+                                    tokio::select! {
+                                        _ = tunnel_cancel.cancelled() => {
+                                            log::info!("tunnel from {:?} cancelled by listener teardown", addr);
+                                        }
+                                        res = run_forward(forward, stream) => {
+                                            if let Err(err) = res {
+                                                interface.msgbox("error", "Error", &err.to_string(), "");
+                                            }
+                                        }
+                                    }
+                                    log::info!("connection from {:?} closed", addr);
+                                });
+                            }
+                            _ if close_port_forward => {
+                                break;
+                            }
+                            Err(err) => {
+                                interface.on_establish_connection_error(err.to_string());
+                            }
+                            _ => {}
+                        }
                     }
-                    _ if close_port_forward => {
+                    Err(e) => {
+                        log::error!("port forward listener accept failed: {:?}", e);
                         break;
                     }
-                    Err(err) => {
-                        interface.on_establish_connection_error(err.to_string());
-                    }
-                    _ => {}
                 }
             }
             d = ui_receiver.recv() => {
                 match d {
-                    Some(Data::Close) => {
+                    Some(Data::Close) | None => {
+                        log::info!("port forward listener on {:?} received close or channel EOF", addr);
                         break;
                     }
                     Some(Data::NewRDP) => {
-                        println!("receive run_rdp from ui_receiver");
+                        log::info!("receive run_rdp from ui_receiver");
                         run_rdp(addr.port());
                     }
                     _ => {}
@@ -103,6 +179,7 @@ pub async fn listen(
             }
         }
     }
+    cancel_token.cancel();
     Ok(())
 }
 
@@ -116,6 +193,7 @@ async fn connect_and_login(
     token: &str,
     is_rdp: bool,
     close_port_forward: &mut bool,
+    cancel_token: &CancellationToken,
 ) -> ResultType<Option<Stream>> {
     let conn_type = if is_rdp {
         ConnType::RDP
@@ -136,13 +214,19 @@ async fn connect_and_login(
 
     let _keep_it = hc_connection(feedback, rendezvous_server, token).await;
 
+    // RES-024: Enforce an immutable absolute deadline for the entire login sequence
+    let deadline = tokio::time::Instant::now() + PRELOGIN_DEADLINE;
+
     loop {
         tokio::select! {
-            res = timeout(READ_TIMEOUT, stream.next()) => match res {
-                Err(_) => {
-                    bail!("Timeout");
-                }
-                Ok(Some(Ok(bytes))) => {
+            _ = cancel_token.cancelled() => {
+                bail!("Port-forward connection cancelled");
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                bail!("Port-forward login deadline exceeded (30s)");
+            }
+            res = stream.next() => match res {
+                Some(Ok(bytes)) => {
                     if !received {
                         received = true;
                         interface.update_received(true);
@@ -170,10 +254,10 @@ async fn connect_and_login(
                         _ => {}
                     }
                 }
-                Ok(Some(Err(err))) => {
+                Some(Err(err)) => {
                     bail!("Connection closed: {}", err);
                 }
-                _ => {
+                None => {
                     bail!("Reset by the peer");
                 }
             },
@@ -185,12 +269,23 @@ async fn connect_and_login(
                     Some(Data::Message(msg)) => {
                         allow_err!(stream.send(&msg).await);
                     }
+                    Some(Data::Close) | None => {
+                        *close_port_forward = true;
+                        return Ok(None);
+                    }
                     _ => {}
                 }
             },
-            res = forward.next() => {
+            res = forward.next(), if buffer.len() < MAX_PRELOGIN_BUFFER_BYTES => {
                 if let Some(Ok(bytes)) = res {
-                    buffer.extend(bytes);
+                    let to_take = (MAX_PRELOGIN_BUFFER_BYTES - buffer.len()).min(bytes.len());
+                    buffer.extend_from_slice(&bytes[..to_take]);
+                    if buffer.len() >= MAX_PRELOGIN_BUFFER_BYTES {
+                        log::warn!(
+                            "Prelogin buffer limit reached ({} bytes), pausing local reads until login succeeds",
+                            MAX_PRELOGIN_BUFFER_BYTES
+                        );
+                    }
                 } else {
                     return Ok(None);
                 }
@@ -211,17 +306,25 @@ async fn run_forward(forward: Framed<TcpStream, BytesCodec>, stream: Stream) -> 
     loop {
         tokio::select! {
             res = forward.next() => {
-                if let Some(Ok(bytes)) = res {
-                    allow_err!(stream.send_bytes(bytes.into()).await);
-                } else {
-                    break;
+                match res {
+                    Some(Ok(bytes)) => {
+                        if let Err(e) = stream.send_bytes(bytes.into()).await {
+                            log::debug!("port forward stream send failed: {:?}", e);
+                            break;
+                        }
+                    }
+                    _ => break,
                 }
             },
             res = stream.next() => {
-                if let Some(Ok(bytes)) = res {
-                    allow_err!(forward.send(bytes).await);
-                } else {
-                    break;
+                match res {
+                    Some(Ok(bytes)) => {
+                        if let Err(e) = forward.send(bytes).await {
+                            log::debug!("port forward local socket send failed: {:?}", e);
+                            break;
+                        }
+                    }
+                    _ => break,
                 }
             },
         }

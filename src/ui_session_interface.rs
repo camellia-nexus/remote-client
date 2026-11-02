@@ -1863,6 +1863,10 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                         if port <= 0 || remote_port <= 0 {
                             continue;
                         }
+                        // RES-024: Close previous listener on the same port before re-adding to prevent orphan task leaks
+                        if let Some(old_s) = queues.remove(&port) {
+                            old_s.send(Data::Close).ok();
+                        }
                         let (sender, receiver) = mpsc::unbounded_channel::<Data>();
                         queues.insert(port, sender);
                         let handler = handler.clone();
@@ -1886,7 +1890,10 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                             s.send(Data::Close).ok();
                         }
                     }
-                    Some(Data::Close) => {
+                    Some(Data::Close) | None => {
+                        for (_, s) in queues.drain() {
+                            s.send(Data::Close).ok();
+                        }
                         break;
                     }
                     Some(d) => {
@@ -1894,7 +1901,6 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
                             s.send(d.clone()).ok();
                         }
                     }
-                    _ => {}
                 }
             }
         } else {
