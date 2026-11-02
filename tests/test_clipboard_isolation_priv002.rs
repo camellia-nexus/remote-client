@@ -2,7 +2,10 @@ use clipboard::{
     next_connection_generation, ClipboardFileOpId, ClipboardOpGuard, GLOBAL_CLIPBOARD_OP_MGR,
 };
 use std::collections::HashSet;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_clipboard_file_op_id_uniqueness() {
@@ -16,6 +19,7 @@ fn test_clipboard_file_op_id_uniqueness() {
 
 #[test]
 fn test_clipboard_generational_binding_and_validation() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let conn_id = 42;
@@ -63,6 +67,7 @@ fn test_clipboard_generational_binding_and_validation() {
 
 #[test]
 fn test_clipboard_operation_ttl_expiration() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let conn_id = 99;

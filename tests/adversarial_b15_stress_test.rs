@@ -8,8 +8,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Barrier,
+    Arc, Barrier, Mutex,
 };
+
+static CLIPBOARD_TEST_MUTEX: Mutex<()> = Mutex::new(());
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -182,6 +184,9 @@ fn test_adversarial_voice_call_id_entropy_and_replay_resistance() {
 
 #[test]
 fn test_adversarial_clipboard_cross_session_hijack_rejection() {
+    let _guard = CLIPBOARD_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let session_a_conn = 100;
@@ -249,6 +254,9 @@ fn test_adversarial_clipboard_cross_session_hijack_rejection() {
 
 #[test]
 fn test_adversarial_clipboard_ttl_strict_expiration_and_cancellation() {
+    let _guard = CLIPBOARD_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let conn_id = 300;
@@ -314,6 +322,9 @@ fn test_adversarial_clipboard_ttl_strict_expiration_and_cancellation() {
 
 #[test]
 fn test_adversarial_clipboard_reconnect_generation_bump_and_delayed_packets() {
+    let _guard = CLIPBOARD_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let conn_id = 500;
@@ -361,6 +372,9 @@ fn test_adversarial_clipboard_reconnect_generation_bump_and_delayed_packets() {
 
 #[test]
 fn test_adversarial_clipboard_concurrent_stress_load() {
+    let _guard = CLIPBOARD_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     GLOBAL_CLIPBOARD_OP_MGR.write().take();
 
     let num_threads = 32;
