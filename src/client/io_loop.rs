@@ -70,6 +70,7 @@ pub const MAX_VOICE_OUTBOUND_QUEUE_FRAMES: usize = 32;
 pub const MAX_VOICE_OUTBOUND_QUEUE_BYTES: usize = 64 * 1024; // 64 KiB
 
 pub struct VoiceCallWorker {
+    #[cfg(not(any(target_os = "ios")))]
     pub conn_inner: ConnInner,
     pub cancel_token: Arc<AtomicBool>,
     pub join_handle: Option<std::thread::JoinHandle<()>>,

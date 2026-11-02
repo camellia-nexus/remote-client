@@ -21,8 +21,7 @@ use std::{
     str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, RecvTimeoutError},
-        Arc, Condvar, Mutex, RwLock,
+        mpsc, Arc, Condvar, Mutex, RwLock,
     },
     time::Duration,
 };
@@ -995,8 +994,8 @@ impl Client {
                         log::error!("Clipboard listener stopped with error: {}", err);
                         break;
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
                         log::error!("Clipboard listener disconnected");
                         break;
                     }

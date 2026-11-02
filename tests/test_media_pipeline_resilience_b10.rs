@@ -277,6 +277,7 @@ fn test_voice_call_worker_lifecycle_and_teardown_res_014() {
         .unwrap();
 
     let mut worker = VoiceCallWorker {
+        #[cfg(not(any(target_os = "ios")))]
         conn_inner: ConnInner::new(999, None, None),
         cancel_token,
         join_handle: Some(handle),
