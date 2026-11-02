@@ -15,7 +15,7 @@ pub use platform::{
 pub mod server;
 #[cfg(not(any(target_os = "ios")))]
 pub use self::server::*;
-mod client;
+pub mod client;
 mod lan;
 #[cfg(not(any(target_os = "ios")))]
 mod rendezvous_mediator;

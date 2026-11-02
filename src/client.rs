@@ -9,21 +9,22 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Host, StreamConfig,
 };
-use crossbeam_queue::ArrayQueue;
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(target_os = "linux"))]
 use ringbuf::traits::{Consumer, Observer, RingBuffer};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ffi::c_void,
     net::SocketAddr,
     ops::Deref,
     str::FromStr,
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
-        Arc, Mutex, RwLock,
+        Arc, Condvar, Mutex, RwLock,
     },
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -66,7 +67,7 @@ use camellia_remote_protocol::{
             mpsc::{unbounded_channel, UnboundedReceiver},
             oneshot,
         },
-        time::{interval, Duration, Instant},
+        time::{interval, Instant},
     },
     AddrMangle, ResultType, Stream,
 };
@@ -94,7 +95,6 @@ pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 // Empirical restart reconnect grace window.
 const RESTART_REMOTE_DEVICE_GRACE: Duration = Duration::from_secs(5 * 60);
-pub const VIDEO_QUEUE_SIZE: usize = 120;
 const MAX_DECODE_FAIL_COUNTER: usize = 3;
 
 #[cfg(target_os = "linux")]
@@ -1345,6 +1345,10 @@ impl AudioHandler {
             log::error!("Unsupported audio channel count: {}", f.channels);
             return;
         }
+        if !is_supported_audio_sample_rate(f.sample_rate) {
+            log::error!("Unsupported audio sample rate: {}", f.sample_rate);
+            return;
+        }
         match AudioDecoder::new(f.sample_rate, if f.channels > 1 { Stereo } else { Mono }) {
             Ok(d) => {
                 let buffer = vec![0.; f.sample_rate as usize * f.channels as usize];
@@ -1539,13 +1543,17 @@ mod secure_handshake_tests {
     }
 }
 
-fn is_supported_audio_channel_count(channels: u32) -> bool {
+pub fn is_supported_audio_channel_count(channels: u32) -> bool {
     (1..=2).contains(&channels)
+}
+
+pub fn is_supported_audio_sample_rate(sample_rate: u32) -> bool {
+    matches!(sample_rate, 8000 | 12000 | 16000 | 24000 | 48000)
 }
 
 #[cfg(test)]
 mod audio_format_tests {
-    use super::is_supported_audio_channel_count;
+    use super::{is_supported_audio_channel_count, is_supported_audio_sample_rate};
 
     #[test]
     fn only_mono_and_stereo_are_supported() {
@@ -1553,6 +1561,19 @@ mod audio_format_tests {
         assert!(is_supported_audio_channel_count(2));
         assert!(!is_supported_audio_channel_count(0));
         assert!(!is_supported_audio_channel_count(u32::MAX));
+    }
+
+    #[test]
+    fn supported_audio_sample_rates() {
+        assert!(is_supported_audio_sample_rate(8000));
+        assert!(is_supported_audio_sample_rate(12000));
+        assert!(is_supported_audio_sample_rate(16000));
+        assert!(is_supported_audio_sample_rate(24000));
+        assert!(is_supported_audio_sample_rate(48000));
+        assert!(!is_supported_audio_sample_rate(0));
+        assert!(!is_supported_audio_sample_rate(44100));
+        assert!(!is_supported_audio_sample_rate(96000));
+        assert!(!is_supported_audio_sample_rate(u32::MAX));
     }
 }
 
@@ -2850,7 +2871,7 @@ impl LoginConfigHandler {
     }
 }
 
-/// Media data.
+/// Media data (preserved for compatibility).
 pub enum MediaData {
     VideoQueue,
     VideoFrame(Box<VideoFrame>),
@@ -2862,6 +2883,470 @@ pub enum MediaData {
 
 pub type MediaSender = mpsc::Sender<MediaData>;
 
+// ============================================================================
+// RES-013: Audio Bounded Queue & Reconfigurable Worker
+// ============================================================================
+
+pub const MAX_AUDIO_QUEUE_FRAMES: usize = 128;
+pub const MAX_AUDIO_QUEUE_BYTES: usize = 512 * 1024; // 512 KiB
+pub const MAX_AUDIO_FRAME_BYTES: usize = 8192; // 8 KiB per wire frame
+
+pub enum AudioCommand {
+    Format(AudioFormat, u64),
+    Frame(Box<AudioFrame>, u64),
+}
+
+impl AudioCommand {
+    pub fn payload_len(&self) -> usize {
+        match self {
+            AudioCommand::Format(..) => 0,
+            AudioCommand::Frame(frame, _) => frame.data.len(),
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        match self {
+            AudioCommand::Format(_, gen) => *gen,
+            AudioCommand::Frame(_, gen) => *gen,
+        }
+    }
+}
+
+struct AudioQueueState {
+    queue: VecDeque<AudioCommand>,
+    total_bytes: usize,
+    generation: u64,
+    dropped_frames: usize,
+}
+
+pub struct AudioQueue {
+    state: Mutex<AudioQueueState>,
+    condvar: Condvar,
+}
+
+impl AudioQueue {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(AudioQueueState {
+                queue: VecDeque::with_capacity(MAX_AUDIO_QUEUE_FRAMES),
+                total_bytes: 0,
+                generation: 1,
+                dropped_frames: 0,
+            }),
+            condvar: Condvar::new(),
+        }
+    }
+
+    /// Push an audio frame with head-drop eviction for real-time latency
+    pub fn push_frame(&self, frame: Box<AudioFrame>) -> bool {
+        let frame_len = frame.data.len();
+        if frame_len == 0 || frame_len > MAX_AUDIO_FRAME_BYTES {
+            log::warn!(
+                "Rejected audio frame payload size: {} bytes (max {})",
+                frame_len,
+                MAX_AUDIO_FRAME_BYTES
+            );
+            return false;
+        }
+
+        let mut lock = self.state.lock().unwrap();
+        let gen = lock.generation;
+
+        // Evict oldest frames if bounds exceeded (head-drop eviction for real-time playback)
+        while !lock.queue.is_empty()
+            && (lock.queue.len() >= MAX_AUDIO_QUEUE_FRAMES
+                || lock.total_bytes + frame_len > MAX_AUDIO_QUEUE_BYTES)
+        {
+            if let Some(evicted) = lock.queue.pop_front() {
+                lock.total_bytes = lock.total_bytes.saturating_sub(evicted.payload_len());
+                lock.dropped_frames += 1;
+            }
+        }
+
+        lock.total_bytes += frame_len;
+        lock.queue.push_back(AudioCommand::Frame(frame, gen));
+        self.condvar.notify_one();
+        true
+    }
+
+    /// Set a new audio format as an atomic generation barrier, purging stale frames from older formats
+    pub fn set_format(&self, format: AudioFormat) -> bool {
+        if !is_supported_audio_channel_count(format.channels) {
+            log::error!("Rejected unsupported audio channels: {}", format.channels);
+            return false;
+        }
+        if !is_supported_audio_sample_rate(format.sample_rate) {
+            log::error!(
+                "Rejected unsupported audio sample rate: {}",
+                format.sample_rate
+            );
+            return false;
+        }
+
+        let mut lock = self.state.lock().unwrap();
+        lock.generation = lock.generation.wrapping_add(1);
+        let new_gen = lock.generation;
+
+        // Atomically drain/clear old queued frames across format change
+        lock.queue.clear();
+        lock.total_bytes = 0;
+
+        lock.queue.push_back(AudioCommand::Format(format, new_gen));
+        self.condvar.notify_one();
+        true
+    }
+
+    /// Clear all pending frames and advance generation (e.g. on mute or permission revoke)
+    pub fn clear(&self) {
+        let mut lock = self.state.lock().unwrap();
+        lock.generation = lock.generation.wrapping_add(1);
+        lock.queue.clear();
+        lock.total_bytes = 0;
+        self.condvar.notify_all();
+    }
+
+    /// Pop next command or wait up to timeout
+    pub fn pop_timeout(&self, timeout: Duration) -> Option<AudioCommand> {
+        let mut lock = self.state.lock().unwrap();
+        loop {
+            if let Some(cmd) = lock.queue.pop_front() {
+                lock.total_bytes = lock.total_bytes.saturating_sub(cmd.payload_len());
+                return Some(cmd);
+            }
+            let (new_lock, result) = self.condvar.wait_timeout(lock, timeout).unwrap();
+            lock = new_lock;
+            if result.timed_out() {
+                return None;
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.lock().unwrap().queue.len()
+    }
+
+    pub fn total_bytes(&self) -> usize {
+        self.state.lock().unwrap().total_bytes
+    }
+
+    pub fn dropped_frames(&self) -> usize {
+        self.state.lock().unwrap().dropped_frames
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.state.lock().unwrap().generation
+    }
+}
+
+impl Default for AudioQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct AudioWorker {
+    queue: Arc<AudioQueue>,
+    cancellation_token: Arc<AtomicBool>,
+    join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AudioWorker {
+    pub fn start() -> Self {
+        let queue = Arc::new(AudioQueue::new());
+        let cancellation_token = Arc::new(AtomicBool::new(false));
+
+        let q = queue.clone();
+        let cancel = cancellation_token.clone();
+
+        let handle = std::thread::Builder::new()
+            .name("audio_worker".to_string())
+            .spawn(move || {
+                let mut audio_handler = AudioHandler::default();
+                let mut active_generation = 0u64;
+
+                while !cancel.load(Ordering::Relaxed) {
+                    if let Some(cmd) = q.pop_timeout(Duration::from_millis(100)) {
+                        if cmd.generation() < active_generation {
+                            // Stale generation command discarded
+                            continue;
+                        }
+
+                        match cmd {
+                            AudioCommand::Format(f, gen) => {
+                                log::debug!(
+                                    "Re-initializing audio handler in-place: {} Hz, {} ch (gen {})",
+                                    f.sample_rate,
+                                    f.channels,
+                                    gen
+                                );
+                                active_generation = gen;
+                                audio_handler.handle_format(f);
+                            }
+                            AudioCommand::Frame(frame, _gen) => {
+                                audio_handler.handle_frame(*frame);
+                            }
+                        }
+                    }
+                }
+                log::info!("Audio worker thread exits cleanly");
+            })
+            .expect("Failed to spawn audio worker thread");
+
+        Self {
+            queue,
+            cancellation_token,
+            join_handle: Some(handle),
+        }
+    }
+
+    pub fn queue(&self) -> &Arc<AudioQueue> {
+        &self.queue
+    }
+
+    pub fn stop(&mut self) {
+        self.stop_with_timeout(Duration::from_millis(500));
+    }
+
+    pub fn stop_with_timeout(&mut self, timeout: Duration) {
+        self.cancellation_token.store(true, Ordering::SeqCst);
+        self.queue.clear();
+        if let Some(handle) = self.join_handle.take() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let joiner = std::thread::spawn(move || {
+                let res = handle.join();
+                let _ = tx.send(res);
+            });
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(())) => {
+                    let _ = joiner.join();
+                    log::debug!("Audio worker joined cleanly");
+                }
+                Ok(Err(_panic)) => {
+                    let _ = joiner.join();
+                    log::warn!("Audio worker panicked on join");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    log::warn!(
+                        "Audio worker join exceeded deadline of {:?}; detached",
+                        timeout
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            }
+        }
+    }
+}
+
+impl Drop for AudioWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Start an audio thread and return an [`AudioWorker`]
+pub fn start_audio_thread() -> AudioWorker {
+    AudioWorker::start()
+}
+
+// ============================================================================
+// RES-015: Video Display Bounds & Unified Bounded Queue
+// ============================================================================
+
+pub const MAX_VIDEO_QUEUE_FRAMES: usize = 30;
+pub const MAX_VIDEO_QUEUE_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+pub const MAX_DISPLAY_DECODERS: usize = 16;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum VideoQueuePushResult {
+    Pushed,
+    PurgedBacklogAndPushedKeyframe,
+    DroppedOverloadNeedRefresh,
+    DroppedWaitingForKeyframe,
+}
+
+pub enum VideoCommand {
+    Frame(Box<VideoFrame>, u64),
+    Reset,
+    RecordScreen(bool),
+}
+
+impl VideoCommand {
+    pub fn payload_len(&self) -> usize {
+        match self {
+            VideoCommand::Frame(frame, _) => get_video_frame_bytes(frame),
+            _ => 0,
+        }
+    }
+}
+
+pub fn get_video_frame_bytes(vf: &VideoFrame) -> usize {
+    use video_frame::Union::*;
+    match &vf.union {
+        Some(Vp8s(f)) | Some(Vp9s(f)) | Some(Av1s(f)) | Some(H264s(f)) | Some(H265s(f)) => {
+            f.frames.iter().map(|e| e.data.len()).sum()
+        }
+        Some(Rgb(_)) | Some(Yuv(_)) => 1024,
+        Some(_) => 1024,
+        None => 0,
+    }
+}
+
+struct VideoQueueState {
+    items: VecDeque<VideoCommand>,
+    total_bytes: usize,
+    generation: u64,
+    waiting_for_keyframe: bool,
+    dropped_frames: usize,
+}
+
+pub struct VideoQueue {
+    state: Mutex<VideoQueueState>,
+    condvar: Condvar,
+}
+
+impl VideoQueue {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(VideoQueueState {
+                items: VecDeque::with_capacity(MAX_VIDEO_QUEUE_FRAMES),
+                total_bytes: 0,
+                generation: 1,
+                waiting_for_keyframe: false,
+                dropped_frames: 0,
+            }),
+            condvar: Condvar::new(),
+        }
+    }
+
+    pub fn push_frame(&self, frame: Box<VideoFrame>, is_key: bool) -> VideoQueuePushResult {
+        let frame_bytes = get_video_frame_bytes(&frame);
+        let mut lock = self.state.lock().unwrap();
+
+        if is_key {
+            // Keyframe arrived: purge stale delta backlog (zero latency lag), reset bytes, advance generation
+            let old_frames = lock
+                .items
+                .iter()
+                .filter(|item| matches!(item, VideoCommand::Frame(..)))
+                .count();
+
+            lock.items
+                .retain(|item| !matches!(item, VideoCommand::Frame(..)));
+            lock.total_bytes = 0;
+            lock.generation = lock.generation.wrapping_add(1);
+            let gen = lock.generation;
+            lock.waiting_for_keyframe = false;
+
+            lock.items.push_back(VideoCommand::Frame(frame, gen));
+            lock.total_bytes += frame_bytes;
+            self.condvar.notify_one();
+
+            if old_frames > 0 {
+                VideoQueuePushResult::PurgedBacklogAndPushedKeyframe
+            } else {
+                VideoQueuePushResult::Pushed
+            }
+        } else {
+            // Delta frame
+            if lock.waiting_for_keyframe {
+                lock.dropped_frames += 1;
+                return VideoQueuePushResult::DroppedWaitingForKeyframe;
+            }
+
+            if lock.items.len() + 1 > MAX_VIDEO_QUEUE_FRAMES
+                || lock.total_bytes + frame_bytes > MAX_VIDEO_QUEUE_BYTES
+            {
+                // Overload: evict stale deltas, enter waiting_for_keyframe state, drop frame
+                lock.waiting_for_keyframe = true;
+                lock.items
+                    .retain(|item| !matches!(item, VideoCommand::Frame(..)));
+                lock.total_bytes = 0;
+                lock.dropped_frames += 1;
+                return VideoQueuePushResult::DroppedOverloadNeedRefresh;
+            }
+
+            let gen = lock.generation;
+            lock.items.push_back(VideoCommand::Frame(frame, gen));
+            lock.total_bytes += frame_bytes;
+            self.condvar.notify_one();
+            VideoQueuePushResult::Pushed
+        }
+    }
+
+    pub fn push_reset(&self) {
+        let mut lock = self.state.lock().unwrap();
+        lock.items.push_back(VideoCommand::Reset);
+        self.condvar.notify_one();
+    }
+
+    pub fn push_record_screen(&self, start: bool) {
+        let mut lock = self.state.lock().unwrap();
+        lock.items.push_back(VideoCommand::RecordScreen(start));
+        self.condvar.notify_one();
+    }
+
+    pub fn pop_timeout(&self, timeout: Duration) -> Option<VideoCommand> {
+        let mut lock = self.state.lock().unwrap();
+        loop {
+            if let Some(cmd) = lock.items.pop_front() {
+                lock.total_bytes = lock.total_bytes.saturating_sub(cmd.payload_len());
+                return Some(cmd);
+            }
+            let (new_lock, result) = self.condvar.wait_timeout(lock, timeout).unwrap();
+            lock = new_lock;
+            if result.timed_out() {
+                return None;
+            }
+        }
+    }
+
+    pub fn clear(&self) {
+        let mut lock = self.state.lock().unwrap();
+        lock.items.clear();
+        lock.total_bytes = 0;
+        lock.generation = lock.generation.wrapping_add(1);
+        self.condvar.notify_all();
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.lock().unwrap().items.len()
+    }
+
+    pub fn total_bytes(&self) -> usize {
+        self.state.lock().unwrap().total_bytes
+    }
+
+    pub fn dropped_frames(&self) -> usize {
+        self.state.lock().unwrap().dropped_frames
+    }
+
+    pub fn is_waiting_for_keyframe(&self) -> bool {
+        self.state.lock().unwrap().waiting_for_keyframe
+    }
+
+    pub fn request_refresh(&self) {
+        let mut lock = self.state.lock().unwrap();
+        lock.waiting_for_keyframe = true;
+        lock.items
+            .retain(|item| !matches!(item, VideoCommand::Frame(..)));
+        lock.total_bytes = 0;
+    }
+
+    pub fn capacity(&self) -> usize {
+        MAX_VIDEO_QUEUE_FRAMES
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.state.lock().unwrap().generation
+    }
+}
+
+impl Default for VideoQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Start video thread.
 ///
 /// # Arguments
@@ -2870,13 +3355,13 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 pub fn start_video_thread<F, T>(
     session: Session<T>,
     display: usize,
-    video_receiver: mpsc::Receiver<MediaData>,
-    video_queue: Arc<RwLock<ArrayQueue<VideoFrame>>>,
+    video_queue: Arc<VideoQueue>,
     fps: Arc<RwLock<Option<usize>>>,
     chroma: Arc<RwLock<Option<Chroma>>>,
-    discard_queue: Arc<RwLock<bool>>,
+    cancel_token: Arc<AtomicBool>,
     video_callback: F,
-) where
+) -> std::thread::JoinHandle<()>
+where
     F: 'static + FnMut(usize, &mut scrap::ImageRgb, *mut c_void, bool) + Send,
     T: InvokeUiSession,
 {
@@ -2884,166 +3369,118 @@ pub fn start_video_thread<F, T>(
     let mut last_chroma = None;
     let is_view_camera = session.is_view_camera();
 
-    std::thread::spawn(move || {
-        #[cfg(windows)]
-        sync_cpu_usage();
-        get_hwcodec_config();
-        let mut video_handler = None;
-        let mut count = 0;
-        let mut duration = std::time::Duration::ZERO;
-        let mut skip_beginning = 0;
-        loop {
-            if let Ok(data) = video_receiver.recv() {
-                match data {
-                    MediaData::VideoFrame(_) | MediaData::VideoQueue => {
-                        let vf = match data {
-                            MediaData::VideoFrame(vf) => {
-                                *discard_queue.write().unwrap() = false;
-                                *vf
-                            }
-                            MediaData::VideoQueue => {
-                                if let Some(vf) = video_queue.read().unwrap().pop() {
-                                    if discard_queue.read().unwrap().clone() {
-                                        continue;
-                                    }
-                                    vf
-                                } else {
-                                    continue;
-                                }
-                            }
-                            _ => {
-                                // unreachable!();
+    std::thread::Builder::new()
+        .name(format!("video_decoder_{display}"))
+        .spawn(move || {
+            #[cfg(windows)]
+            sync_cpu_usage();
+            get_hwcodec_config();
+            let mut video_handler = None;
+            let mut count = 0;
+            let mut duration = std::time::Duration::ZERO;
+            let mut skip_beginning = 0;
+
+            while !cancel_token.load(Ordering::Relaxed) {
+                if let Some(cmd) = video_queue.pop_timeout(std::time::Duration::from_millis(100)) {
+                    match cmd {
+                        VideoCommand::Frame(vf, frame_gen) => {
+                            if frame_gen < video_queue.generation() {
                                 continue;
                             }
-                        };
-                        let display = vf.display as usize;
-                        let start = std::time::Instant::now();
-                        let format = CodecFormat::from(&vf);
-                        if video_handler.is_none() {
-                            let mut handler = VideoHandler::new(format, display);
-                            let record_state = session.lc.read().unwrap().record_state;
-                            let record_permission = session.lc.read().unwrap().record_permission;
-                            let id = session.lc.read().unwrap().id.clone();
-                            if record_state && record_permission {
-                                handler.record_screen(true, id, display, is_view_camera);
+                            let vf = *vf;
+                            let display = vf.display as usize;
+                            let start = std::time::Instant::now();
+                            let format = CodecFormat::from(&vf);
+                            if video_handler.is_none() {
+                                let mut handler = VideoHandler::new(format, display);
+                                let record_state = session.lc.read().unwrap().record_state;
+                                let record_permission = session.lc.read().unwrap().record_permission;
+                                let id = session.lc.read().unwrap().id.clone();
+                                if record_state && record_permission {
+                                    handler.record_screen(true, id, display, is_view_camera);
+                                }
+                                video_handler = Some(handler);
                             }
-                            video_handler = Some(handler);
-                        }
-                        if let Some(handler) = video_handler.as_mut() {
-                            let mut pixelbuffer = true;
-                            let mut tmp_chroma = None;
-                            let format_changed = handler.decoder.format() != format;
-                            match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
-                                Ok(true) => {
-                                    video_callback(
-                                        display,
-                                        &mut handler.rgb,
-                                        handler.texture.texture,
-                                        pixelbuffer,
-                                    );
+                            if let Some(handler) = video_handler.as_mut() {
+                                let mut pixelbuffer = true;
+                                let mut tmp_chroma = None;
+                                let format_changed = handler.decoder.format() != format;
+                                match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
+                                    Ok(true) => {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            handler.texture.texture,
+                                            pixelbuffer,
+                                        );
 
-                                    // chroma
-                                    if tmp_chroma.is_some() && last_chroma != tmp_chroma {
-                                        last_chroma = tmp_chroma;
-                                        *chroma.write().unwrap() = tmp_chroma;
+                                        // chroma
+                                        if tmp_chroma.is_some() && last_chroma != tmp_chroma {
+                                            last_chroma = tmp_chroma;
+                                            *chroma.write().unwrap() = tmp_chroma;
+                                        }
+
+                                        // fps calculation
+                                        fps_calculate(
+                                            &mut skip_beginning,
+                                            &fps,
+                                            format_changed,
+                                            start.elapsed(),
+                                            &mut count,
+                                            &mut duration,
+                                        );
                                     }
-
-                                    // fps calculation
-                                    fps_calculate(
-                                        &mut skip_beginning,
-                                        &fps,
-                                        format_changed,
-                                        start.elapsed(),
-                                        &mut count,
-                                        &mut duration,
-                                    );
-                                }
-                                Err(e) => {
-                                    // This is a simple workaround.
-                                    //
-                                    // I only see the following error:
-                                    // FailedCall("errcode=1 scrap::common::vpxcodec:libs\\scrap\\src\\common\\vpxcodec.rs:433:9")
-                                    // When switching from all displays to one display, the error occurs.
-                                    // eg:
-                                    // 1. Connect to a device with two displays (A and B).
-                                    // 2. Switch to display A. The error occurs.
-                                    // 3. If the error does not occur. Switch from A to display B. The error occurs.
-                                    //
-                                    // to-do: fix the error
-                                    log::error!("handle video frame error, {}", e);
-                                    session.refresh_video(display as _);
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        // check invalid decoders
-                        let mut should_update_supported = false;
-                        if let Some(handler) = video_handler.as_mut() {
-                            if !handler.decoder.valid()
-                                || handler.fail_counter >= MAX_DECODE_FAIL_COUNTER
-                            {
-                                let mut lc = session.lc.write().unwrap();
-                                let format = handler.decoder.format();
-                                if !lc.mark_unsupported.contains(&format) {
-                                    lc.mark_unsupported.push(format);
-                                    should_update_supported = true;
-                                    log::info!("mark {format:?} decoder as unsupported, valid:{}, fail_counter:{}, all unsupported:{:?}", handler.decoder.valid(), handler.fail_counter, lc.mark_unsupported);
+                                    Err(e) => {
+                                        log::error!("handle video frame error, {}", e);
+                                        session.refresh_video(display as _);
+                                    }
+                                    _ => {}
                                 }
                             }
-                        }
-                        if should_update_supported {
-                            session.send(Data::Message(
-                                session.lc.read().unwrap().update_supported_decodings(),
-                            ));
-                        }
-                    }
-                    MediaData::Reset => {
-                        if let Some(handler) = video_handler.as_mut() {
-                            handler.reset(None);
-                        }
-                    }
-                    MediaData::RecordScreen(start) => {
-                        let id = session.lc.read().unwrap().id.clone();
-                        if let Some(handler) = video_handler.as_mut() {
-                            handler.record_screen(start, id, display, is_view_camera);
-                        }
-                    }
-                    _ => {}
-                }
-            } else {
-                break;
-            }
-        }
-        log::info!("Video decoder loop exits");
-    });
-}
 
-/// Start an audio thread
-/// Return a audio [`MediaSender`]
-pub fn start_audio_thread() -> MediaSender {
-    let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
-    std::thread::spawn(move || {
-        let mut audio_handler = AudioHandler::default();
-        loop {
-            if let Ok(data) = audio_receiver.recv() {
-                match data {
-                    MediaData::AudioFrame(af) => {
-                        audio_handler.handle_frame(*af);
+                            // check invalid decoders
+                            let mut should_update_supported = false;
+                            if let Some(handler) = video_handler.as_mut() {
+                                if !handler.decoder.valid()
+                                    || handler.fail_counter >= MAX_DECODE_FAIL_COUNTER
+                                {
+                                    let mut lc = session.lc.write().unwrap();
+                                    let format = handler.decoder.format();
+                                    if !lc.mark_unsupported.contains(&format) {
+                                        lc.mark_unsupported.push(format);
+                                        should_update_supported = true;
+                                        log::info!(
+                                            "mark {format:?} decoder as unsupported, valid:{}, fail_counter:{}, all unsupported:{:?}",
+                                            handler.decoder.valid(),
+                                            handler.fail_counter,
+                                            lc.mark_unsupported
+                                        );
+                                    }
+                                }
+                            }
+                            if should_update_supported {
+                                session.send(Data::Message(
+                                    session.lc.read().unwrap().update_supported_decodings(),
+                                ));
+                            }
+                        }
+                        VideoCommand::Reset => {
+                            if let Some(handler) = video_handler.as_mut() {
+                                handler.reset(None);
+                            }
+                        }
+                        VideoCommand::RecordScreen(start) => {
+                            let id = session.lc.read().unwrap().id.clone();
+                            if let Some(handler) = video_handler.as_mut() {
+                                handler.record_screen(start, id, display, is_view_camera);
+                            }
+                        }
                     }
-                    MediaData::AudioFormat(f) => {
-                        log::debug!("recved audio format, sample rate={}", f.sample_rate);
-                        audio_handler.handle_format(f);
-                    }
-                    _ => {}
                 }
-            } else {
-                break;
             }
-        }
-        log::info!("Audio decoder loop exits");
-    });
-    audio_sender
+            log::info!("Video decoder loop exits for display {display}");
+        })
+        .expect("Failed to spawn video decoder thread")
 }
 
 #[inline]

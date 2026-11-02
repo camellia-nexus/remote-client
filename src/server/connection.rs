@@ -20,9 +20,7 @@ use crate::platform::WallPaperRemover;
 #[cfg(windows)]
 use crate::portable_service::client as portable_client;
 use crate::{
-    client::{
-        new_voice_call_request, new_voice_call_response, start_audio_thread, MediaData, MediaSender,
-    },
+    client::{new_voice_call_request, new_voice_call_response, AudioWorker},
     display_service, ipc, privacy_mode, video_service, VERSION,
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -429,8 +427,8 @@ pub struct Connection {
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     enable_file_transfer: bool,
     // by peer
-    audio_sender: Option<MediaSender>,
-    // audio by the remote peer/client
+    audio_worker: Option<AudioWorker>,
+    // audio worker for decoding remote audio
     tx_input: std_mpsc::SyncSender<MessageInput>,
     // handle input messages
     video_ack_required: bool,
@@ -662,7 +660,7 @@ impl Connection {
             #[cfg(windows)]
             portable: Default::default(),
             from_switch: false,
-            audio_sender: None,
+            audio_worker: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
             options_in_login: None,
@@ -4850,12 +4848,12 @@ impl Connection {
                     },
                     Some(misc::Union::AudioFormat(format)) => {
                         if self.audio && !self.disable_audio {
-                            // Drop the audio sender previously.
-                            drop(std::mem::replace(&mut self.audio_sender, None));
-                            self.audio_sender = Some(start_audio_thread());
-                            self.audio_sender
-                                .as_ref()
-                                .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
+                            if self.audio_worker.is_none() {
+                                self.audio_worker = Some(AudioWorker::start());
+                            }
+                            if let Some(worker) = &self.audio_worker {
+                                worker.queue().set_format(format);
+                            }
                         } else {
                             log::warn!("Rejected AudioFormat: audio playback capability denied");
                         }
@@ -4941,12 +4939,10 @@ impl Connection {
                 },
                 Some(message::Union::AudioFrame(frame)) => {
                     if self.audio && !self.disable_audio {
-                        if let Some(sender) = &self.audio_sender {
-                            allow_err!(sender.send(MediaData::AudioFrame(Box::new(frame))));
+                        if let Some(worker) = &self.audio_worker {
+                            worker.queue().push_frame(Box::new(frame));
                         } else {
-                            log::warn!(
-                                "Processing audio frame without the voice call audio sender."
-                            );
+                            log::warn!("Processing audio frame without active audio worker.");
                         }
                     } else {
                         log::warn!("Rejected AudioFrame: audio playback capability denied");
@@ -6869,7 +6865,9 @@ impl Connection {
             super::input_service::release_all_input_state();
         } else if name == "audio" {
             self.audio = false;
-            self.audio_sender = None;
+            if let Some(mut worker) = self.audio_worker.take() {
+                worker.stop();
+            }
         } else if name == "file" {
             self.file = false;
             self.file_transfer = None;
@@ -7848,6 +7846,10 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        if let Some(mut worker) = self.audio_worker.take() {
+            worker.stop();
+        }
+
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.release_pressed_modifiers();
 

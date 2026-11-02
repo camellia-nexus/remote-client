@@ -4,8 +4,8 @@ use crate::clipboard::{update_clipboard, ClipboardSide};
 use crate::{audio_service, clipboard::CLIPBOARD_INTERVAL, ConnInner, CLIENT_SERVER};
 use crate::{
     client::{
-        self, new_voice_call_request, Client, Data, Interface, MediaData, MediaSender,
-        QualityStatus, MILLI1, SEC30,
+        self, new_voice_call_request, AudioWorker, Client, Data, Interface, QualityStatus,
+        VideoQueue, VideoQueuePushResult, MAX_DISPLAY_DECODERS, MILLI1, SEC30,
     },
     common::get_default_sound_input,
     ui_session_interface::{InvokeUiSession, Session},
@@ -24,8 +24,6 @@ fn remove_local_empty_dir_result(id: i32, path: String) -> Data {
 }
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::try_empty_clipboard_files, clipboard_file::unix_file_clip};
-#[cfg(not(target_os = "ios"))]
-use camellia_remote_protocol::tokio::sync::mpsc::error::TryRecvError;
 use camellia_remote_protocol::{
     allow_err,
     config::{self, LocalConfig, PeerConfig, TransferSerde},
@@ -52,26 +50,93 @@ use camellia_remote_protocol::{tokio::sync::Mutex as TokioMutex, ResultType};
     all(target_os = "macos", feature = "unix-file-copy-paste")
 ))]
 use clipboard::ContextSend;
-use crossbeam_queue::ArrayQueue;
 use scrap::CodecFormat;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     ffi::c_void,
     num::NonZeroI64,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, RwLock,
     },
 };
 
+// ============================================================================
+// RES-014: Voice Call Bounded Queue & Reconfigurable Worker
+// ============================================================================
+
+pub const MAX_VOICE_OUTBOUND_QUEUE_FRAMES: usize = 32;
+pub const MAX_VOICE_OUTBOUND_QUEUE_BYTES: usize = 64 * 1024; // 64 KiB
+
+pub struct VoiceCallWorker {
+    pub conn_inner: ConnInner,
+    pub cancel_token: Arc<AtomicBool>,
+    pub join_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl VoiceCallWorker {
+    pub fn stop(&mut self) {
+        self.stop_with_timeout(Duration::from_millis(500));
+    }
+
+    pub fn stop_with_timeout(&mut self, timeout: Duration) {
+        #[cfg(not(any(target_os = "ios")))]
+        {
+            // Step 1: Synchronously unsubscribe from CLIENT_SERVER
+            CLIENT_SERVER.write().unwrap().subscribe(
+                audio_service::NAME,
+                self.conn_inner.clone(),
+                false,
+            );
+
+            // Step 2: Synchronously reset voice call input device
+            crate::audio_service::set_voice_call_input_device(None, true);
+        }
+
+        // Step 3: Trigger cancellation token
+        self.cancel_token.store(true, Ordering::SeqCst);
+
+        // Step 4: Join worker thread within timeout
+        if let Some(handle) = self.join_handle.take() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let joiner = std::thread::spawn(move || {
+                let res = handle.join();
+                let _ = tx.send(res);
+            });
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(())) => {
+                    let _ = joiner.join();
+                    log::debug!("Voice call worker joined cleanly");
+                }
+                Ok(Err(_panic)) => {
+                    let _ = joiner.join();
+                    log::warn!("Voice call worker panicked on join");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    log::warn!(
+                        "Voice call worker join exceeded deadline of {:?}; detached",
+                        timeout
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            }
+        }
+    }
+}
+
+impl Drop for VoiceCallWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
-    audio_sender: MediaSender,
+    audio_worker: Option<AudioWorker>,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
-    // Stop sending local audio to remote client.
-    stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
+    voice_call_worker: Option<VoiceCallWorker>,
     voice_call_request_timestamp: Option<NonZeroI64>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
@@ -87,6 +152,7 @@ pub struct Remote<T: InvokeUiSession> {
     elevation_requested: bool,
     peer_info: ParsedPeerInfo,
     video_threads: HashMap<usize, VideoThread>,
+    allowed_displays: HashSet<usize>,
     chroma: Arc<RwLock<Option<Chroma>>>,
     last_record_state: bool,
     sent_close_reason: bool,
@@ -117,7 +183,7 @@ impl<T: InvokeUiSession> Remote<T> {
     ) -> Self {
         Self {
             handler,
-            audio_sender: crate::client::start_audio_thread(),
+            audio_worker: None,
             receiver,
             sender,
             read_jobs: Vec::new(),
@@ -131,11 +197,12 @@ impl<T: InvokeUiSession> Remote<T> {
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
             video_format: CodecFormat::Unknown,
-            stop_voice_call_sender: None,
+            voice_call_worker: None,
             voice_call_request_timestamp: None,
             elevation_requested: false,
             peer_info: Default::default(),
             video_threads: Default::default(),
+            allowed_displays: Default::default(),
             chroma: Default::default(),
             last_record_state: false,
             sent_close_reason: false,
@@ -348,11 +415,12 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                 }
-                log::debug!("Exit io_loop of id={}", self.handler.get_id());
-                // Stop client audio server.
-                if let Some(s) = self.stop_voice_call_sender.take() {
-                    s.send(()).ok();
+                // Stop client audio, voice call, and video decoders deterministically.
+                self.stop_voice_call();
+                if let Some(mut worker) = self.audio_worker.take() {
+                    worker.stop();
                 }
+                self.teardown_video_threads();
                 if kcp.is_some() {
                     // Send the close reason if it hasn't been sent yet, as KCP cannot detect the socket close event.
                     self.send_close_reason(&mut peer, "kcp").await;
@@ -483,14 +551,13 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     fn stop_voice_call(&mut self) {
-        let voice_call_sender = std::mem::replace(&mut self.stop_voice_call_sender, None);
-        if let Some(stopper) = voice_call_sender {
-            let _ = stopper.send(());
+        if let Some(mut worker) = self.voice_call_worker.take() {
+            worker.stop();
         }
     }
 
-    // Start a voice call recorder, records audio and send to remote
-    fn start_voice_call(&mut self) -> Option<std::sync::mpsc::Sender<()>> {
+    // Start a voice call recorder, records audio and sends to remote peer
+    fn start_voice_call(&mut self) -> Option<VoiceCallWorker> {
         if self.handler.is_file_transfer()
             || self.handler.is_port_forward()
             || self.handler.is_terminal()
@@ -500,68 +567,101 @@ impl<T: InvokeUiSession> Remote<T> {
         // iOS does not have this server.
         #[cfg(not(any(target_os = "ios")))]
         {
-            // NOTE:
-            // The client server and --server both use the same sound input device.
-            // It's better to distinguish the server side and client side.
-            // But it' not necessary for now, because it's not a common case.
-            // And it is immediately known when the input device is changed.
             crate::audio_service::set_voice_call_input_device(get_default_sound_input(), false);
-            // Create a channel to receive error or closed message
-            let (tx, rx) = std::sync::mpsc::channel();
             let (tx_audio_data, mut rx_audio_data) =
                 camellia_remote_protocol::tokio::sync::mpsc::unbounded_channel();
-            // Create a stand-alone inner, add subscribe to audio service
             let conn_id = CLIENT_SERVER.write().unwrap().get_new_id();
-            let client_conn_inner = ConnInner::new(conn_id.clone(), Some(tx_audio_data), None);
-            // now we subscribe
+            let client_conn_inner = ConnInner::new(conn_id, Some(tx_audio_data), None);
             CLIENT_SERVER.write().unwrap().subscribe(
                 audio_service::NAME,
                 client_conn_inner.clone(),
                 true,
             );
             let tx_audio = self.sender.clone();
-            std::thread::spawn(move || {
-                loop {
-                    // check if client is closed
-                    match rx.try_recv() {
-                        Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            log::debug!("Exit voice call audio service of client");
-                            // unsubscribe
-                            CLIENT_SERVER.write().unwrap().subscribe(
-                                audio_service::NAME,
-                                client_conn_inner,
-                                false,
-                            );
-                            crate::audio_service::set_voice_call_input_device(None, true);
-                            break;
+            let cancel_token = Arc::new(AtomicBool::new(false));
+            let cancel = cancel_token.clone();
+
+            let handle = std::thread::Builder::new()
+                .name("voice_call_worker".to_string())
+                .spawn(move || {
+                    let rt = match camellia_remote_protocol::tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            log::error!("Failed to create voice call runtime: {}", e);
+                            return;
                         }
-                        _ => {}
-                    }
-                    match rx_audio_data.try_recv() {
-                        Ok((_instant, msg)) => match &msg.union {
-                            Some(message::Union::AudioFrame(frame)) => {
-                                let mut msg = Message::new();
-                                msg.set_audio_frame(frame.clone());
-                                tx_audio.send(Data::Message(msg)).ok();
-                            }
-                            Some(message::Union::Misc(misc)) => {
-                                let mut msg = Message::new();
-                                msg.set_misc(misc.clone());
-                                tx_audio.send(Data::Message(msg)).ok();
-                            }
-                            _ => {}
-                        },
-                        Err(err) => {
-                            if err == TryRecvError::Empty {
-                                // ignore
-                            } else {
-                                log::debug!("Failed to record local audio channel: {}", err);
+                    };
+
+                    rt.block_on(async move {
+                        let mut outbound_frames: usize = 0;
+                        let mut outbound_bytes: usize = 0;
+                        let mut frame_queue: VecDeque<usize> = VecDeque::new();
+
+                        while !cancel.load(Ordering::Relaxed) {
+                            camellia_remote_protocol::tokio::select! {
+                                biased;
+                                item = rx_audio_data.recv() => {
+                                    match item {
+                                        Some((_instant, msg)) => {
+                                            match &msg.union {
+                                                Some(message::Union::AudioFrame(frame)) => {
+                                                    let frame_len = frame.data.len();
+                                                    // Congestion control: drop oldest when outbound queue exceeds limits
+                                                    while !frame_queue.is_empty() && (
+                                                        outbound_frames >= MAX_VOICE_OUTBOUND_QUEUE_FRAMES
+                                                        || outbound_bytes + frame_len > MAX_VOICE_OUTBOUND_QUEUE_BYTES
+                                                    ) {
+                                                        if let Some(old_len) = frame_queue.pop_front() {
+                                                            outbound_frames = outbound_frames.saturating_sub(1);
+                                                            outbound_bytes = outbound_bytes.saturating_sub(old_len);
+                                                        }
+                                                    }
+
+                                                    outbound_frames += 1;
+                                                    outbound_bytes += frame_len;
+                                                    frame_queue.push_back(frame_len);
+
+                                                    let mut out_msg = Message::new();
+                                                    out_msg.set_audio_frame(frame.clone());
+                                                    if tx_audio.send(Data::Message(out_msg)).is_err() {
+                                                        log::debug!("UI sender disconnected; exiting voice call worker");
+                                                        break;
+                                                    }
+                                                }
+                                                Some(message::Union::Misc(misc)) => {
+                                                    let mut out_msg = Message::new();
+                                                    out_msg.set_misc(misc.clone());
+                                                    if tx_audio.send(Data::Message(out_msg)).is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        None => {
+                                            log::debug!("Voice call audio stream closed; exiting worker");
+                                            break;
+                                        }
+                                    }
+                                }
+                                _ = camellia_remote_protocol::tokio::time::sleep(Duration::from_millis(100)) => {
+                                    // Periodic cancellation check while idle, 0.0% CPU
+                                }
                             }
                         }
-                    }
-                }
-            });
-            return Some(tx);
+                        log::info!("Voice call audio worker exited cleanly");
+                    });
+                })
+                .expect("Failed to spawn voice call worker thread");
+
+            Some(VoiceCallWorker {
+                conn_inner: client_conn_inner,
+                cancel_token,
+                join_handle: Some(handle),
+            })
         }
         #[cfg(target_os = "ios")]
         {
@@ -597,12 +697,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     Some(message::Union::Misc(misc)) => match misc.union {
                         Some(misc::Union::RefreshVideo(_)) => {
                             self.video_threads.iter().for_each(|(_, v)| {
-                                *v.discard_queue.write().unwrap() = true;
+                                v.queue.request_refresh();
                             });
                         }
                         Some(misc::Union::RefreshVideoDisplay(display)) => {
                             if let Some(v) = self.video_threads.get_mut(&(display as usize)) {
-                                *v.discard_queue.write().unwrap() = true;
+                                v.queue.request_refresh();
                             }
                         }
                         _ => {}
@@ -1046,12 +1146,12 @@ impl<T: InvokeUiSession> Remote<T> {
             Data::ResetDecoder(display) => match display {
                 Some(display) => {
                     if let Some(v) = self.video_threads.get_mut(&display) {
-                        v.video_sender.send(MediaData::Reset).ok();
+                        v.queue.push_reset();
                     }
                 }
                 None => {
                     for (_, v) in self.video_threads.iter_mut() {
-                        v.video_sender.send(MediaData::Reset).ok();
+                        v.queue.push_reset();
                     }
                 }
             },
@@ -1248,7 +1348,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let max_queue_len = self
             .video_threads
             .iter()
-            .map(|v| v.1.video_queue.read().unwrap().len())
+            .map(|v| v.1.queue.len())
             .max()
             .unwrap_or_default();
         let min_decode_fps = self
@@ -1274,7 +1374,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let mut fps_trending = |display: usize| {
             let thread = self.video_threads.get_mut(&display)?;
             let ctl = &mut thread.fps_control;
-            let len = thread.video_queue.read().unwrap().len();
+            let len = thread.queue.len();
             let decode_fps = thread.decode_fps.read().unwrap().clone()?;
             let last_auto_fps = last_auto_fps.clone().unwrap_or(custom_fps as _);
             if ctl.inactive_counter > inactive_threshold {
@@ -1326,14 +1426,12 @@ impl<T: InvokeUiSession> Remote<T> {
         // send refresh
         for (display, thread) in self.video_threads.iter_mut() {
             let ctl = &mut thread.fps_control;
-            let video_queue = thread.video_queue.read().unwrap();
-            let tolerable = std::cmp::min(min_decode_fps, video_queue.capacity() / 2);
+            let tolerable = std::cmp::min(min_decode_fps, thread.queue.capacity() / 2);
             if ctl.refresh_times < 20 // enough
-                    && (video_queue.len() > tolerable
+                    && (thread.queue.len() > tolerable
                             && (ctl.refresh_times == 0 || ctl.last_refresh_instant.map(|t|t.elapsed().as_secs() > 10).unwrap_or(false)))
             {
                 // Refresh causes client set_display, left frames cause flickering.
-                drop(video_queue);
                 self.handler.refresh_video(*display as _);
                 log::info!("Refresh display {} to reduce delay", display);
                 ctl.refresh_times += 1;
@@ -1386,6 +1484,28 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
+                    if !self.is_connected {
+                        log::warn!("Rejected VideoFrame received before session login completion");
+                        return true;
+                    }
+                    if vf.display < 0 || vf.display >= MAX_DISPLAY_DECODERS as i32 {
+                        log::warn!(
+                            "Rejected VideoFrame with invalid display ID: {} (bounds 0..{})",
+                            vf.display,
+                            MAX_DISPLAY_DECODERS
+                        );
+                        return true;
+                    }
+                    let display = vf.display as usize;
+                    if !self.allowed_displays.contains(&display) {
+                        log::warn!(
+                            "Rejected VideoFrame for unannounced display: {} (allowed: {:?})",
+                            display,
+                            self.allowed_displays
+                        );
+                        return true;
+                    }
+
                     if !self.first_frame {
                         self.first_frame = true;
                         self.handler.close_success();
@@ -1395,26 +1515,19 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     self.video_format = CodecFormat::from(&vf);
 
-                    let display = vf.display as usize;
                     if !self.video_threads.contains_key(&display) {
                         self.new_video_thread(display);
                     }
                     let Some(thread) = self.video_threads.get_mut(&display) else {
                         return true;
                     };
-                    if Self::contains_key_frame(&vf) {
-                        thread
-                            .video_sender
-                            .send(MediaData::VideoFrame(Box::new(vf)))
-                            .ok();
-                    } else {
-                        let video_queue = thread.video_queue.read().unwrap();
-                        if video_queue.force_push(vf).is_some() {
-                            drop(video_queue);
+
+                    let is_key = Self::contains_key_frame(&vf);
+                    match thread.queue.push_frame(Box::new(vf), is_key) {
+                        VideoQueuePushResult::DroppedOverloadNeedRefresh => {
                             self.handler.refresh_video(display as _);
-                        } else {
-                            thread.video_sender.send(MediaData::VideoQueue).ok();
                         }
+                        _ => {}
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
@@ -1448,6 +1561,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                 return false;
                             }
                         }
+                        self.update_allowed_displays(&pi.displays);
                         self.handler.handle_peer_info(pi);
                         if self.handler.is_default() {
                             #[cfg(feature = "flutter")]
@@ -1999,7 +2113,12 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
                     Some(misc::Union::AudioFormat(f)) => {
-                        self.audio_sender.send(MediaData::AudioFormat(f)).ok();
+                        if self.audio_worker.is_none() {
+                            self.audio_worker = Some(crate::client::start_audio_thread());
+                        }
+                        if let Some(worker) = &self.audio_worker {
+                            worker.queue().set_format(f);
+                        }
                     }
                     Some(misc::Union::ChatMessage(c)) => {
                         self.handler.new_message(c.text);
@@ -2025,6 +2144,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Ok(Permission::Audio) => {
+                                if !p.enabled {
+                                    if let Some(mut worker) = self.audio_worker.take() {
+                                        worker.stop();
+                                    }
+                                }
                                 self.handler.set_permission("audio", p.enabled);
                             }
                             Ok(Permission::File) => {
@@ -2064,7 +2188,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     Some(misc::Union::SwitchDisplay(s)) => {
                         self.handler.handle_peer_switch_display(&s);
                         if let Some(thread) = self.video_threads.get_mut(&(s.display as usize)) {
-                            thread.video_sender.send(MediaData::Reset).ok();
+                            thread.queue.push_reset();
                         }
 
                         let mut scale = 1.0;
@@ -2183,9 +2307,12 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::AudioFrame(frame)) => {
                     if !self.handler.lc.read().unwrap().disable_audio.v {
-                        self.audio_sender
-                            .send(MediaData::AudioFrame(Box::new(frame)))
-                            .ok();
+                        if self.audio_worker.is_none() {
+                            self.audio_worker = Some(crate::client::start_audio_thread());
+                        }
+                        if let Some(worker) = &self.audio_worker {
+                            worker.queue().push_frame(Box::new(frame));
+                        }
                     }
                 }
                 Some(message::Union::FileAction(action)) => match action.union {
@@ -2257,10 +2384,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         // TODO: maybe we will do a voice call from the peer in the future.
                     } else {
                         log::debug!("The remote has requested to close the voice call");
-                        if let Some(sender) = self.stop_voice_call_sender.take() {
-                            allow_err!(sender.send(()));
-                            self.handler.on_voice_call_closed("");
-                        }
+                        self.stop_voice_call();
+                        self.handler.on_voice_call_closed("");
                     }
                 }
                 Some(message::Union::VoiceCallResponse(response)) => {
@@ -2271,16 +2396,19 @@ impl<T: InvokeUiSession> Remote<T> {
                         } else {
                             if response.accepted {
                                 // The peer accepted the voice call.
+                                self.stop_voice_call();
                                 self.handler.on_voice_call_started();
-                                self.stop_voice_call_sender = self.start_voice_call();
+                                self.voice_call_worker = self.start_voice_call();
                             } else {
                                 // The peer refused the voice call.
+                                self.stop_voice_call();
                                 self.handler.on_voice_call_closed("");
                             }
                         }
                     }
                 }
                 Some(message::Union::PeerInfo(pi)) => {
+                    self.update_allowed_displays(&pi.displays);
                     self.handler.set_displays(&pi.displays);
                     self.handler.set_platform_additions(&pi.platform_additions);
                 }
@@ -2593,33 +2721,33 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     fn new_video_thread(&mut self, display: usize) {
-        let video_queue = Arc::new(RwLock::new(ArrayQueue::new(client::VIDEO_QUEUE_SIZE)));
-        let (video_sender, video_receiver) = std::sync::mpsc::channel::<MediaData>();
+        if self.video_threads.len() >= MAX_DISPLAY_DECODERS {
+            log::warn!(
+                "Maximum concurrent display decoders ({}) reached; ignoring display {}",
+                MAX_DISPLAY_DECODERS,
+                display
+            );
+            return;
+        }
+        let video_queue = Arc::new(VideoQueue::new());
         let decode_fps = Arc::new(RwLock::new(None));
         let frame_count = Arc::new(RwLock::new(0));
-        let discard_queue = Arc::new(RwLock::new(false));
-        let video_thread = VideoThread {
-            video_queue: video_queue.clone(),
-            video_sender,
-            decode_fps: decode_fps.clone(),
-            frame_count: frame_count.clone(),
-            fps_control: Default::default(),
-            discard_queue: discard_queue.clone(),
-        };
+        let cancel_token = Arc::new(AtomicBool::new(false));
         let handler = self.handler.ui_handler.clone();
-        crate::client::start_video_thread(
+        let fc = frame_count.clone();
+
+        let handle = crate::client::start_video_thread(
             self.handler.clone(),
             display,
-            video_receiver,
-            video_queue,
-            decode_fps,
+            video_queue.clone(),
+            decode_fps.clone(),
             self.chroma.clone(),
-            discard_queue,
+            cancel_token.clone(),
             move |display: usize,
                   data: &mut scrap::ImageRgb,
                   _texture: *mut c_void,
                   pixelbuffer: bool| {
-                *frame_count.write().unwrap() += 1;
+                *fc.write().unwrap() += 1;
                 if pixelbuffer {
                     handler.on_rgba(display, data);
                 } else {
@@ -2628,6 +2756,16 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
             },
         );
+
+        let video_thread = VideoThread {
+            queue: video_queue,
+            decode_fps,
+            frame_count,
+            cancel_token,
+            join_handle: Some(handle),
+            fps_control: Default::default(),
+        };
+
         self.video_threads.insert(display, video_thread);
         if self.video_threads.len() == 1 {
             let auto_record =
@@ -2652,7 +2790,7 @@ impl<T: InvokeUiSession> Remote<T> {
         log::info!("record screen start: {start}");
         // update local
         for (_, v) in self.video_threads.iter_mut() {
-            v.video_sender.send(MediaData::RecordScreen(start)).ok();
+            v.queue.push_record_screen(start);
         }
         self.handler.update_record_status(start);
         // update remote
@@ -2661,6 +2799,46 @@ impl<T: InvokeUiSession> Remote<T> {
         let mut msg = Message::new();
         msg.set_misc(misc);
         self.sender.send(Data::Message(msg)).ok();
+    }
+
+    fn update_allowed_displays(&mut self, displays: &[DisplayInfo]) {
+        let new_allowed: HashSet<usize> = if displays.is_empty() {
+            let mut s = HashSet::new();
+            s.insert(0);
+            s
+        } else {
+            (0..displays.len().min(MAX_DISPLAY_DECODERS)).collect()
+        };
+        self.allowed_displays = new_allowed.clone();
+
+        let removed: Vec<usize> = self
+            .video_threads
+            .keys()
+            .filter(|d| !new_allowed.contains(d))
+            .cloned()
+            .collect();
+        for d in removed {
+            log::info!("Pruning removed display decoder thread for display {d}");
+            if let Some(mut thread) = self.video_threads.remove(&d) {
+                thread.stop();
+            }
+        }
+    }
+
+    pub fn teardown_video_threads(&mut self) {
+        for (_, mut thread) in self.video_threads.drain() {
+            thread.stop();
+        }
+    }
+}
+
+impl<T: InvokeUiSession> Drop for Remote<T> {
+    fn drop(&mut self) {
+        self.stop_voice_call();
+        if let Some(mut worker) = self.audio_worker.take() {
+            worker.stop();
+        }
+        self.teardown_video_threads();
     }
 }
 
@@ -2695,26 +2873,60 @@ impl RemoveJob {
 }
 
 #[derive(Debug, Default)]
-struct FpsControl {
-    refresh_times: usize,
-    last_refresh_instant: Option<Instant>,
-    idle_counter: usize,
-    inactive_counter: usize,
+pub struct FpsControl {
+    pub refresh_times: usize,
+    pub last_refresh_instant: Option<Instant>,
+    pub idle_counter: usize,
+    pub inactive_counter: usize,
 }
 
-struct VideoThread {
-    video_queue: Arc<RwLock<ArrayQueue<VideoFrame>>>,
-    video_sender: MediaSender,
-    decode_fps: Arc<RwLock<Option<usize>>>,
-    frame_count: Arc<RwLock<usize>>,
-    discard_queue: Arc<RwLock<bool>>,
-    fps_control: FpsControl,
+pub struct VideoThread {
+    pub queue: Arc<VideoQueue>,
+    pub decode_fps: Arc<RwLock<Option<usize>>>,
+    pub frame_count: Arc<RwLock<usize>>,
+    pub cancel_token: Arc<AtomicBool>,
+    pub join_handle: Option<std::thread::JoinHandle<()>>,
+    pub fps_control: FpsControl,
+}
+
+impl VideoThread {
+    pub fn stop(&mut self) {
+        self.stop_with_timeout(Duration::from_millis(500));
+    }
+
+    pub fn stop_with_timeout(&mut self, timeout: Duration) {
+        self.cancel_token.store(true, Ordering::SeqCst);
+        self.queue.clear();
+        if let Some(handle) = self.join_handle.take() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let joiner = std::thread::spawn(move || {
+                let res = handle.join();
+                let _ = tx.send(res);
+            });
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(())) => {
+                    let _ = joiner.join();
+                    log::debug!("Video thread joined cleanly");
+                }
+                Ok(Err(_panic)) => {
+                    let _ = joiner.join();
+                    log::warn!("Video thread panicked on join");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    log::warn!(
+                        "Video thread join exceeded deadline of {:?}; detached",
+                        timeout
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            }
+        }
+    }
 }
 
 impl Drop for VideoThread {
     fn drop(&mut self) {
-        // since channels are buffered, messages sent before the disconnect will still be properly received.
-        *self.discard_queue.write().unwrap() = true;
+        self.stop();
     }
 }
 
