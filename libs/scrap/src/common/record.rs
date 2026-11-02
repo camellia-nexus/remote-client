@@ -85,10 +85,9 @@ impl RecorderContext2 {
     }
 }
 
-unsafe impl Send for Recorder {}
-unsafe impl Sync for Recorder {}
-
-pub trait RecorderApi {
+// UNSAFE-011: Recorder derives Send safely from its fields; RecorderApi requires Send.
+// Unconditional unsafe impl Send and Sync have been removed to prevent data races.
+pub trait RecorderApi: Send {
     fn new(ctx: RecorderContext, ctx2: RecorderContext2) -> ResultType<Self>
     where
         Self: Sized;
@@ -104,7 +103,7 @@ pub enum RecordState {
 }
 
 pub struct Recorder {
-    pub inner: Option<Box<dyn RecorderApi>>,
+    inner: Option<Box<dyn RecorderApi>>,
     ctx: RecorderContext,
     ctx2: Option<RecorderContext2>,
     pts: Option<i64>,

@@ -18,8 +18,150 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(windows)]
-static mut IS_ALT_GR: bool = false;
+/// Thread-safe, per-session keyboard translation state (CONC-007).
+/// Eliminates un-synchronized static mut state across Windows AltGr,
+/// scan-code 0x021D, and macOS Option key paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KeyboardTranslatorState {
+    pub is_alt_gr: bool,
+    pub is_0x021d_down: bool,
+    pub is_left_option_down: bool,
+}
+
+impl KeyboardTranslatorState {
+    pub fn reset(&mut self) {
+        self.is_alt_gr = false;
+        self.is_0x021d_down = false;
+        self.is_left_option_down = false;
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref KEYBOARD_TRANSLATOR_STATES: Arc<Mutex<HashMap<u128, KeyboardTranslatorState>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    static ref HOOK_MODIFIER_SNAPSHOT: Arc<Mutex<KeyboardTranslatorState>> =
+        Arc::new(Mutex::new(KeyboardTranslatorState::default()));
+}
+
+pub fn get_active_session_id() -> u128 {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Ok(gs) = client::GRAB_STATE.lock() {
+        if let Some(owner) = gs.owner {
+            return owner;
+        }
+    }
+    #[cfg(feature = "flutter")]
+    if let Some(session) = flutter::get_cur_session() {
+        return session.lc.read().unwrap().session_id as u128;
+    }
+    0
+}
+
+pub fn reset_session_translator_state(session_id: u128) {
+    if let Ok(mut states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+        if let Some(state) = states.get_mut(&session_id) {
+            state.reset();
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn reset_all_translator_states() {
+    if let Ok(mut states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+        states.clear();
+    }
+    if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+        snap.reset();
+    }
+}
+
+#[allow(dead_code)]
+pub fn update_hook_modifier_0x021d(is_press: bool) {
+    if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+        snap.is_0x021d_down = is_press;
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Ok(gs) = client::GRAB_STATE.lock() {
+        if let Some(owner) = gs.owner {
+            if let Ok(mut states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+                states.entry(owner).or_default().is_0x021d_down = is_press;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn update_hook_modifier_left_option(is_press: bool) {
+    if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+        snap.is_left_option_down = is_press;
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Ok(gs) = client::GRAB_STATE.lock() {
+        if let Some(owner) = gs.owner {
+            if let Ok(mut states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+                states.entry(owner).or_default().is_left_option_down = is_press;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn is_0x021d_down(session_id: Option<u128>) -> bool {
+    let sid = session_id.unwrap_or_else(get_active_session_id);
+    if let Ok(states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+        if let Some(state) = states.get(&sid) {
+            return state.is_0x021d_down;
+        }
+    }
+    HOOK_MODIFIER_SNAPSHOT.lock().unwrap().is_0x021d_down
+}
+
+#[allow(dead_code)]
+pub fn is_left_option_down(session_id: Option<u128>) -> bool {
+    let sid = session_id.unwrap_or_else(get_active_session_id);
+    if let Ok(states) = KEYBOARD_TRANSLATOR_STATES.lock() {
+        if let Some(state) = states.get(&sid) {
+            return state.is_left_option_down;
+        }
+    }
+    HOOK_MODIFIER_SNAPSHOT.lock().unwrap().is_left_option_down
+}
+
+#[allow(dead_code)]
+pub fn check_and_update_alt_gr(
+    session_id: Option<u128>,
+    is_alt: bool,
+    is_alt_gr_key: bool,
+    mut ctrl: bool,
+) -> bool {
+    let sid = session_id.unwrap_or_else(get_active_session_id);
+    let mut states = KEYBOARD_TRANSLATOR_STATES.lock().unwrap();
+    let state = states.entry(sid).or_default();
+    if state.is_alt_gr {
+        if is_alt || is_alt_gr_key {
+            if ctrl {
+                ctrl = false;
+            }
+        } else {
+            state.is_alt_gr = false;
+        }
+    }
+    ctrl
+}
+
+#[allow(dead_code)]
+pub fn set_alt_gr_flag(session_id: Option<u128>, flag: bool) {
+    let sid = session_id.unwrap_or_else(get_active_session_id);
+    let mut states = KEYBOARD_TRANSLATOR_STATES.lock().unwrap();
+    states.entry(sid).or_default().is_alt_gr = flag;
+}
+
+#[allow(dead_code)]
+pub fn is_alt_gr_flag(session_id: Option<u128>) -> bool {
+    let sid = session_id.unwrap_or_else(get_active_session_id);
+    let states = KEYBOARD_TRANSLATOR_STATES.lock().unwrap();
+    states.get(&sid).map(|s| s.is_alt_gr).unwrap_or(false)
+}
 
 #[allow(dead_code)]
 const OS_LOWER_WINDOWS: &str = "windows";
@@ -102,8 +244,8 @@ pub mod client {
     /// cause a focus-change feedback loop (~10 Hz), so `last_grab` debounces
     /// spurious `Wait` events that arrive shortly after a `Run`.
     #[derive(Default)]
-    struct GrabOwnerState {
-        owner: Option<u128>,
+    pub struct GrabOwnerState {
+        pub owner: Option<u128>,
         last_grab: Option<std::time::Instant>,
         /// True while a deferred-release thread is in flight. Prevents
         /// spawning redundant threads during the X11 feedback loop.
@@ -117,7 +259,7 @@ pub mod client {
 
     lazy_static::lazy_static! {
         static ref IS_GRAB_STARTED: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-        static ref GRAB_STATE: Arc<Mutex<GrabOwnerState>> = Arc::new(Mutex::new(GrabOwnerState::default()));
+        pub static ref GRAB_STATE: Arc<Mutex<GrabOwnerState>> = Arc::new(Mutex::new(GrabOwnerState::default()));
     }
 
     #[cfg(target_os = "linux")]
@@ -204,6 +346,12 @@ pub mod client {
                     keyboard_mode,
                 );
 
+                if let Some(prev) = gs.owner {
+                    if prev != session_id {
+                        reset_session_translator_state(prev);
+                    }
+                }
+
                 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                 KEYBOARD_HOOKED.store(true, Ordering::SeqCst);
 
@@ -267,6 +415,10 @@ pub mod client {
                                         KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
                                         gs.owner = None;
                                         gs.last_grab = None;
+                                        reset_session_translator_state(session_id);
+                                        if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+                                            snap.reset();
+                                        }
                                         Some(to_release)
                                     } else {
                                         log::debug!(
@@ -303,6 +455,10 @@ pub mod client {
                 gs.last_grab = None;
                 gs.deferred_pending = false;
                 release_after_unlock = Some(take_remote_keys());
+                reset_session_translator_state(session_id);
+                if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+                    snap.reset();
+                }
                 #[cfg(target_os = "linux")]
                 {
                     disable_after_unlock = true;
@@ -331,7 +487,14 @@ pub mod client {
             return;
         }
         let peer = get_peer_platform().to_lowercase();
-        for key_event in event_to_key_events(peer, &event, keyboard_mode, lock_modes) {
+        let session_id = get_active_session_id();
+        for key_event in event_to_key_events_with_session(
+            peer,
+            &event,
+            keyboard_mode,
+            lock_modes,
+            Some(session_id),
+        ) {
             send_key_event(&key_event);
         }
     }
@@ -347,7 +510,14 @@ pub mod client {
             return;
         }
         let peer = session.peer_platform().to_lowercase();
-        for key_event in event_to_key_events(peer, &event, keyboard_mode, lock_modes) {
+        let session_id = session.lc.read().unwrap().session_id as u128;
+        for key_event in event_to_key_events_with_session(
+            peer,
+            &event,
+            keyboard_mode,
+            lock_modes,
+            Some(session_id),
+        ) {
             session.send_key_event(&key_event);
         }
     }
@@ -467,12 +637,6 @@ pub fn update_grab_get_key_name(keyboard_mode: &str) {
         _ => {}
     };
 }
-
-#[cfg(target_os = "windows")]
-static mut IS_0X021D_DOWN: bool = false;
-
-#[cfg(target_os = "macos")]
-static mut IS_LEFT_OPTION_DOWN: bool = false;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_keyboard_mode() -> String {
@@ -652,17 +816,17 @@ fn start_grab_loop() {
             }
 
             #[cfg(target_os = "windows")]
-            unsafe {
+            {
                 // AltGr
                 if _scan_code == 0x021D {
-                    IS_0X021D_DOWN = is_press;
+                    update_hook_modifier_0x021d(is_press);
                 }
             }
 
             #[cfg(target_os = "macos")]
-            unsafe {
+            {
                 if _code == rdev::kVK_Option {
-                    IS_LEFT_OPTION_DOWN = is_press;
+                    update_hook_modifier_left_option(is_press);
                 }
             }
 
@@ -936,11 +1100,22 @@ fn update_modifiers_state(event: &Event) {
     };
 }
 
+#[allow(dead_code)]
 pub fn event_to_key_events(
+    peer: String,
+    event: &Event,
+    keyboard_mode: KeyboardMode,
+    lock_modes: Option<i32>,
+) -> Vec<KeyEvent> {
+    event_to_key_events_with_session(peer, event, keyboard_mode, lock_modes, None)
+}
+
+pub fn event_to_key_events_with_session(
     mut peer: String,
     event: &Event,
     keyboard_mode: KeyboardMode,
     _lock_modes: Option<i32>,
+    session_id: Option<u128>,
 ) -> Vec<KeyEvent> {
     peer.retain(|c| !c.is_whitespace());
 
@@ -961,11 +1136,13 @@ pub fn event_to_key_events(
 
     let mut key_events = match keyboard_mode {
         KeyboardMode::Map => map_keyboard_mode(peer.as_str(), event, key_event),
-        KeyboardMode::Translate => translate_keyboard_mode(peer.as_str(), event, key_event),
+        KeyboardMode::Translate => {
+            translate_keyboard_mode_with_session(peer.as_str(), event, key_event, session_id)
+        }
         _ => {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                legacy_keyboard_mode(event, key_event)
+                legacy_keyboard_mode_with_session(event, key_event, session_id)
             }
             #[cfg(any(target_os = "android", target_os = "ios"))]
             {
@@ -1002,8 +1179,18 @@ pub fn get_peer_platform() -> String {
     "Windows".to_string()
 }
 
+#[allow(dead_code)]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEvent> {
+pub fn legacy_keyboard_mode(event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {
+    legacy_keyboard_mode_with_session(event, key_event, None)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn legacy_keyboard_mode_with_session(
+    event: &Event,
+    mut key_event: KeyEvent,
+    _session_id: Option<u128>,
+) -> Vec<KeyEvent> {
     let mut events = Vec::new();
     // legacy mode(0): Generate characters locally, look for keycode on other side.
     let (mut key, down_or_up) = match event.event_type {
@@ -1023,19 +1210,8 @@ pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEv
     let alt = get_key_state(enigo::Key::Alt);
     #[cfg(windows)]
     let ctrl = {
-        let mut tmp = get_key_state(enigo::Key::Control) || get_key_state(enigo::Key::RightControl);
-        unsafe {
-            if IS_ALT_GR {
-                if alt || key == Key::AltGr {
-                    if tmp {
-                        tmp = false;
-                    }
-                } else {
-                    IS_ALT_GR = false;
-                }
-            }
-        }
-        tmp
+        let tmp = get_key_state(enigo::Key::Control) || get_key_state(enigo::Key::RightControl);
+        check_and_update_alt_gr(_session_id, alt, key == Key::AltGr, tmp)
     };
     #[cfg(not(windows))]
     let ctrl = get_key_state(enigo::Key::Control) || get_key_state(enigo::Key::RightControl);
@@ -1053,9 +1229,7 @@ pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEv
             // scancode with bit 9 set is sent, let's ignore this.
             #[cfg(windows)]
             if (event.position_code >> 8) == 0xE0 {
-                unsafe {
-                    IS_ALT_GR = true;
-                }
+                set_alt_gr_flag(_session_id, true);
                 return events;
             }
             Some(ControlKey::Control)
@@ -1346,7 +1520,13 @@ fn _map_keyboard_mode(_peer: &str, event: &Event, mut key_event: KeyEvent) -> Op
 }
 
 #[cfg(not(any(target_os = "ios")))]
-fn try_fill_unicode(_peer: &str, event: &Event, key_event: &KeyEvent, events: &mut Vec<KeyEvent>) {
+fn try_fill_unicode(
+    _peer: &str,
+    event: &Event,
+    key_event: &KeyEvent,
+    events: &mut Vec<KeyEvent>,
+    _session_id: Option<u128>,
+) {
     match &event.unicode {
         Some(unicode_info) => {
             if let Some(name) = &unicode_info.name {
@@ -1362,7 +1542,7 @@ fn try_fill_unicode(_peer: &str, event: &Event, key_event: &KeyEvent, events: &m
         {
             #[cfg(target_os = "windows")]
             if _peer == OS_LOWER_LINUX {
-                if is_hot_key_modifiers_down() && unsafe { !IS_0X021D_DOWN } {
+                if is_hot_key_modifiers_down() && !is_0x021d_down(_session_id) {
                     if let Some(chr) = get_char_from_vk(event.platform_code as u32) {
                         let mut evt = key_event.clone();
                         evt.set_seq(chr.to_string());
@@ -1381,8 +1561,9 @@ fn try_fill_win2win_hotkey(
     event: &Event,
     key_event: &KeyEvent,
     events: &mut Vec<KeyEvent>,
+    session_id: Option<u128>,
 ) {
-    if peer == OS_LOWER_WINDOWS && is_hot_key_modifiers_down() && unsafe { !IS_0X021D_DOWN } {
+    if peer == OS_LOWER_WINDOWS && is_hot_key_modifiers_down() && !is_0x021d_down(session_id) {
         let mut down = false;
         let win2win_hotkey = match event.event_type {
             EventType::KeyPress(..) => {
@@ -1421,20 +1602,18 @@ fn is_hot_key_modifiers_down() -> bool {
 
 #[inline]
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn is_altgr(event: &Event) -> bool {
+fn is_altgr(event: &Event, _session_id: Option<u128>) -> bool {
     #[cfg(target_os = "linux")]
     if event.platform_code == 0xFE03 {
-        true
-    } else {
-        false
+        return true;
     }
 
     #[cfg(target_os = "windows")]
-    if unsafe { IS_0X021D_DOWN } && event.position_code == 0xE038 {
-        true
-    } else {
-        false
+    if is_0x021d_down(_session_id) && event.position_code == 0xE038 {
+        return true;
     }
+
+    false
 }
 
 #[inline]
@@ -1444,7 +1623,17 @@ fn is_press(event: &Event) -> bool {
 }
 
 // https://github.com/rustdesk/rustdesk/wiki/FAQ#keyboard-translation-modes
+#[allow(dead_code)]
 pub fn translate_keyboard_mode(peer: &str, event: &Event, key_event: KeyEvent) -> Vec<KeyEvent> {
+    translate_keyboard_mode_with_session(peer, event, key_event, None)
+}
+
+pub fn translate_keyboard_mode_with_session(
+    peer: &str,
+    event: &Event,
+    key_event: KeyEvent,
+    session_id: Option<u128>,
+) -> Vec<KeyEvent> {
     let mut events: Vec<KeyEvent> = Vec::new();
 
     if let Some(evt) = windows_peer_special_key(peer, event) {
@@ -1455,7 +1644,7 @@ pub fn translate_keyboard_mode(peer: &str, event: &Event, key_event: KeyEvent) -
     if let Some(unicode_info) = &event.unicode {
         if unicode_info.is_dead {
             #[cfg(target_os = "macos")]
-            if peer != OS_LOWER_MACOS && unsafe { IS_LEFT_OPTION_DOWN } {
+            if peer != OS_LOWER_MACOS && is_left_option_down(session_id) {
                 // try clear dead key state
                 // rdev::clear_dead_key_state();
             } else {
@@ -1479,7 +1668,7 @@ pub fn translate_keyboard_mode(peer: &str, event: &Event, key_event: KeyEvent) -
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    if is_altgr(event) {
+    if is_altgr(event, session_id) {
         return events;
     }
 
@@ -1489,24 +1678,22 @@ pub fn translate_keyboard_mode(peer: &str, event: &Event, key_event: KeyEvent) -
     }
 
     #[cfg(target_os = "windows")]
-    try_fill_win2win_hotkey(peer, event, &key_event, &mut events);
+    try_fill_win2win_hotkey(peer, event, &key_event, &mut events, session_id);
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if events.is_empty() && is_press(event) {
-        try_fill_unicode(peer, event, &key_event, &mut events);
+        try_fill_unicode(peer, event, &key_event, &mut events, session_id);
     }
 
     // If AltGr is down, no need to send events other than unicode.
     #[cfg(target_os = "windows")]
-    unsafe {
-        if IS_0X021D_DOWN {
-            return events;
-        }
+    if is_0x021d_down(session_id) {
+        return events;
     }
 
     #[cfg(target_os = "macos")]
-    if !unsafe { IS_LEFT_OPTION_DOWN } {
-        try_fill_unicode(peer, event, &key_event, &mut events);
+    if !is_left_option_down(session_id) {
+        try_fill_unicode(peer, event, &key_event, &mut events, session_id);
     }
 
     if events.is_empty() {

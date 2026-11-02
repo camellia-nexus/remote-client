@@ -1,4 +1,4 @@
-mod keyboard;
+pub mod keyboard;
 #[cfg(not(feature = "flutter"))]
 compile_error!(
     "Camellia builds the Flutter UI only. Build with default features or --features flutter."

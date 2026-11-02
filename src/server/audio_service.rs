@@ -16,7 +16,7 @@ use super::*;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use camellia_remote_protocol::anyhow::anyhow;
 use magnum_opus::{Application::*, Channels::*, Encoder};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 pub const NAME: &'static str = "audio";
 pub const AUDIO_DATA_SIZE_U8: usize = 960 * 4; // 10ms in 48000 stereo
@@ -99,9 +99,7 @@ mod pa_impl {
         RESTARTING.store(false, Ordering::SeqCst);
         #[cfg(target_os = "linux")]
         let mut stream = crate::ipc::connect(1000, "_pa").await?;
-        unsafe {
-            AUDIO_ZERO_COUNT = 0;
-        }
+        AUDIO_ZERO_COUNT.store(0, Ordering::SeqCst);
         let mut encoder = Encoder::new(crate::platform::PA_SAMPLE_RATE, Stereo, LowDelay)?;
         #[cfg(target_os = "linux")]
         allow_err!(
@@ -404,9 +402,7 @@ mod cpal_impl {
         };
         let sample_rate_0 = config.sample_rate().0;
         log::debug!("Audio sample rate : {}", sample_rate);
-        unsafe {
-            AUDIO_ZERO_COUNT = 0;
-        }
+        AUDIO_ZERO_COUNT.store(0, Ordering::SeqCst);
         let device_channel = config.channels();
         let mut encoder = Encoder::new(sample_rate, encode_channel, LowDelay)?;
         // https://www.opus-codec.org/docs/html_api/group__opusencoder.html#gace941e4ef26ed844879fde342ffbe546
@@ -467,24 +463,31 @@ fn create_format_msg(sample_rate: u32, channels: u16) -> Message {
 // every audio data length is set to 480
 // MAX_AUDIO_ZERO_COUNT=800 is similar as Gate Attack Time 3~5s(Linux) || 6~8s(Windows)
 const MAX_AUDIO_ZERO_COUNT: u16 = 800;
-static mut AUDIO_ZERO_COUNT: u16 = 0;
+static AUDIO_ZERO_COUNT: AtomicU16 = AtomicU16::new(0);
+
+#[inline]
+pub fn reset_audio_zero_count() {
+    AUDIO_ZERO_COUNT.store(0, Ordering::SeqCst);
+}
+
+#[inline]
+pub fn get_audio_zero_count() -> u16 {
+    AUDIO_ZERO_COUNT.load(Ordering::SeqCst)
+}
 
 fn send_f32(data: &[f32], encoder: &mut Encoder, sp: &GenericService) {
-    if data.iter().filter(|x| **x != 0.).next().is_some() {
-        unsafe {
-            AUDIO_ZERO_COUNT = 0;
-        }
+    if data.iter().any(|x| *x != 0.) {
+        AUDIO_ZERO_COUNT.store(0, Ordering::Relaxed);
     } else {
-        unsafe {
-            if AUDIO_ZERO_COUNT > MAX_AUDIO_ZERO_COUNT {
-                if AUDIO_ZERO_COUNT == MAX_AUDIO_ZERO_COUNT + 1 {
-                    log::debug!("Audio Zero Gate Attack");
-                    AUDIO_ZERO_COUNT += 1;
-                }
-                return;
+        let count = AUDIO_ZERO_COUNT.load(Ordering::Relaxed);
+        if count > MAX_AUDIO_ZERO_COUNT {
+            if count == MAX_AUDIO_ZERO_COUNT + 1 {
+                log::debug!("Audio Zero Gate Attack");
+                AUDIO_ZERO_COUNT.store(count.saturating_add(1), Ordering::Relaxed);
             }
-            AUDIO_ZERO_COUNT += 1;
+            return;
         }
+        AUDIO_ZERO_COUNT.store(count.saturating_add(1), Ordering::Relaxed);
     }
     #[cfg(target_os = "android")]
     {

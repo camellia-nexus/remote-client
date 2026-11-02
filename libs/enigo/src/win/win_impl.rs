@@ -11,10 +11,51 @@ extern "system" {
     pub fn GetLastError() -> DWORD;
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 /// The main struct for handling the event emitting
-#[derive(Default)]
-pub struct Enigo;
-static mut LAYOUT: HKL = std::ptr::null_mut();
+pub struct Enigo {
+    layout: AtomicUsize,
+}
+
+impl Default for Enigo {
+    fn default() -> Self {
+        Self {
+            layout: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Enigo {
+    fn query_foreground_layout() -> HKL {
+        unsafe {
+            let current_window_thread_id =
+                GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+            GetKeyboardLayout(current_window_thread_id)
+        }
+    }
+
+    fn current_layout(&self) -> HKL {
+        let cached = self.layout.load(Ordering::Acquire);
+        if cached != 0 {
+            cached as HKL
+        } else {
+            let fresh = Self::query_foreground_layout();
+            self.layout.store(fresh as usize, Ordering::Release);
+            fresh
+        }
+    }
+
+    fn refresh_layout(&self) -> HKL {
+        let fresh = Self::query_foreground_layout();
+        self.layout.store(fresh as usize, Ordering::Release);
+        fresh
+    }
+
+    fn keybd_event(&self, flags: u32, vk: u16, scan: u16) -> DWORD {
+        keybd_event_with_layout(flags, vk, scan, self.current_layout())
+    }
+}
 
 /// The dwExtraInfo value in keyboard and mouse structure that used in SendInput()
 pub const ENIGO_INPUT_EXTRA_VALUE: ULONG_PTR = 100;
@@ -38,17 +79,12 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
     unsafe { SendInput(1, &mut input as LPINPUT, size_of::<INPUT>() as c_int) }
 }
 
-fn keybd_event(mut flags: u32, vk: u16, scan: u16) -> DWORD {
+fn keybd_event_with_layout(mut flags: u32, vk: u16, scan: u16, layout: HKL) -> DWORD {
     let mut scan = scan;
     unsafe {
         // https://github.com/rustdesk/rustdesk/issues/366
         if scan == 0 {
-            if LAYOUT.is_null() {
-                let current_window_thread_id =
-                    GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
-                LAYOUT = GetKeyboardLayout(current_window_thread_id);
-            }
-            scan = MapVirtualKeyExW(vk as _, 0, LAYOUT) as _;
+            scan = MapVirtualKeyExW(vk as _, 0, layout) as _;
         }
     }
 
@@ -241,8 +277,8 @@ impl KeyboardControllable for Enigo {
 
     fn key_click(&mut self, key: Key) {
         let vk = self.key_to_keycode(key);
-        keybd_event(0, vk, 0);
-        keybd_event(KEYEVENTF_KEYUP, vk, 0);
+        self.keybd_event(0, vk, 0);
+        self.keybd_event(KEYEVENTF_KEYUP, vk, 0);
     }
 
     fn key_down(&mut self, key: Key) -> crate::ResultType {
@@ -262,7 +298,7 @@ impl KeyboardControllable for Enigo {
                         }
                     }
 
-                    let res = keybd_event(0, vk, 0);
+                    let res = self.keybd_event(0, vk, 0);
                     let err = if res == 0 { get_error() } else { "".to_owned() };
 
                     for pos in 0..mod_len {
@@ -284,7 +320,7 @@ impl KeyboardControllable for Enigo {
                 if code == 0 || code == 65535 {
                     return Err("".into());
                 }
-                let res = keybd_event(0, code, 0);
+                let res = self.keybd_event(0, code, 0);
                 if res == 0 {
                     let err = get_error();
                     if !err.is_empty() {
@@ -302,11 +338,11 @@ impl KeyboardControllable for Enigo {
                 let code = self.get_layoutdependent_keycode(c);
                 if code as u16 != 0xFFFF {
                     let vk = code & 0x00FF;
-                    keybd_event(KEYEVENTF_KEYUP, vk, 0);
+                    self.keybd_event(KEYEVENTF_KEYUP, vk, 0);
                 }
             }
             _ => {
-                keybd_event(KEYEVENTF_KEYUP, self.key_to_keycode(key), 0);
+                self.keybd_event(KEYEVENTF_KEYUP, self.key_to_keycode(key), 0);
             }
         }
     }
@@ -361,11 +397,11 @@ impl Enigo {
     }
 
     fn unicode_key_down(&self, unicode_char: u16) {
-        keybd_event(KEYEVENTF_UNICODE, 0, unicode_char);
+        self.keybd_event(KEYEVENTF_UNICODE, 0, unicode_char);
     }
 
     fn unicode_key_up(&self, unicode_char: u16) {
-        keybd_event(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, unicode_char);
+        self.keybd_event(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, unicode_char);
     }
 
     fn key_to_keycode(&self, key: Key) -> u16 {
@@ -463,15 +499,10 @@ impl Enigo {
     }
 
     fn get_layoutdependent_keycode(&self, chr: char) -> u16 {
-        unsafe {
-            LAYOUT = std::ptr::null_mut();
-        }
         // NOTE VkKeyScanW uses the current keyboard LAYOUT
         // to specify a LAYOUT use VkKeyScanExW and GetKeyboardLayout
         // or load one with LoadKeyboardLayoutW
-        let current_window_thread_id =
-            unsafe { GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut()) };
-        unsafe { LAYOUT = GetKeyboardLayout(current_window_thread_id) };
-        unsafe { VkKeyScanExW(chr as _, LAYOUT) as _ }
+        let layout = self.refresh_layout();
+        unsafe { VkKeyScanExW(chr as _, layout) as _ }
     }
 }

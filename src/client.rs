@@ -1136,10 +1136,11 @@ pub struct AudioHandler {
 }
 
 #[cfg(not(target_os = "linux"))]
-struct AudioBuffer(
+pub struct AudioBuffer(
     pub Arc<std::sync::Mutex<ringbuf::HeapRb<f32>>>,
-    usize,
-    [usize; 30],
+    pub usize,
+    pub [usize; 30],
+    pub Option<std::time::Instant>,
 );
 
 #[cfg(not(target_os = "linux"))]
@@ -1151,6 +1152,7 @@ impl Default for AudioBuffer {
             )),
             48000 * 2,
             [0; 30],
+            None,
         )
     }
 }
@@ -1167,27 +1169,25 @@ impl AudioBuffer {
         }
     }
 
-    fn try_shrink(&mut self, having: usize) {
-        extern crate chrono;
-        use chrono::prelude::*;
-
+    pub fn try_shrink(&mut self, having: usize) {
         let mut i = (having * 10) / self.1;
         if i > 29 {
             i = 29;
         }
         self.2[i] += 1;
 
-        #[allow(non_upper_case_globals)]
-        static mut tms: i64 = 0;
-        let dt = Local::now().timestamp_millis();
-        unsafe {
-            if tms == 0 {
-                tms = dt;
-                return;
-            } else if dt < tms + 12000 {
+        let now = std::time::Instant::now();
+        match self.3 {
+            None => {
+                self.3 = Some(now);
                 return;
             }
-            tms = dt;
+            Some(last) => {
+                if now.duration_since(last) < std::time::Duration::from_millis(12000) {
+                    return;
+                }
+                self.3 = Some(now);
+            }
         }
 
         // the safer water mark to drop
