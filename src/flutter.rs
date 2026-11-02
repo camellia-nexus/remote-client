@@ -228,6 +228,7 @@ pub struct FlutterHandler {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     hooks: Arc<RwLock<HashMap<String, SessionHook>>>,
     use_texture_render: Arc<AtomicBool>,
+    active_terminals: Arc<RwLock<HashSet<i32>>>,
 }
 
 impl Default for FlutterHandler {
@@ -241,6 +242,7 @@ impl Default for FlutterHandler {
             use_texture_render: Arc::new(
                 AtomicBool::new(crate::ui_interface::use_texture_render()),
             ),
+            active_terminals: Default::default(),
         }
     }
 }
@@ -540,6 +542,21 @@ impl SessionHandler {
 }
 
 impl FlutterHandler {
+    #[inline]
+    pub fn is_terminal_active(&self, terminal_id: i32) -> bool {
+        self.active_terminals.read().unwrap().contains(&terminal_id)
+    }
+
+    #[inline]
+    pub fn mark_terminal_active(&self, terminal_id: i32) {
+        self.active_terminals.write().unwrap().insert(terminal_id);
+    }
+
+    #[inline]
+    pub fn clear_active_terminals(&self) {
+        self.active_terminals.write().unwrap().clear();
+    }
+
     /// Push an event to all the event queues.
     /// An event is stored as json in the event queues.
     ///
@@ -1129,6 +1146,12 @@ impl InvokeUiSession for FlutterHandler {
 
         match response.union {
             Some(Union::Opened(opened)) => {
+                if opened.success {
+                    self.active_terminals
+                        .write()
+                        .unwrap()
+                        .insert(opened.terminal_id);
+                }
                 let mut event_data: Vec<(&str, serde_json::Value)> = vec![
                     ("type", json!("opened")),
                     ("terminal_id", json!(opened.terminal_id)),
@@ -1147,18 +1170,74 @@ impl InvokeUiSession for FlutterHandler {
                 self.push_event_("terminal_response", &event_data, &[], &[]);
             }
             Some(Union::Data(data)) => {
-                // Decompress data if needed
+                // RES-026: Validate active terminal registration to reject untrusted, un-routed or stale terminal output
+                if !self
+                    .active_terminals
+                    .read()
+                    .unwrap()
+                    .contains(&data.terminal_id)
+                {
+                    log::warn!(
+                        "Dropping terminal data for unknown or closed terminal ID: {}",
+                        data.terminal_id
+                    );
+                    return;
+                }
+
+                // Decompress data if needed with strict terminal budget (128 KiB)
                 let output_data = if data.compressed {
-                    match camellia_remote_protocol::compress::decompress(&data.data) {
+                    match camellia_remote_protocol::compress::decompress_with_limit(
+                        &data.data,
+                        camellia_remote_protocol::compress::MAX_TERMINAL_DECOMPRESSED_SIZE,
+                    ) {
                         Ok(output) => output,
                         Err(err) => {
                             log::warn!(
-                                "Dropping terminal output with malformed compressed data: {err}"
+                                "Dropping terminal output for terminal {} with malformed/oversized compressed data ({} bytes): {err}",
+                                data.terminal_id,
+                                data.data.len()
                             );
+                            self.active_terminals
+                                .write()
+                                .unwrap()
+                                .remove(&data.terminal_id);
+                            let event_data: Vec<(&str, serde_json::Value)> = vec![
+                                ("type", json!("error")),
+                                ("terminal_id", json!(data.terminal_id)),
+                                (
+                                    "message",
+                                    json!("Terminal output exceeded maximum allowed decompressed limit (128 KiB) or compressed payload is corrupt"),
+                                ),
+                            ];
+                            self.push_event_("terminal_response", &event_data, &[], &[]);
                             return;
                         }
                     }
                 } else {
+                    if data.data.len()
+                        > camellia_remote_protocol::compress::MAX_TERMINAL_DECOMPRESSED_SIZE
+                    {
+                        log::warn!(
+                            "Dropping uncompressed terminal output for terminal {} exceeding size limit ({} > {} bytes)",
+                            data.terminal_id,
+                            data.data.len(),
+                            camellia_remote_protocol::compress::MAX_TERMINAL_DECOMPRESSED_SIZE
+                        );
+                        self.active_terminals
+                            .write()
+                            .unwrap()
+                            .remove(&data.terminal_id);
+                        let event_data: Vec<(&str, serde_json::Value)> = vec![
+                            ("type", json!("error")),
+                            ("terminal_id", json!(data.terminal_id)),
+                            (
+                                "message",
+                                json!("Terminal output exceeded maximum allowed uncompressed limit (128 KiB)"),
+                            ),
+                        ];
+                        self.push_event_("terminal_response", &event_data, &[], &[]);
+                        return;
+                    }
                     data.data.to_vec()
                 };
 
@@ -1171,6 +1250,10 @@ impl InvokeUiSession for FlutterHandler {
                 self.push_event_("terminal_response", &event_data, &[], &[]);
             }
             Some(Union::Closed(closed)) => {
+                self.active_terminals
+                    .write()
+                    .unwrap()
+                    .remove(&closed.terminal_id);
                 let event_data: Vec<(&str, serde_json::Value)> = vec![
                     ("type", json!("closed")),
                     ("terminal_id", json!(closed.terminal_id)),
@@ -1179,6 +1262,10 @@ impl InvokeUiSession for FlutterHandler {
                 self.push_event_("terminal_response", &event_data, &[], &[]);
             }
             Some(Union::Error(error)) => {
+                self.active_terminals
+                    .write()
+                    .unwrap()
+                    .remove(&error.terminal_id);
                 let event_data: Vec<(&str, serde_json::Value)> = vec![
                     ("type", json!("error")),
                     ("terminal_id", json!(error.terminal_id)),
@@ -2127,6 +2214,7 @@ pub mod sessions {
             match remove_ret {
                 Some(_) => {
                     if write_lock.is_empty() {
+                        s.ui_handler.clear_active_terminals();
                         remove_peer_key = Some(peer_key.clone());
                     } else {
                         check_remove_unused_displays(None, id, s, &write_lock);

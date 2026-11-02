@@ -58,7 +58,7 @@ mod whiteboard;
 
 mod ui_cm_interface;
 mod ui_interface;
-mod ui_session_interface;
+pub mod ui_session_interface;
 
 mod hbbs_http;
 mod http_bridge;
