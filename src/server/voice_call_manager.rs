@@ -1,6 +1,6 @@
 use camellia_remote_protocol::log;
 use std::sync::{
-    atomic::{AtomicI64, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
     Arc, RwLock,
 };
 
@@ -11,23 +11,11 @@ pub struct VoiceCallOwner {
     pub generation: u64,
 }
 
+pub use crate::client::helper::generate_call_id;
+
 lazy_static::lazy_static! {
     pub static ref VOICE_CALL_MANAGER: VoiceCallManager = VoiceCallManager::new();
-    static ref CALL_ID_COUNTER: AtomicI64 = AtomicI64::new(1);
     static ref GENERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
-}
-
-/// Generates a 64-bit cryptographic/monotonic call ID:
-/// High 32 bits monotonic sequence + low 32 bits CSPRNG entropy.
-pub fn generate_call_id() -> i64 {
-    let seq = CALL_ID_COUNTER.fetch_add(1, Ordering::SeqCst) as u64 & 0xFFFF_FFFF;
-    let entropy = (camellia_remote_protocol::rand::random::<u32>()) as u64;
-    let combined = ((seq << 32) | entropy) as i64;
-    if combined == 0 {
-        1
-    } else {
-        combined
-    }
 }
 
 pub fn next_voice_call_generation() -> u64 {
