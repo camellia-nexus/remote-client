@@ -444,8 +444,19 @@ pub fn core_main() -> Option<Vec<String>> {
             log::info!("start --uninstall-service");
             crate::platform::uninstall_service(false, true);
             return None;
+        } else if args[0] == "--recover-privacy" {
+            log::info!("start --recover-privacy");
+            let res = crate::privacy_mode::recover_privacy_mode_cli();
+            if let Err(e) = res {
+                eprintln!("Failed to recover privacy mode: {}", e);
+                std::process::exit(1);
+            } else {
+                println!("Privacy mode successfully recovered.");
+                std::process::exit(0);
+            }
         } else if args[0] == "--service" {
             log::info!("start --service");
+            crate::privacy_mode::recover_privacy_mode_on_startup();
             crate::start_os_service();
             return None;
         } else if args[0] == "--server" {
@@ -460,8 +471,7 @@ pub fn core_main() -> Option<Vec<String>> {
                     .ok();
                 camellia_remote_protocol::allow_err!(crate::run_me(vec!["--tray"]));
             }
-            #[cfg(windows)]
-            crate::privacy_mode::restore_reg_connectivity(true, false);
+            crate::privacy_mode::recover_privacy_mode_on_startup();
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
                 crate::start_server(true, false);

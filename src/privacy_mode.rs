@@ -8,18 +8,29 @@ use crate::{
 #[cfg(windows)]
 use camellia_remote_protocol::tokio;
 use camellia_remote_protocol::{
-    anyhow::anyhow, bail, lazy_static, tokio::sync::oneshot, ResultType,
+    anyhow::anyhow, bail, lazy_static, log, tokio::sync::oneshot, ResultType,
 };
 use serde_derive::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::Duration,
+};
+
+pub mod journal;
+pub use journal::{
+    clear_durable_journal, load_durable_journal, save_durable_journal, DisplaySnapshot,
+    JournalItemState, JournalPhase, PhysicalDisplayJournalEntry, PrivacyRecoveryJournal,
+    RegistryJournalEntry, VirtualDisplayJournalEntry, CONFIG_KEY_PRIVACY_JOURNAL,
 };
 
 #[cfg(windows)]
 pub mod win_exclude_from_capture;
 #[cfg(windows)]
-mod win_input;
+pub mod win_input;
 #[cfg(windows)]
 pub mod win_mag;
 #[cfg(windows)]
@@ -29,15 +40,14 @@ pub mod win_topmost_window;
 pub mod macos;
 
 #[cfg(windows)]
-mod win_virtual_display;
+pub mod win_virtual_display;
 #[cfg(windows)]
 pub use win_virtual_display::restore_reg_connectivity;
 
 pub const INVALID_PRIVACY_MODE_CONN_ID: i32 = 0;
-pub const OCCUPIED: &'static str = "Privacy occupied by another one.";
-pub const TURN_OFF_OTHER_ID: &'static str =
-    "Failed to turn off privacy mode that belongs to someone else.";
-pub const NO_PHYSICAL_DISPLAYS: &'static str = "no_need_privacy_mode_no_physical_displays_tip";
+pub const OCCUPIED: &str = "Privacy occupied by another one.";
+pub const TURN_OFF_OTHER_ID: &str = "Failed to turn off privacy mode that belongs to someone else.";
+pub const NO_PHYSICAL_DISPLAYS: &str = "no_need_privacy_mode_no_physical_displays_tip";
 
 pub const PRIVACY_MODE_IMPL_WIN_MAG: &str = "privacy_mode_impl_mag";
 pub const PRIVACY_MODE_IMPL_WIN_EXCLUDE_FROM_CAPTURE: &str =
@@ -52,6 +62,227 @@ pub enum PrivacyModeState {
     OffUnknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyOwner {
+    pub conn_id: i32,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivacyRequestId {
+    pub owner: PrivacyOwner,
+    pub seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivacyTransactionState {
+    Idle,
+    Activating { request_id: PrivacyRequestId },
+    Active { owner: PrivacyOwner },
+    Restoring { owner: Option<PrivacyOwner> },
+    UnknownRestoring { owner: Option<PrivacyOwner> },
+}
+
+pub struct PrivacyTransactionSupervisor {
+    state: RwLock<PrivacyTransactionState>,
+    seq_counter: AtomicU64,
+    current_cancel_token: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl PrivacyTransactionSupervisor {
+    pub fn new() -> Self {
+        Self {
+            state: RwLock::new(PrivacyTransactionState::Idle),
+            seq_counter: AtomicU64::new(1),
+            current_cancel_token: Mutex::new(None),
+        }
+    }
+
+    pub fn get_state(&self) -> PrivacyTransactionState {
+        self.state.read().unwrap().clone()
+    }
+
+    pub fn begin_activation(
+        &self,
+        owner: PrivacyOwner,
+    ) -> ResultType<(PrivacyRequestId, Arc<AtomicBool>)> {
+        let mut state_lock = self.state.write().unwrap();
+        match &*state_lock {
+            PrivacyTransactionState::Active { owner: cur_owner } => {
+                if *cur_owner == owner {
+                    return Ok((
+                        PrivacyRequestId {
+                            owner,
+                            seq: self.seq_counter.load(Ordering::SeqCst),
+                        },
+                        Arc::new(AtomicBool::new(false)),
+                    ));
+                } else {
+                    bail!(OCCUPIED);
+                }
+            }
+            PrivacyTransactionState::Activating { request_id } => {
+                if request_id.owner.conn_id == owner.conn_id {
+                    // Retry from same connection: signal cancellation on preceding attempt
+                    if let Some(token) = self.current_cancel_token.lock().unwrap().as_ref() {
+                        token.store(true, Ordering::SeqCst);
+                    }
+                } else {
+                    bail!(OCCUPIED);
+                }
+            }
+            PrivacyTransactionState::Restoring { .. }
+            | PrivacyTransactionState::UnknownRestoring { .. } => {
+                bail!("Privacy mode is currently restoring system state. Please retry shortly.");
+            }
+            PrivacyTransactionState::Idle => {}
+        }
+
+        let seq = self.seq_counter.fetch_add(1, Ordering::SeqCst);
+        let request_id = PrivacyRequestId { owner, seq };
+        let cancel_token = Arc::new(AtomicBool::new(false));
+
+        *self.current_cancel_token.lock().unwrap() = Some(cancel_token.clone());
+        *state_lock = PrivacyTransactionState::Activating { request_id };
+
+        Ok((request_id, cancel_token))
+    }
+
+    pub fn commit_active(
+        &self,
+        request_id: PrivacyRequestId,
+        cancel_token: &AtomicBool,
+    ) -> ResultType<()> {
+        if cancel_token.load(Ordering::SeqCst) {
+            bail!("Transaction was cancelled; cannot commit active state");
+        }
+        let mut state_lock = self.state.write().unwrap();
+        match *state_lock {
+            PrivacyTransactionState::Activating {
+                request_id: cur_req,
+            } if cur_req == request_id => {
+                *state_lock = PrivacyTransactionState::Active {
+                    owner: request_id.owner,
+                };
+                *self.current_cancel_token.lock().unwrap() = None;
+                Ok(())
+            }
+            _ => {
+                bail!("Transaction generation or state mismatch; active state rejected");
+            }
+        }
+    }
+
+    pub fn abort_activation(&self, request_id: PrivacyRequestId) {
+        let mut state_lock = self.state.write().unwrap();
+        if let PrivacyTransactionState::Activating {
+            request_id: cur_req,
+        } = *state_lock
+        {
+            if cur_req == request_id {
+                *state_lock = PrivacyTransactionState::Idle;
+                *self.current_cancel_token.lock().unwrap() = None;
+            }
+        }
+    }
+
+    pub async fn handle_timeout(
+        &self,
+        request_id: PrivacyRequestId,
+        cancel_token: Arc<AtomicBool>,
+        grace_period: Duration,
+        done_rx: &mut oneshot::Receiver<Option<ResultType<bool>>>,
+    ) -> Option<ResultType<bool>> {
+        cancel_token.store(true, Ordering::SeqCst);
+
+        // Wait bounded grace period for worker to acknowledge cancellation and rollback
+        match camellia_remote_protocol::tokio::time::timeout(grace_period, done_rx).await {
+            Ok(Ok(_)) => {
+                self.abort_activation(request_id);
+                Some(Err(anyhow!(
+                    "Privacy activation timed out; system state restored"
+                )))
+            }
+            _ => {
+                // Hard timeout: worker is stuck in kernel/driver syscall
+                let mut state_lock = self.state.write().unwrap();
+                *state_lock = PrivacyTransactionState::UnknownRestoring {
+                    owner: Some(request_id.owner),
+                };
+                Some(Err(anyhow!(
+                    "Privacy activation timed out; state unknown, background recovery scheduled"
+                )))
+            }
+        }
+    }
+
+    pub fn turn_off_or_abort_for_owner(&self, owner: PrivacyOwner) -> bool {
+        let mut state_lock = self.state.write().unwrap();
+        match *state_lock {
+            PrivacyTransactionState::Activating { request_id }
+                if owner.conn_id == INVALID_PRIVACY_MODE_CONN_ID
+                    || request_id.owner.conn_id == owner.conn_id =>
+            {
+                if let Some(token) = self.current_cancel_token.lock().unwrap().as_ref() {
+                    token.store(true, Ordering::SeqCst);
+                }
+                *self.current_cancel_token.lock().unwrap() = None;
+                *state_lock = PrivacyTransactionState::Idle;
+                true
+            }
+            PrivacyTransactionState::Active {
+                owner: active_owner,
+            } if owner.conn_id == INVALID_PRIVACY_MODE_CONN_ID
+                || active_owner.conn_id == owner.conn_id =>
+            {
+                *self.current_cancel_token.lock().unwrap() = None;
+                *state_lock = PrivacyTransactionState::Idle;
+                true
+            }
+            PrivacyTransactionState::Restoring {
+                owner: ref opt_owner,
+            }
+            | PrivacyTransactionState::UnknownRestoring {
+                owner: ref opt_owner,
+            } if owner.conn_id == INVALID_PRIVACY_MODE_CONN_ID
+                || opt_owner
+                    .map(|o| o.conn_id == owner.conn_id)
+                    .unwrap_or(true) =>
+            {
+                if let Some(token) = self.current_cancel_token.lock().unwrap().as_ref() {
+                    token.store(true, Ordering::SeqCst);
+                }
+                *self.current_cancel_token.lock().unwrap() = None;
+                *state_lock = PrivacyTransactionState::Idle;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn force_reset_to_idle(&self) {
+        if let Some(token) = self.current_cancel_token.lock().unwrap().take() {
+            token.store(true, Ordering::SeqCst);
+        }
+        let mut state_lock = self.state.write().unwrap();
+        *state_lock = PrivacyTransactionState::Idle;
+    }
+
+    pub fn get_active_owner(&self) -> Option<PrivacyOwner> {
+        let state_lock = self.state.read().unwrap();
+        match *state_lock {
+            PrivacyTransactionState::Active { owner } => Some(owner),
+            _ => None,
+        }
+    }
+}
+
+impl Default for PrivacyTransactionSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait PrivacyMode: Sync + Send {
     fn is_async_privacy_mode(&self) -> bool;
 
@@ -64,6 +295,15 @@ pub trait PrivacyMode: Sync + Send {
     fn pre_conn_id(&self) -> i32;
 
     fn get_impl_key(&self) -> &str;
+
+    fn turn_on_privacy_with_token(
+        &mut self,
+        conn_id: i32,
+        _generation: u64,
+        _cancel_token: Option<&AtomicBool>,
+    ) -> ResultType<bool> {
+        self.turn_on_privacy(conn_id)
+    }
 
     #[inline]
     fn check_on_conn_id(&self, conn_id: i32) -> ResultType<bool> {
@@ -91,6 +331,9 @@ pub trait PrivacyMode: Sync + Send {
 }
 
 lazy_static::lazy_static! {
+    pub static ref SUPERVISOR: Arc<PrivacyTransactionSupervisor> =
+        Arc::new(PrivacyTransactionSupervisor::new());
+
     pub static ref DEFAULT_PRIVACY_MODE_IMPL: String = {
         #[cfg(windows)]
         {
@@ -122,15 +365,16 @@ lazy_static::lazy_static! {
     };
 
     static ref PRIVACY_MODE: Arc<Mutex<Option<Box<dyn PrivacyMode>>>> = {
-        let mut cur_impl = get_option("privacy-mode-impl-key".to_owned());
+        let mut cur_impl = get_option("privacy-mode-impl-key");
         if !get_supported_privacy_mode_impl().iter().any(|(k, _)| k == &cur_impl) {
             cur_impl = DEFAULT_PRIVACY_MODE_IMPL.to_owned();
         }
 
-        let privacy_mode = match PRIVACY_MODE_CREATOR.lock().unwrap().get(&(&cur_impl as &str)) {
-            Some(creator) => Some(creator(&cur_impl)),
-            None => None,
-        };
+        let privacy_mode = PRIVACY_MODE_CREATOR
+            .lock()
+            .unwrap()
+            .get(&(&cur_impl as &str))
+            .map(|creator| creator(&cur_impl));
         Arc::new(Mutex::new(privacy_mode))
     };
 }
@@ -177,7 +421,8 @@ pub fn init() -> Option<ResultType<()>> {
 
 #[inline]
 pub fn clear() -> Option<()> {
-    Some(PRIVACY_MODE.lock().unwrap().as_mut()?.clear())
+    PRIVACY_MODE.lock().unwrap().as_mut()?.clear();
+    Some(())
 }
 
 #[inline]
@@ -199,24 +444,35 @@ fn get_supported_impl(impl_key: &str) -> String {
     if supported_impls.iter().any(|(k, _)| k == &impl_key) {
         return impl_key.to_owned();
     };
-    // TODO: Is it a good idea to use fallback here? Because user do not know the fallback.
-    // fallback
-    let mut cur_impl = get_option("privacy-mode-impl-key".to_owned());
+    let mut cur_impl = get_option("privacy-mode-impl-key");
     if !get_supported_privacy_mode_impl()
         .iter()
         .any(|(k, _)| k == &cur_impl)
     {
-        // fallback
         cur_impl = DEFAULT_PRIVACY_MODE_IMPL.to_owned();
     }
     cur_impl
 }
 
 pub async fn turn_on_privacy(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>> {
+    turn_on_privacy_with_owner(
+        impl_key,
+        PrivacyOwner {
+            conn_id,
+            generation: 0,
+        },
+    )
+    .await
+}
+
+pub async fn turn_on_privacy_with_owner(
+    impl_key: &str,
+    owner: PrivacyOwner,
+) -> Option<ResultType<bool>> {
     if is_async_privacy_mode() {
-        turn_on_privacy_async(impl_key.to_string(), conn_id).await
+        turn_on_privacy_async_with_owner(impl_key.to_string(), owner).await
     } else {
-        turn_on_privacy_sync(impl_key, conn_id)
+        turn_on_privacy_sync_with_owner(impl_key, owner)
     }
 }
 
@@ -226,46 +482,128 @@ fn is_async_privacy_mode() -> bool {
         .lock()
         .unwrap()
         .as_ref()
-        .map_or(false, |m| m.is_async_privacy_mode())
+        .is_some_and(|m| m.is_async_privacy_mode())
 }
 
 #[inline]
-async fn turn_on_privacy_async(impl_key: String, conn_id: i32) -> Option<ResultType<bool>> {
+async fn turn_on_privacy_async_with_owner(
+    impl_key: String,
+    owner: PrivacyOwner,
+) -> Option<ResultType<bool>> {
+    let (request_id, cancel_token) = match SUPERVISOR.begin_activation(owner) {
+        Ok(pair) => pair,
+        Err(e) => return Some(Err(e)),
+    };
+
     let (tx, rx) = oneshot::channel();
+    let token_clone = cancel_token.clone();
+    let req_owner = owner;
+    let key = impl_key.clone();
+
     std::thread::spawn(move || {
-        let res = turn_on_privacy_sync(&impl_key, conn_id);
+        let res = turn_on_privacy_sync_with_token(&key, req_owner, &token_clone);
         let _ = tx.send(res);
     });
+
+    let mut rx = rx;
     // Wait at most 7.5 seconds for the result.
-    // Because it may take a long time to turn on the privacy mode with amyuni idd.
-    // Some laptops may take time to plug in a virtual display.
-    match camellia_remote_protocol::timeout(7500, rx).await {
+    match camellia_remote_protocol::tokio::time::timeout(Duration::from_millis(7500), &mut rx).await
+    {
         Ok(res) => match res {
-            Ok(res) => res,
-            Err(e) => Some(Err(anyhow!(e.to_string()))),
+            Ok(worker_res) => match worker_res {
+                Some(Ok(success)) => {
+                    if success {
+                        if let Err(e) = SUPERVISOR.commit_active(request_id, &cancel_token) {
+                            log::error!("Supervisor rejected active commit: {}", e);
+                            let _ = turn_off_privacy(owner.conn_id, None);
+                            return Some(Err(e));
+                        }
+                    } else {
+                        SUPERVISOR.abort_activation(request_id);
+                    }
+                    Some(Ok(success))
+                }
+                Some(Err(e)) => {
+                    SUPERVISOR.abort_activation(request_id);
+                    Some(Err(e))
+                }
+                None => {
+                    SUPERVISOR.abort_activation(request_id);
+                    None
+                }
+            },
+            Err(e) => {
+                SUPERVISOR.abort_activation(request_id);
+                Some(Err(anyhow!(e.to_string())))
+            }
         },
-        Err(e) => Some(Err(anyhow!(e.to_string()))),
+        Err(_) => {
+            // 7.5s Timeout exceeded: activate supervisor bounded compensation
+            SUPERVISOR
+                .handle_timeout(
+                    request_id,
+                    cancel_token,
+                    Duration::from_millis(1500),
+                    &mut rx,
+                )
+                .await
+        }
     }
 }
 
-fn turn_on_privacy_sync(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>> {
-    // Check if privacy mode is already on or occupied by another one
+fn turn_on_privacy_sync_with_owner(
+    impl_key: &str,
+    owner: PrivacyOwner,
+) -> Option<ResultType<bool>> {
+    let (request_id, cancel_token) = match SUPERVISOR.begin_activation(owner) {
+        Ok(pair) => pair,
+        Err(e) => return Some(Err(e)),
+    };
+
+    let res = turn_on_privacy_sync_with_token(impl_key, owner, &cancel_token);
+    match &res {
+        Some(Ok(true)) => {
+            if let Err(e) = SUPERVISOR.commit_active(request_id, &cancel_token) {
+                log::error!("Supervisor rejected active commit: {}", e);
+                let _ = turn_off_privacy(owner.conn_id, None);
+                return Some(Err(e));
+            }
+        }
+        _ => {
+            SUPERVISOR.abort_activation(request_id);
+        }
+    }
+    res
+}
+
+fn turn_on_privacy_sync_with_token(
+    impl_key: &str,
+    owner: PrivacyOwner,
+    cancel_token: &AtomicBool,
+) -> Option<ResultType<bool>> {
+    if cancel_token.load(Ordering::SeqCst) {
+        return Some(Err(anyhow!(
+            "Privacy activation cancelled before lock acquisition"
+        )));
+    }
+
     let mut privacy_mode_lock = PRIVACY_MODE.lock().unwrap();
 
-    // Check or switch privacy mode implementation
-    let impl_key = get_supported_impl(impl_key);
+    if cancel_token.load(Ordering::SeqCst) {
+        return Some(Err(anyhow!(
+            "Privacy activation cancelled after lock acquisition"
+        )));
+    }
 
+    let impl_key = get_supported_impl(impl_key);
     let mut cur_impl_key = "".to_string();
     if let Some(privacy_mode) = privacy_mode_lock.as_ref() {
         cur_impl_key = privacy_mode.get_impl_key().to_string();
-        let check_on_conn_id = privacy_mode.check_on_conn_id(conn_id);
+        let check_on_conn_id = privacy_mode.check_on_conn_id(owner.conn_id);
         match check_on_conn_id.as_ref() {
             Ok(true) => {
                 if cur_impl_key == impl_key {
-                    // Same peer, same implementation.
                     return Some(Ok(true));
-                } else {
-                    // Same peer, switch to new implementation.
                 }
             }
             Err(_) => return Some(check_on_conn_id),
@@ -289,12 +627,19 @@ fn turn_on_privacy_sync(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>
         }
     }
 
-    // turn on privacy mode
-    Some(privacy_mode_lock.as_mut()?.turn_on_privacy(conn_id))
+    Some(privacy_mode_lock.as_mut()?.turn_on_privacy_with_token(
+        owner.conn_id,
+        owner.generation,
+        Some(cancel_token),
+    ))
 }
 
 #[inline]
 pub fn turn_off_privacy(conn_id: i32, state: Option<PrivacyModeState>) -> Option<ResultType<()>> {
+    SUPERVISOR.turn_off_or_abort_for_owner(PrivacyOwner {
+        conn_id,
+        generation: 0,
+    });
     Some(
         PRIVACY_MODE
             .lock()
@@ -302,6 +647,42 @@ pub fn turn_off_privacy(conn_id: i32, state: Option<PrivacyModeState>) -> Option
             .as_mut()?
             .turn_off_privacy(conn_id, state),
     )
+}
+
+pub async fn abort_or_turn_off_bounded(owner: PrivacyOwner, deadline: Duration) -> bool {
+    let was_tracked = SUPERVISOR.turn_off_or_abort_for_owner(owner);
+    let (tx, rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let res = turn_off_privacy(owner.conn_id, None);
+        let _ = tx.send(res);
+    });
+
+    match camellia_remote_protocol::tokio::time::timeout(deadline, rx).await {
+        Ok(Ok(res)) => {
+            log::debug!(
+                "Bounded teardown completed for owner {:?}: {:?}",
+                owner,
+                res
+            );
+            true
+        }
+        Ok(Err(e)) => {
+            log::warn!(
+                "Teardown channel closed unexpectedly for owner {:?}: {}",
+                owner,
+                e
+            );
+            was_tracked
+        }
+        Err(_) => {
+            log::warn!(
+                "Teardown timed out after {:?} for owner {:?}",
+                deadline,
+                owner
+            );
+            was_tracked
+        }
+    }
 }
 
 #[inline]
@@ -355,9 +736,6 @@ pub fn get_supported_privacy_mode_impl() -> Vec<(&'static str, &'static str)> {
     }
     #[cfg(target_os = "macos")]
     {
-        // No translation is intended for privacy_mode_impl_macos_tip as it is a
-        // placeholder for macOS specific privacy mode implementation which currently
-        // doesn't provide multiple modes like Windows does.
         vec![(macos::PRIVACY_MODE_IMPL, "privacy_mode_impl_macos_tip")]
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -402,7 +780,6 @@ pub fn check_privacy_mode_err(
     display_idx: usize,
     timeout_millis: u64,
 ) -> String {
-    // win magnifier implementation requires a test of creating a capturer.
     if is_current_privacy_mode_impl(PRIVACY_MODE_IMPL_WIN_MAG) {
         crate::video_service::test_create_capturer(privacy_mode_id, display_idx, timeout_millis)
     } else {
@@ -417,19 +794,68 @@ pub fn is_privacy_mode_supported() -> bool {
 
 #[inline]
 pub fn get_privacy_mode_conn_id() -> Option<i32> {
-    PRIVACY_MODE
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|pm| pm.pre_conn_id())
+    if let Some(owner) = SUPERVISOR.get_active_owner() {
+        Some(owner.conn_id)
+    } else {
+        PRIVACY_MODE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|pm| pm.pre_conn_id())
+    }
 }
 
 #[inline]
 pub fn is_in_privacy_mode() -> bool {
+    if SUPERVISOR.get_active_owner().is_some() {
+        return true;
+    }
     PRIVACY_MODE
         .lock()
         .unwrap()
         .as_ref()
         .map(|pm| pm.pre_conn_id() != INVALID_PRIVACY_MODE_CONN_ID)
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+pub fn recover_privacy_mode_on_startup() {
+    if let Some(mut journal) = journal::load_durable_journal() {
+        if journal.has_pending_or_applied() {
+            log::info!(
+                "Found lingering privacy journal on startup; restoring display & registry state..."
+            );
+            if let Err(e) = journal::restore_from_journal(&mut journal, true) {
+                log::error!(
+                    "Startup recovery from privacy journal encountered errors: {}",
+                    e
+                );
+            }
+        }
+    }
+    restore_reg_connectivity(true, false);
+}
+
+#[cfg(not(windows))]
+pub fn recover_privacy_mode_on_startup() {}
+
+#[cfg(windows)]
+pub fn recover_privacy_mode_cli() -> ResultType<()> {
+    let mut errors = Vec::new();
+    if let Some(mut journal) = journal::load_durable_journal() {
+        if let Err(e) = journal::restore_from_journal(&mut journal, true) {
+            errors.push(format!("Journal recovery error: {}", e));
+        }
+    }
+    restore_reg_connectivity(true, true);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!("Privacy recovery errors: {}", errors.join("; "))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn recover_privacy_mode_cli() -> ResultType<()> {
+    Ok(())
 }

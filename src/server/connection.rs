@@ -913,36 +913,23 @@ impl Connection {
                                 // Otherwise we could end up in an inconsistent state where
                                 // permission looks disabled while privacy mode is still active.
                                 if !enabled && privacy_mode::is_in_privacy_mode() {
-                                    if let Some(conn_id) = privacy_mode::get_privacy_mode_conn_id() {
-                                        if conn_id == conn.inner.id() {
-                                            let impl_key =
-                                                privacy_mode::get_cur_impl_key().unwrap_or_default();
-                                            let turn_off_res =
-                                                privacy_mode::turn_off_privacy(conn_id, None);
-                                            match turn_off_res {
-                                                Some(Ok(_)) => {
-                                                    let msg_out = crate::common::make_privacy_mode_msg(
-                                                        back_notification::PrivacyModeState::PrvOffByPeer,
-                                                        impl_key.clone(),
-                                                    );
-                                                    conn.send(msg_out).await;
-                                                }
-                                                _ => {
-                                                    let msg_out = Self::turn_off_privacy_result_to_msg(
-                                                        turn_off_res,
-                                                        impl_key,
-                                                    );
-                                                    conn.send(msg_out).await;
-                                                    // Turn-off failed, so revert CM's optimistic toggle
-                                                    // and keep the previous permission value.
-                                                    conn.send_to_cm(ipc::Data::SwitchPermission {
-                                                        name: "privacy_mode".to_owned(),
-                                                        enabled: conn.privacy_mode,
-                                                    });
-                                                    continue;
-                                                }
-                                            }
-                                        }
+                                    let owner = privacy_mode::PrivacyOwner {
+                                        conn_id: conn.inner.id(),
+                                        generation: conn.conn_generation,
+                                    };
+                                    let turned_off = privacy_mode::abort_or_turn_off_bounded(
+                                        owner,
+                                        std::time::Duration::from_millis(3000),
+                                    )
+                                    .await;
+                                    if turned_off {
+                                        let impl_key =
+                                            privacy_mode::get_cur_impl_key().unwrap_or_default();
+                                        let msg_out = crate::common::make_privacy_mode_msg(
+                                            back_notification::PrivacyModeState::PrvOffByPeer,
+                                            impl_key,
+                                        );
+                                        conn.send(msg_out).await;
                                     }
                                 }
                                 conn.privacy_mode = enabled;
@@ -1306,11 +1293,13 @@ impl Connection {
             conn.try_empty_file_clipboard();
         }
 
-        if let Some(video_privacy_conn_id) = privacy_mode::get_privacy_mode_conn_id() {
-            if video_privacy_conn_id == id {
-                let _ = Self::turn_off_privacy_to_msg(id, String::new());
-            }
-        }
+        let owner = privacy_mode::PrivacyOwner {
+            conn_id: id,
+            generation: conn.conn_generation,
+        };
+        let _ =
+            privacy_mode::abort_or_turn_off_bounded(owner, std::time::Duration::from_millis(3000))
+                .await;
         video_service::notify_video_frame_fetched_by_conn_id(id, None);
         video_service::remove_screenshots_for_conn(id);
         if conn.authorized {
@@ -6231,7 +6220,11 @@ impl Connection {
                 }
             }
 
-            let turn_on_res = privacy_mode::turn_on_privacy(&impl_key, self.inner.id).await;
+            let owner = privacy_mode::PrivacyOwner {
+                conn_id: self.inner.id,
+                generation: self.conn_generation,
+            };
+            let turn_on_res = privacy_mode::turn_on_privacy_with_owner(&impl_key, owner).await;
             match turn_on_res {
                 Some(Ok(res)) => {
                     if res {
@@ -6250,7 +6243,11 @@ impl Connection {
                                 "Check privacy mode failed: {}, turn off privacy mode.",
                                 &err_msg
                             );
-                            let _ = Self::turn_off_privacy_to_msg(self.inner.id, String::new());
+                            let _ = privacy_mode::abort_or_turn_off_bounded(
+                                owner,
+                                std::time::Duration::from_millis(3000),
+                            )
+                            .await;
                             crate::common::make_privacy_mode_msg_with_details(
                                 back_notification::PrivacyModeState::PrvOnFailed,
                                 err_msg,
@@ -6266,12 +6263,11 @@ impl Connection {
                 }
                 Some(Err(e)) => {
                     log::error!("Failed to turn on privacy mode. {}", e);
-                    if privacy_mode::is_in_privacy_mode() {
-                        let _ = Self::turn_off_privacy_to_msg(
-                            privacy_mode::INVALID_PRIVACY_MODE_CONN_ID,
-                            String::new(),
-                        );
-                    }
+                    let _ = privacy_mode::abort_or_turn_off_bounded(
+                        owner,
+                        std::time::Duration::from_millis(3000),
+                    )
+                    .await;
                     crate::common::make_privacy_mode_msg_with_details(
                         back_notification::PrivacyModeState::PrvOnFailed,
                         e.to_string(),

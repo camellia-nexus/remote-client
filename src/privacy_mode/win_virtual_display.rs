@@ -1,9 +1,16 @@
-use super::{PrivacyMode, PrivacyModeState, INVALID_PRIVACY_MODE_CONN_ID, NO_PHYSICAL_DISPLAYS};
+use super::{
+    journal::{
+        self, DisplaySnapshot, JournalItemState, JournalPhase, PhysicalDisplayJournalEntry,
+        PrivacyRecoveryJournal, RegistryJournalEntry, VirtualDisplayJournalEntry,
+    },
+    PrivacyMode, PrivacyModeState, INVALID_PRIVACY_MODE_CONN_ID, NO_PHYSICAL_DISPLAYS,
+};
 use crate::{platform::windows::reg_display_settings, virtual_display_manager};
 use camellia_remote_protocol::{allow_err, bail, config::Config, log, ResultType};
 use std::{
     io::Error,
     ops::{Deref, DerefMut},
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
 };
@@ -43,6 +50,7 @@ pub struct PrivacyModeImpl {
     displays: Vec<Display>,
     virtual_displays: Vec<Display>,
     virtual_displays_added: Vec<u32>,
+    active_journal: Option<PrivacyRecoveryJournal>,
 }
 
 struct TurnOnGuard<'a> {
@@ -67,6 +75,7 @@ impl<'a> DerefMut for TurnOnGuard<'a> {
 impl<'a> Drop for TurnOnGuard<'a> {
     fn drop(&mut self) {
         if !self.succeeded {
+            log::warn!("Privacy mode activation aborted or failed; executing TurnOnGuard rollback");
             self.privacy_mode
                 .turn_off_privacy(INVALID_PRIVACY_MODE_CONN_ID, None)
                 .ok();
@@ -82,7 +91,13 @@ impl PrivacyModeImpl {
             displays: Vec::new(),
             virtual_displays: Vec::new(),
             virtual_displays_added: Vec::new(),
+            active_journal: None,
         }
+    }
+
+    #[inline]
+    pub fn active_journal(&self) -> Option<&PrivacyRecoveryJournal> {
+        self.active_journal.as_ref()
     }
 
     // mainly from https://github.com/rustdesk-org/rustdesk/blob/44c3a52ca8502cf53b58b59db130611778d34dbe/libs/scrap/src/dxgi/mod.rs#L365
@@ -196,7 +211,6 @@ impl PrivacyModeImpl {
             }
 
             // Windows 24H2 requires the virtual display to be set first.
-            // No idea why, maybe the same issue: https://developercommunity.visualstudio.com/t/Windows-11-Enterprise-24H2-using-WinApi/10851936?sort=newest
             let flags = CDS_UPDATEREGISTRY | CDS_NORESET;
             let offx = new_primary_dm.u1.s2().dmPosition.x;
             let offy = new_primary_dm.u1.s2().dmPosition.y;
@@ -272,24 +286,12 @@ impl PrivacyModeImpl {
                     );
                     bail!("Failed ChangeDisplaySettingsEx, {}", err);
                 }
-
-                // If we want to set dpi, the following references may be helpful.
-                // And setting dpi should be called after changing the display settings.
-                // https://stackoverflow.com/questions/35233182/how-can-i-change-windows-10-display-scaling-programmatically-using-c-sharp
-                // https://github.com/lihas/windows-DPI-scaling-sample/blob/master/DPIHelper/DpiHelper.cpp
-                //
-                // But the official API does not provide a way to get/set dpi.
-                // https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_device_info_type
-                // https://github.com/lihas/windows-DPI-scaling-sample/blob/738ac18b7a7ce2d8fdc157eb825de9cb5eee0448/DPIHelper/DpiHelper.h#L37
             }
         }
 
         Ok(display_name)
     }
 
-    // NOTE: We can't detect if the other virtual displays are physical displays or not.
-    // We can only use `DeviceString` == `virtual_display_manager::get_cur_device_string()` to detect if the display is a virtual display.
-    // The other virtual displays can't be restored after exiting the privacy mode on Windows 24H2.
     fn disable_physical_displays(&self) -> ResultType<()> {
         for display in &self.displays {
             let mut dm = display.dm.clone();
@@ -330,16 +332,21 @@ impl PrivacyModeImpl {
         }]
     }
 
-    // This function will wait at most 6 seconds for the virtual displays to be ready.
-    // It's ok to wait, because:
-    // 1. A new thread is created to handle the async privacy mode.
-    // 2. The user is usually not in a hurry to turn on the privacy mode.
-    pub fn ensure_virtual_display(&mut self, is_async_mode: bool) -> ResultType<()> {
+    pub fn ensure_virtual_display(
+        &mut self,
+        is_async_mode: bool,
+        cancel_token: Option<&AtomicBool>,
+    ) -> ResultType<()> {
         if self.virtual_displays.is_empty() {
+            if let Some(token) = cancel_token {
+                if token.load(Ordering::SeqCst) {
+                    bail!("Privacy mode activation cancelled by supervisor");
+                }
+            }
             let displays =
                 virtual_display_manager::plug_in_peer_request(vec![Self::default_display_modes()])?;
             if is_async_mode {
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(Duration::from_millis(500));
             }
             self.set_displays();
             // No physical displays, no need to use the privacy mode.
@@ -353,7 +360,15 @@ impl PrivacyModeImpl {
                 while self.virtual_displays.is_empty()
                     && now.elapsed() < Duration::from_millis(5000)
                 {
-                    thread::sleep(Duration::from_millis(500));
+                    if let Some(token) = cancel_token {
+                        if token.load(Ordering::SeqCst) {
+                            virtual_display_manager::plug_out_monitor_indices(
+                                &displays, false, false,
+                            )?;
+                            bail!("Privacy mode activation cancelled by supervisor");
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(250));
                     self.set_displays();
                 }
             }
@@ -367,42 +382,18 @@ impl PrivacyModeImpl {
     #[inline]
     fn commit_change_display(flags: DWORD) -> ResultType<()> {
         unsafe {
-            // use winapi::{
-            //     shared::windef::HDESK,
-            //     um::{
-            //         processthreadsapi::GetCurrentThreadId,
-            //         winnt::MAXIMUM_ALLOWED,
-            //         winuser::{CloseDesktop, GetThreadDesktop, OpenInputDesktop, SetThreadDesktop},
-            //     },
-            // };
-            // let mut desk_input: HDESK = NULL as _;
-            // let desk_current: HDESK = GetThreadDesktop(GetCurrentThreadId());
-            // if !desk_current.is_null() {
-            //     desk_input = OpenInputDesktop(0, FALSE, MAXIMUM_ALLOWED);
-            //     if desk_input.is_null() {
-            //         SetThreadDesktop(desk_input);
-            //     }
-            // }
-
             let rc = ChangeDisplaySettingsExW(NULL as _, NULL as _, NULL as _, flags, NULL as _);
             if rc != DISP_CHANGE_SUCCESSFUL {
                 let err = Self::change_display_settings_ex_err_msg(rc);
                 bail!("Failed ChangeDisplaySettingsEx, {}", err);
             }
-
-            // if !desk_current.is_null() {
-            //     SetThreadDesktop(desk_current);
-            // }
-            // if !desk_input.is_null() {
-            //     CloseDesktop(desk_input);
-            // }
         }
         Ok(())
     }
 
     fn restore(&mut self) {
-        Self::restore_displays(&self.displays);
-        Self::restore_displays(&self.virtual_displays);
+        allow_err!(Self::restore_displays(&self.displays));
+        allow_err!(Self::restore_displays(&self.virtual_displays));
         allow_err!(Self::commit_change_display(0));
         self.displays.clear();
         self.virtual_displays.clear();
@@ -410,19 +401,12 @@ impl PrivacyModeImpl {
         if is_virtual_display_added {
             self.restore_plug_out_monitor();
         } else {
-            // https://github.com/rustdesk/rustdesk/pull/12114#issuecomment-2983054370
-            // No virtual displays added, we need to change the display combination to force the display settings to be reloaded.
-            // This function changes the user behavior of the virtual displays.
-            // But it makes the privacy mode more stable.
-            // No need to restore the virtual displays. It's easy to notice that the virtual displays are plugged out.
             let _ = virtual_display_manager::plug_out_monitor(-1, true, false);
-
-            // We can't replug the virtual dislays here.
-            // TODO: plug out + plug in the virtual displays (`IDD_IMPL_AMYUNI`) in a short time makes the server side crash.
         }
     }
 
-    fn restore_displays(displays: &[Display]) {
+    fn restore_displays(displays: &[Display]) -> ResultType<()> {
+        let mut errors = Vec::new();
         for display in displays {
             unsafe {
                 let mut dm = display.dm.clone();
@@ -431,14 +415,24 @@ impl PrivacyModeImpl {
                 } else {
                     CDS_NORESET | CDS_UPDATEREGISTRY
                 };
-                ChangeDisplaySettingsExW(
+                let rc = ChangeDisplaySettingsExW(
                     display.name.as_ptr(),
                     &mut dm,
                     std::ptr::null_mut(),
                     flags,
                     std::ptr::null_mut(),
                 );
+                if rc != DISP_CHANGE_SUCCESSFUL {
+                    let err = Self::change_display_settings_ex_err_msg(rc);
+                    log::error!("ChangeDisplaySettingsExW restore failed: {}", err);
+                    errors.push(err);
+                }
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            bail!("Failed to restore displays: {}", errors.join("; "))
         }
     }
 }
@@ -457,6 +451,26 @@ impl PrivacyMode for PrivacyModeImpl {
     }
 
     fn turn_on_privacy(&mut self, conn_id: i32) -> ResultType<bool> {
+        self.turn_on_privacy_with_token(conn_id, 0, None)
+    }
+
+    fn turn_on_privacy_with_token(
+        &mut self,
+        conn_id: i32,
+        generation: u64,
+        cancel_token: Option<&AtomicBool>,
+    ) -> ResultType<bool> {
+        let check_cancel = || -> ResultType<()> {
+            if let Some(token) = cancel_token {
+                if token.load(Ordering::SeqCst) {
+                    bail!("Privacy mode activation cancelled by supervisor");
+                }
+            }
+            Ok(())
+        };
+
+        check_cancel()?;
+
         if !virtual_display_manager::is_virtual_display_supported() {
             bail!("idd_not_support_under_win10_2004_tip");
         }
@@ -471,46 +485,113 @@ impl PrivacyMode for PrivacyModeImpl {
             bail!(NO_PHYSICAL_DISPLAYS);
         }
 
+        check_cancel()?;
+
+        // Capture physical display snapshot into durable journal
+        let mut recovery_journal = PrivacyRecoveryJournal::new(
+            format!("tx_{}_{}", conn_id, generation),
+            conn_id,
+            generation,
+        );
+        for d in &self.displays {
+            let snapshot = DisplaySnapshot::from_devmode(&d.name, &d.dm, d.primary);
+            recovery_journal
+                .physical_displays
+                .push(PhysicalDisplayJournalEntry {
+                    device_name: snapshot.device_name.clone(),
+                    snapshot,
+                    state: JournalItemState::Applied,
+                    last_error_code: None,
+                });
+        }
+        journal::save_durable_journal(&recovery_journal);
+
         let is_async_mode = self.is_async_privacy_mode();
         let mut guard = TurnOnGuard {
             privacy_mode: self,
             succeeded: false,
         };
 
-        guard.ensure_virtual_display(is_async_mode)?;
+        guard.ensure_virtual_display(is_async_mode, cancel_token)?;
         if guard.virtual_displays.is_empty() {
             log::debug!("No virtual displays");
             bail!("No virtual displays.");
         }
 
+        for &idx in &guard.virtual_displays_added {
+            recovery_journal
+                .virtual_indices
+                .push(VirtualDisplayJournalEntry {
+                    index: idx,
+                    state: JournalItemState::Applied,
+                    last_error: None,
+                });
+        }
+        recovery_journal.phase = JournalPhase::VirtualPluggedIn;
+        journal::save_durable_journal(&recovery_journal);
+
+        check_cancel()?;
+
         let reg_connectivity_1 = reg_display_settings::read_reg_connectivity()?;
         let primary_display_name = guard.set_primary_display()?;
+        recovery_journal.phase = JournalPhase::PrimarySwitched;
+        journal::save_durable_journal(&recovery_journal);
+
+        check_cancel()?;
+
         guard.disable_physical_displays()?;
+        recovery_journal.phase = JournalPhase::PhysicalDisabled;
+        journal::save_durable_journal(&recovery_journal);
+
+        check_cancel()?;
+
         Self::commit_change_display(CDS_RESET)?;
+        recovery_journal.global_commit_applied = true;
+        journal::save_durable_journal(&recovery_journal);
+
         // Explicitly set the resolution(virtual display) to 1920x1080.
         allow_err!(crate::platform::change_resolution(
             &primary_display_name,
             1920,
             1080
         ));
-        let reg_connectivity_2 = reg_display_settings::read_reg_connectivity()?;
 
+        check_cancel()?;
+
+        let reg_connectivity_2 = reg_display_settings::read_reg_connectivity()?;
         if let Some(reg_recovery) =
             reg_display_settings::diff_recent_connectivity(reg_connectivity_1, reg_connectivity_2)
         {
-            Config::set_option(
-                CONFIG_KEY_REG_RECOVERY.to_owned(),
-                serde_json::to_string(&reg_recovery)?,
-            );
+            if let Ok(reg_json) = serde_json::to_string(&reg_recovery) {
+                recovery_journal.registry_entry = Some(RegistryJournalEntry {
+                    recovery_json: reg_json.clone(),
+                    state: JournalItemState::Applied,
+                    last_error: None,
+                });
+                Config::set_option(CONFIG_KEY_REG_RECOVERY.to_owned(), reg_json);
+            }
         } else {
             reset_config_reg_connectivity();
-        };
+        }
+        journal::save_durable_journal(&recovery_journal);
 
-        // OpenInputDesktop and block the others' input ?
+        check_cancel()?;
+
+        // STRICT CAPABILITY ENFORCEMENT (PRIV-005):
+        // Hook installation is mandatory. If hooks fail, we propagate the error with `?`.
+        // `guard.succeeded` remains false, triggering TurnOnGuard::drop which invokes
+        // `turn_off_privacy`, completely restoring displays and registry via the journal.
+        super::win_input::hook()?;
+        recovery_journal.input_hook_applied = true;
+
+        check_cancel()?;
+
+        recovery_journal.phase = JournalPhase::CommittedActive;
+        journal::save_durable_journal(&recovery_journal);
+        guard.active_journal = Some(recovery_journal);
+
         guard.conn_id = conn_id;
         guard.succeeded = true;
-
-        allow_err!(super::win_input::hook());
 
         Ok(true)
     }
@@ -521,12 +602,39 @@ impl PrivacyMode for PrivacyModeImpl {
         state: Option<PrivacyModeState>,
     ) -> ResultType<()> {
         self.check_off_conn_id(conn_id)?;
-        super::win_input::unhook()?;
+
+        let mut aggregated_errors: Vec<String> = Vec::new();
+
+        // 1. Unhook input (isolated from display and registry restoration!)
+        if let Err(e) = super::win_input::unhook() {
+            log::warn!(
+                "Input unhook error during privacy teardown (isolated from display restore): {}",
+                e
+            );
+            aggregated_errors.push(format!("Input unhook failed: {}", e));
+        }
+
+        // 2. Prioritize Display & Registry restoration
         let _tmp_ignore_changed_holder = crate::display_service::temp_ignore_displays_changed();
-        self.restore();
-        // We need to force restore the registry connectivity.
-        // This is because the registry connection may be changed by `self.restore()`, but will not be fully restored.
-        restore_reg_connectivity(false, true);
+
+        if let Some(mut journal) = self
+            .active_journal
+            .take()
+            .or_else(journal::load_durable_journal)
+        {
+            if let Err(e) = journal::restore_from_journal(&mut journal, true) {
+                log::error!("Display journal restoration error: {}", e);
+                aggregated_errors.push(format!("Display journal restore failed: {}", e));
+                self.active_journal = Some(journal);
+            }
+        } else {
+            self.restore();
+        }
+
+        if let Err(e) = restore_reg_connectivity_result(false, true) {
+            log::error!("Registry restoration error: {}", e);
+            aggregated_errors.push(format!("Registry restore failed: {}", e));
+        }
 
         if self.conn_id != INVALID_PRIVACY_MODE_CONN_ID {
             if let Some(state) = state {
@@ -540,7 +648,14 @@ impl PrivacyMode for PrivacyModeImpl {
             self.conn_id = INVALID_PRIVACY_MODE_CONN_ID.to_owned();
         }
 
-        Ok(())
+        if aggregated_errors.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "Errors during turn_off_privacy: {}",
+                aggregated_errors.join("; ")
+            )
+        }
     }
 
     #[inline]
@@ -567,20 +682,23 @@ fn reset_config_reg_connectivity() {
     Config::set_option(CONFIG_KEY_REG_RECOVERY.to_owned(), "".to_owned());
 }
 
-pub fn restore_reg_connectivity(plug_out_monitors: bool, force: bool) {
+pub fn restore_reg_connectivity_result(plug_out_monitors: bool, force: bool) -> ResultType<()> {
     let config_recovery_value = Config::get_option(CONFIG_KEY_REG_RECOVERY);
     if config_recovery_value.is_empty() {
-        return;
+        return Ok(());
     }
     if plug_out_monitors {
         let _ = virtual_display_manager::plug_out_monitor(-1, true, false);
     }
-    if let Ok(reg_recovery) =
-        serde_json::from_str::<reg_display_settings::RegRecovery>(&config_recovery_value)
-    {
-        if let Err(e) = reg_display_settings::restore_reg_connectivity(reg_recovery, force) {
-            log::error!("Failed restore_reg_connectivity, error: {}", e);
-        }
-    }
+    let reg_recovery =
+        serde_json::from_str::<reg_display_settings::RegRecovery>(&config_recovery_value)?;
+    reg_display_settings::restore_reg_connectivity(reg_recovery, force)?;
     reset_config_reg_connectivity();
+    Ok(())
+}
+
+pub fn restore_reg_connectivity(plug_out_monitors: bool, force: bool) {
+    if let Err(e) = restore_reg_connectivity_result(plug_out_monitors, force) {
+        log::error!("Failed restore_reg_connectivity: {}", e);
+    }
 }
