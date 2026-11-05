@@ -32,30 +32,233 @@ pub fn get_global_available_permits() -> usize {
     GLOBAL_TUNNEL_SEMAPHORE.available_permits()
 }
 
-fn run_rdp(port: u16) {
-    std::process::Command::new("cmdkey")
-        .arg("/delete:localhost")
-        .output()
-        .ok();
-    let username = std::env::var("rdp_username").unwrap_or_default();
-    let password = std::env::var("rdp_password").unwrap_or_default();
-    if !username.is_empty() || !password.is_empty() {
-        let mut args = vec!["/generic:localhost".to_owned()];
-        if !username.is_empty() {
-            args.push(format!("/user:{}", username));
+pub struct RdpSessionCredentials {
+    pub username: String,
+    pub password: zeroize::Zeroizing<String>,
+}
+
+pub trait RdpCredentialStore: Send + Sync {
+    fn write_credential(&self, target: &str, user: &str, pass: &str) -> Result<(), String>;
+    fn delete_credential(&self, target: &str) -> Result<(), String>;
+}
+
+#[derive(Default)]
+pub struct MockCredStore {
+    pub credentials: Arc<std::sync::RwLock<std::collections::HashMap<String, (String, String)>>>,
+}
+
+impl MockCredStore {
+    pub fn new() -> Self {
+        Self {
+            credentials: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
-        if !password.is_empty() {
-            args.push(format!("/pass:{}", password));
-        }
-        std::process::Command::new("cmdkey")
-            .args(&args)
-            .output()
-            .ok();
     }
-    std::process::Command::new("mstsc")
-        .arg(format!("/v:localhost:{}", port))
-        .spawn()
-        .ok();
+}
+
+impl RdpCredentialStore for MockCredStore {
+    fn write_credential(&self, target: &str, user: &str, pass: &str) -> Result<(), String> {
+        let mut map = self.credentials.write().map_err(|e| e.to_string())?;
+        map.insert(target.to_string(), (user.to_string(), pass.to_string()));
+        Ok(())
+    }
+
+    fn delete_credential(&self, target: &str) -> Result<(), String> {
+        let mut map = self.credentials.write().map_err(|e| e.to_string())?;
+        map.remove(target);
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+pub struct WinCredStore;
+
+#[cfg(windows)]
+mod wincred_ffi {
+    use std::os::raw::{c_uchar, c_ulong, c_ushort, c_void};
+
+    #[repr(C)]
+    pub struct CREDENTIALW {
+        pub flags: c_ulong,
+        pub type_: c_ulong,
+        pub target_name: *mut c_ushort,
+        pub comment: *mut c_ushort,
+        pub last_written: [c_ulong; 2],
+        pub credential_blob_size: c_ulong,
+        pub credential_blob: *mut c_uchar,
+        pub persist: c_ulong,
+        pub attribute_count: c_ulong,
+        pub attributes: *mut c_void,
+        pub target_alias: *mut c_ushort,
+        pub user_name: *mut c_ushort,
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        pub fn CredWriteW(credential: *const CREDENTIALW, flags: c_ulong) -> i32;
+        pub fn CredDeleteW(target_name: *const c_ushort, type_: c_ulong, flags: c_ulong) -> i32;
+    }
+}
+
+#[cfg(windows)]
+impl RdpCredentialStore for WinCredStore {
+    fn write_credential(&self, target: &str, user: &str, pass: &str) -> Result<(), String> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let mut target_w: Vec<u16> = OsStr::new(target).encode_utf16().chain(Some(0)).collect();
+        let mut user_w: Vec<u16> = OsStr::new(user).encode_utf16().chain(Some(0)).collect();
+        let pass_w: Vec<u16> = OsStr::new(pass).encode_utf16().collect();
+        let pass_bytes = pass_w.len() * std::mem::size_of::<u16>();
+
+        let cred = wincred_ffi::CREDENTIALW {
+            flags: 0,
+            type_: 1, // CRED_TYPE_GENERIC
+            target_name: target_w.as_mut_ptr(),
+            comment: std::ptr::null_mut(),
+            last_written: [0, 0],
+            credential_blob_size: pass_bytes as _,
+            credential_blob: pass_w.as_ptr() as *mut _,
+            persist: 1, // CRED_PERSIST_SESSION
+            attribute_count: 0,
+            attributes: std::ptr::null_mut(),
+            target_alias: std::ptr::null_mut(),
+            user_name: user_w.as_mut_ptr(),
+        };
+
+        let ret = unsafe { wincred_ffi::CredWriteW(&cred, 0) };
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "CredWriteW failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        }
+    }
+
+    fn delete_credential(&self, target: &str) -> Result<(), String> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let target_w: Vec<u16> = OsStr::new(target).encode_utf16().chain(Some(0)).collect();
+        let ret = unsafe { wincred_ffi::CredDeleteW(target_w.as_ptr(), 1, 0) };
+        if ret != 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "CredDeleteW failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        }
+    }
+}
+
+pub fn default_credential_store() -> Arc<dyn RdpCredentialStore> {
+    #[cfg(windows)]
+    {
+        Arc::new(WinCredStore)
+    }
+    #[cfg(not(windows))]
+    {
+        Arc::new(MockCredStore::new())
+    }
+}
+
+pub struct RdpCredentialGuard {
+    store: Arc<dyn RdpCredentialStore>,
+    targets: Vec<String>,
+}
+
+impl RdpCredentialGuard {
+    pub fn new(store: Arc<dyn RdpCredentialStore>, targets: Vec<String>) -> Self {
+        Self { store, targets }
+    }
+}
+
+impl Drop for RdpCredentialGuard {
+    fn drop(&mut self) {
+        for target in &self.targets {
+            let _ = self.store.delete_credential(target);
+        }
+    }
+}
+
+static ALLOCATED_RDP_SLOTS: std::sync::Mutex<Option<std::collections::HashSet<u8>>> =
+    std::sync::Mutex::new(None);
+
+pub struct RdpSlotGuard {
+    slot: u8,
+}
+
+impl RdpSlotGuard {
+    pub fn allocate() -> Self {
+        let mut lock = ALLOCATED_RDP_SLOTS.lock().unwrap();
+        let set = lock.get_or_insert_with(std::collections::HashSet::new);
+        for candidate in 2..=254 {
+            if set.insert(candidate) {
+                return Self { slot: candidate };
+            }
+        }
+        Self { slot: 2 }
+    }
+
+    pub fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    pub fn ip(&self) -> String {
+        format!("127.0.0.{}", self.slot)
+    }
+}
+
+impl Drop for RdpSlotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut lock) = ALLOCATED_RDP_SLOTS.lock() {
+            if let Some(set) = lock.as_mut() {
+                set.remove(&self.slot);
+            }
+        }
+    }
+}
+
+pub fn run_rdp(
+    host: &str,
+    port: u16,
+    creds: RdpSessionCredentials,
+    store: Arc<dyn RdpCredentialStore>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let target1 = format!("TERMSRV/{}", host);
+    let target2 = format!("TERMSRV/{}:{}", host, port);
+    let targets = vec![target1, target2];
+
+    if !creds.username.is_empty() || !creds.password.is_empty() {
+        for target in &targets {
+            let _ = store.write_credential(target, &creds.username, &creds.password);
+        }
+    }
+
+    let guard = RdpCredentialGuard::new(store, targets);
+    #[allow(unused_variables)]
+    let host_port = format!("{}:{}", host, port);
+
+    let handle = tokio::spawn(async move {
+        let _guard = guard;
+        #[cfg(windows)]
+        {
+            if let Ok(mut child) = tokio::process::Command::new("mstsc")
+                .arg(format!("/v:{}", host_port))
+                .spawn()
+            {
+                let _ = child.wait().await;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = host_port;
+        }
+    });
+
+    Some(handle)
 }
 
 pub async fn listen(
@@ -70,13 +273,54 @@ pub async fn listen(
     remote_host: String,
     remote_port: i32,
 ) -> ResultType<()> {
-    let listener = tcp::new_listener(format!("127.0.0.1:{}", port), true).await?;
+    let slot_guard = if port == 0 {
+        Some(RdpSlotGuard::allocate())
+    } else {
+        None
+    };
+
+    let (listener, bind_ip) = if let Some(ref slot) = slot_guard {
+        let slot_ip = slot.ip();
+        match tcp::new_listener(format!("{}:{}", slot_ip, port), true).await {
+            Ok(l) => (l, slot_ip),
+            Err(_) => (
+                tcp::new_listener(format!("127.0.0.1:{}", port), true).await?,
+                "127.0.0.1".to_string(),
+            ),
+        }
+    } else {
+        (
+            tcp::new_listener(format!("127.0.0.1:{}", port), true).await?,
+            "127.0.0.1".to_string(),
+        )
+    };
+
     let addr = listener.local_addr()?;
     log::info!("listening on port {:?}", addr);
     let is_rdp = port == 0;
-    if is_rdp {
-        run_rdp(addr.port());
-    }
+    let _rdp_supervisor = if is_rdp {
+        let (rdp_user, rdp_pass) = {
+            let guard = lc.read().unwrap();
+            let u = guard
+                .options
+                .get("rdp_username")
+                .cloned()
+                .unwrap_or_default();
+            let p = guard
+                .options
+                .get("rdp_password")
+                .cloned()
+                .unwrap_or_default();
+            (u, zeroize::Zeroizing::new(p))
+        };
+        let creds = RdpSessionCredentials {
+            username: rdp_user,
+            password: rdp_pass,
+        };
+        run_rdp(&bind_ip, addr.port(), creds, default_credential_store())
+    } else {
+        None
+    };
     let mut ui_receiver = ui_receiver;
     let listener_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_ACTIVE_TUNNELS_PER_LISTENER));
     let cancel_token = CancellationToken::new();
@@ -172,7 +416,17 @@ pub async fn listen(
                     }
                     Some(Data::NewRDP) => {
                         log::info!("receive run_rdp from ui_receiver");
-                        run_rdp(addr.port());
+                        let (rdp_user, rdp_pass) = {
+                            let guard = lc.read().unwrap();
+                            let u = guard.options.get("rdp_username").cloned().unwrap_or_default();
+                            let p = guard.options.get("rdp_password").cloned().unwrap_or_default();
+                            (u, zeroize::Zeroizing::new(p))
+                        };
+                        let creds = RdpSessionCredentials {
+                            username: rdp_user,
+                            password: rdp_pass,
+                        };
+                        run_rdp(&bind_ip, addr.port(), creds, default_credential_store());
                     }
                     _ => {}
                 }

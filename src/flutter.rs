@@ -1803,6 +1803,18 @@ fn char_to_session_id(c: *const char) -> ResultType<SessionID> {
     SessionID::from_str(str).map_err(|e| anyhow!("{:?}", e))
 }
 
+pub fn session_get_rgba_frame(session_id: SessionID, display: usize) -> Option<Vec<u8>> {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        let lock = session.display_rgbas.read().unwrap();
+        if let Some(rgba) = lock.get(&display) {
+            if rgba.valid {
+                return Some(rgba.data.clone());
+            }
+        }
+    }
+    None
+}
+
 pub fn session_get_rgba_size(session_id: SessionID, display: usize) -> usize {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         return session
@@ -1811,6 +1823,33 @@ pub fn session_get_rgba_size(session_id: SessionID, display: usize) -> usize {
             .unwrap()
             .get(&display)
             .map_or(0, |rgba| rgba.data.len());
+    }
+    0
+}
+
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub unsafe extern "C" fn session_copy_rgba(
+    session_uuid_str: *const std::os::raw::c_char,
+    display: usize,
+    dst: *mut u8,
+    dst_len: usize,
+) -> usize {
+    if let Ok(session_id) = char_to_session_id(session_uuid_str as _) {
+        if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+            let lock = session.display_rgbas.read().unwrap();
+            if let Some(rgba_data) = lock.get(&display) {
+                if rgba_data.valid {
+                    let len = rgba_data.data.len();
+                    if len <= dst_len && !dst.is_null() {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(rgba_data.data.as_ptr(), dst, len);
+                        }
+                        return len;
+                    }
+                }
+            }
+        }
     }
     0
 }

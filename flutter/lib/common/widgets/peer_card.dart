@@ -1431,14 +1431,26 @@ void _rdpDialog(String id) async {
   final maxLength = bind.mainMaxEncryptLen();
   final port = await bind.mainGetPeerOption(id: id, key: 'rdp_port');
   final username = await bind.mainGetPeerOption(id: id, key: 'rdp_username');
+  final hasStoredPassword =
+      (await bind.mainGetPeerOption(id: id, key: 'has_rdp_password')) == 'true';
   final portController = TextEditingController(text: port);
   final userController = TextEditingController(text: username);
-  final passwordController = TextEditingController(
-    text: await bind.mainGetPeerOption(id: id, key: 'rdp_password'),
-  );
-  RxBool secure = true.obs;
+  final passwordController = TextEditingController();
+  final RxBool clearPassword = false.obs;
 
   gFFI.dialogManager.show((setState, close, context) {
+    void cleanup() {
+      passwordController.clear();
+      passwordController.dispose();
+      portController.dispose();
+      userController.dispose();
+    }
+
+    void handleClose() {
+      cleanup();
+      close();
+    }
+
     submit() async {
       String port = portController.text.trim();
       String username = userController.text;
@@ -1449,13 +1461,31 @@ void _rdpDialog(String id) async {
         key: 'rdp_username',
         value: username,
       );
-      await bind.mainSetPeerOption(
-        id: id,
-        key: 'rdp_password',
-        value: password,
-      );
+      if (hasStoredPassword) {
+        if (clearPassword.value) {
+          await bind.mainSetPeerOption(
+            id: id,
+            key: 'rdp_password',
+            value: '',
+          );
+        } else if (password.isNotEmpty) {
+          await bind.mainSetPeerOption(
+            id: id,
+            key: 'rdp_password',
+            value: password,
+          );
+        }
+      } else {
+        if (password.isNotEmpty) {
+          await bind.mainSetPeerOption(
+            id: id,
+            key: 'rdp_password',
+            value: password,
+          );
+        }
+      }
       showToast(translate('Successful'));
-      close();
+      handleClose();
     }
 
     return CustomAlertDialog(
@@ -1533,18 +1563,34 @@ void _rdpDialog(String id) async {
                   Expanded(
                     child: Obx(
                       () => TextField(
-                        obscureText: secure.value,
+                        obscureText: true,
                         maxLength: maxLength,
+                        enabled: !clearPassword.value,
                         decoration: InputDecoration(
                           labelText: isDesktop ? null : translate('Password'),
-                          suffixIcon: IconButton(
-                            onPressed: () => secure.value = !secure.value,
-                            icon: Icon(
-                              secure.value
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
-                            ),
-                          ),
+                          hintText: hasStoredPassword
+                              ? (clearPassword.value
+                                  ? translate('Password cleared')
+                                  : '●●●●●● (${translate("Saved")})')
+                              : null,
+                          suffixIcon: hasStoredPassword
+                              ? IconButton(
+                                  tooltip: clearPassword.value
+                                      ? translate('Undo')
+                                      : translate('Clear'),
+                                  onPressed: () {
+                                    clearPassword.value = !clearPassword.value;
+                                    if (clearPassword.value) {
+                                      passwordController.clear();
+                                    }
+                                  },
+                                  icon: Icon(
+                                    clearPassword.value
+                                        ? Icons.undo
+                                        : Icons.clear,
+                                  ),
+                                )
+                              : null,
                         ),
                         controller: passwordController,
                       ).workaroundFreezeLinuxMint(),
@@ -1557,11 +1603,11 @@ void _rdpDialog(String id) async {
         ),
       ),
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("Cancel", onPressed: handleClose, isOutline: true),
         dialogButton("OK", onPressed: submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: handleClose,
     );
   });
 }

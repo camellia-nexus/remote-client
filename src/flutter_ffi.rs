@@ -731,6 +731,9 @@ pub fn session_peer_option(session_id: SessionID, name: String, value: String) {
 }
 
 pub fn session_get_peer_option(session_id: SessionID, name: String) -> String {
+    if crate::ui_interface::is_secret_peer_option(&name) {
+        return "".to_string();
+    }
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         return session.get_option(name);
     }
@@ -1506,6 +1509,21 @@ pub fn main_set_peer_option(id: String, key: String, value: String) {
 pub fn main_set_peer_option_sync(id: String, key: String, value: String) -> bool {
     set_peer_option(id, key, value);
     true
+}
+
+#[frb(sync)]
+pub fn main_peer_has_rdp_password(id: String) -> bool {
+    crate::ui_interface::peer_has_rdp_password(&id)
+}
+
+pub fn main_set_peer_rdp_options(
+    id: String,
+    port: String,
+    username: String,
+    password_action: String,
+    new_password: Option<String>,
+) {
+    crate::ui_interface::set_peer_rdp_options(id, port, username, password_action, new_password);
 }
 
 pub fn main_set_peer_alias(id: String, alias: String) {
@@ -2395,6 +2413,11 @@ pub fn main_get_build_date() -> String {
 #[frb(sync)]
 pub fn translate(name: String, locale: String) -> String {
     crate::client::translate_locale(name, &locale)
+}
+
+#[frb(sync)]
+pub fn session_get_rgba_frame(session_id: SessionID, display: usize) -> Option<Vec<u8>> {
+    super::flutter::session_get_rgba_frame(session_id, display)
 }
 
 #[frb(sync)]

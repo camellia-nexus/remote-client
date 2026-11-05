@@ -23,6 +23,9 @@ final class RgbaFrame extends Struct {
 
 typedef F3 = Pointer<Uint8> Function(Pointer<Utf8>, int);
 typedef F3Dart = Pointer<Uint8> Function(Pointer<Utf8>, Int32);
+typedef FCopyRgbaNative = IntPtr Function(
+    Pointer<Utf8>, IntPtr, Pointer<Uint8>, IntPtr);
+typedef FCopyRgba = int Function(Pointer<Utf8>, int, Pointer<Uint8>, int);
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
 /// FFI wrapper around the native Rust core.
@@ -43,6 +46,7 @@ class PlatformFFI {
 
   RustdeskImpl get ffiBind => _ffiBind;
   F3? _session_get_rgba;
+  FCopyRgba? _session_copy_rgba;
 
   static get localeName => Platform.localeName;
 
@@ -92,16 +96,35 @@ class PlatformFFI {
       _ffiBind.translate(name: name, locale: locale);
 
   Uint8List? getRgba(SessionID sessionId, int display, int bufSize) {
-    if (_session_get_rgba == null) return null;
+    if (bufSize <= 0) return null;
     final sessionIdStr = sessionId.toString();
-    var a = sessionIdStr.toNativeUtf8();
+    final a = sessionIdStr.toNativeUtf8();
+    final ptr = malloc.allocate<Uint8>(bufSize);
     try {
-      final buffer = _session_get_rgba!(a, display);
-      if (buffer == nullptr) {
-        return null;
+      if (_session_copy_rgba != null) {
+        final copied = _session_copy_rgba!(a, display, ptr, bufSize);
+        if (copied <= 0) {
+          malloc.free(ptr);
+          return null;
+        }
+        final list = Uint8List.fromList(ptr.asTypedList(copied));
+        malloc.free(ptr);
+        return list;
+      } else if (_session_get_rgba != null) {
+        final buffer = _session_get_rgba!(a, display);
+        if (buffer == nullptr) {
+          malloc.free(ptr);
+          return null;
+        }
+        final list = Uint8List.fromList(buffer.asTypedList(bufSize));
+        malloc.free(ptr);
+        return list;
       }
-      final data = buffer.asTypedList(bufSize);
-      return data;
+      malloc.free(ptr);
+      return null;
+    } catch (_) {
+      malloc.free(ptr);
+      return null;
     } finally {
       malloc.free(a);
     }
@@ -144,6 +167,11 @@ class PlatformFFI {
     debugPrint('initializing FFI $_appType');
     try {
       _session_get_rgba = dylib.lookupFunction<F3Dart, F3>("session_get_rgba");
+      try {
+        _session_copy_rgba = dylib.lookupFunction<FCopyRgbaNative, FCopyRgba>("session_copy_rgba");
+      } catch (e) {
+        debugPrint('session_copy_rgba lookup optional: $e');
+      }
       try {
         // SYSTEM user failed
         _dir = (await getApplicationDocumentsDirectory()).path;

@@ -4531,11 +4531,10 @@ class FFI {
             return;
           }
           final rgba = platformFFI.getRgba(sessionId, display, sz);
+          platformFFI.nextRgba(sessionId, display);
           if (rgba != null) {
             onEvent2UIRgba();
             await imageModel.onRgba(display, rgba);
-          } else {
-            platformFFI.nextRgba(sessionId, display);
           }
         } else if (message is EventToUI_Texture) {
           final display = message.field0.toInt();

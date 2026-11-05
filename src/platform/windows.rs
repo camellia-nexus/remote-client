@@ -177,12 +177,13 @@ pub fn reset_input_cache() {}
 
 pub fn get_cursor() -> ResultType<Option<u64>> {
     unsafe {
-        #[allow(invalid_value)]
-        let mut ci: CURSORINFO = mem::MaybeUninit::uninit().assume_init();
-        ci.cbSize = std::mem::size_of::<CURSORINFO>() as _;
-        if crate::portable_service::client::get_cursor_info(&mut ci) == FALSE {
+        let mut ci = mem::MaybeUninit::<CURSORINFO>::uninit();
+        std::ptr::addr_of_mut!((*ci.as_mut_ptr()).cbSize)
+            .write(std::mem::size_of::<CURSORINFO>() as _);
+        if crate::portable_service::client::get_cursor_info(ci.as_mut_ptr()) == FALSE {
             return Err(io::Error::last_os_error().into());
         }
+        let ci = ci.assume_init();
         if ci.flags & CURSOR_SHOWING == 0 {
             Ok(None)
         } else {
@@ -196,12 +197,11 @@ struct IconInfo(ICONINFO);
 impl IconInfo {
     fn new(icon: HICON) -> ResultType<Self> {
         unsafe {
-            #[allow(invalid_value)]
-            let mut ii = mem::MaybeUninit::uninit().assume_init();
-            if GetIconInfo(icon, &mut ii) == FALSE {
+            let mut ii = mem::MaybeUninit::<ICONINFO>::uninit();
+            if GetIconInfo(icon, ii.as_mut_ptr()) == FALSE {
                 Err(io::Error::last_os_error().into())
             } else {
-                let ii = Self(ii);
+                let ii = Self(ii.assume_init());
                 if ii.0.hbmMask.is_null() {
                     bail!("Cursor bitmap handle is NULL");
                 }

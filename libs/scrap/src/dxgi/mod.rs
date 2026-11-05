@@ -65,10 +65,8 @@ impl Capturer {
         let mut device = ptr::null_mut();
         let mut context = ptr::null_mut();
         let mut duplication = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut desc = unsafe { mem::MaybeUninit::uninit().assume_init() };
-        #[allow(invalid_value)]
-        let mut adapter_desc1 = unsafe { mem::MaybeUninit::uninit().assume_init() };
+        let mut desc: DXGI_OUTDUPL_DESC = unsafe { mem::zeroed() };
+        let mut adapter_desc1: DXGI_ADAPTER_DESC1 = unsafe { mem::zeroed() };
         let mut gdi_capturer = None;
 
         let mut res = if display.gdi {
@@ -331,24 +329,28 @@ impl Capturer {
 
     unsafe fn load_frame(&mut self, timeout: UINT) -> io::Result<(*const u8, i32)> {
         let mut frame = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut info = mem::MaybeUninit::uninit().assume_init();
+        let mut info = mem::MaybeUninit::<DXGI_OUTDUPL_FRAME_INFO>::uninit();
 
-        wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
+        wrap_hresult((*self.duplication.0).AcquireNextFrame(
+            timeout,
+            info.as_mut_ptr(),
+            &mut frame,
+        ))?;
+        let info = info.assume_init();
         let frame = ComPtr(frame);
 
         if *info.LastPresentTime.QuadPart() == 0 {
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
 
-        #[allow(invalid_value)]
-        let mut rect = mem::MaybeUninit::uninit().assume_init();
+        let mut rect = mem::MaybeUninit::<DXGI_MAPPED_RECT>::uninit();
         if self.fastlane {
-            wrap_hresult((*self.duplication.0).MapDesktopSurface(&mut rect))?;
+            wrap_hresult((*self.duplication.0).MapDesktopSurface(rect.as_mut_ptr()))?;
         } else {
             self.surface = ComPtr(self.ohgodwhat(frame.0)?);
-            wrap_hresult((*self.surface.0).Map(&mut rect, DXGI_MAP_READ))?;
+            wrap_hresult((*self.surface.0).Map(rect.as_mut_ptr(), DXGI_MAP_READ))?;
         }
+        let rect = rect.assume_init();
         Ok((rect.pBits, rect.Pitch))
     }
 
@@ -361,9 +363,9 @@ impl Capturer {
         );
         let texture = ComPtr(texture);
 
-        #[allow(invalid_value)]
-        let mut texture_desc = mem::MaybeUninit::uninit().assume_init();
-        (*texture.0).GetDesc(&mut texture_desc);
+        let mut texture_desc = mem::MaybeUninit::<D3D11_TEXTURE2D_DESC>::uninit();
+        (*texture.0).GetDesc(texture_desc.as_mut_ptr());
+        let mut texture_desc = texture_desc.assume_init();
 
         texture_desc.Usage = D3D11_USAGE_STAGING;
         texture_desc.BindFlags = 0;
@@ -474,10 +476,14 @@ impl Capturer {
             }
             (*self.duplication.0).ReleaseFrame();
             let mut frame = ptr::null_mut();
-            #[allow(invalid_value)]
-            let mut info = mem::MaybeUninit::uninit().assume_init();
+            let mut info = mem::MaybeUninit::<DXGI_OUTDUPL_FRAME_INFO>::uninit();
 
-            wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
+            wrap_hresult((*self.duplication.0).AcquireNextFrame(
+                timeout,
+                info.as_mut_ptr(),
+                &mut frame,
+            ))?;
+            let info = info.assume_init();
             let frame = ComPtr(frame);
 
             if info.AccumulatedFrames == 0 || *info.LastPresentTime.QuadPart() == 0 {
@@ -638,13 +644,16 @@ impl Displays {
         let mut all = Vec::new();
         let mut i: DWORD = 0;
         loop {
-            #[allow(invalid_value)]
-            let mut d: DISPLAY_DEVICEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            d.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
-            let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut d as _, 0) };
+            let mut d = std::mem::MaybeUninit::<DISPLAY_DEVICEW>::uninit();
+            unsafe {
+                std::ptr::addr_of_mut!((*d.as_mut_ptr()).cb)
+                    .write(std::mem::size_of::<DISPLAY_DEVICEW>() as _);
+            }
+            let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, d.as_mut_ptr() as _, 0) };
             if ok == FALSE {
                 break;
             }
+            let d = unsafe { d.assume_init() };
             i += 1;
             if 0 == (d.StateFlags & DISPLAY_DEVICE_ACTIVE)
                 || (d.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) > 0
@@ -659,21 +668,24 @@ impl Displays {
                 gdi: true,
             };
             disp.desc.DeviceName = d.DeviceName;
-            #[allow(invalid_value)]
-            let mut m: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            m.dmSize = std::mem::size_of::<DEVMODEW>() as _;
-            m.dmDriverExtra = 0;
+            let mut m = std::mem::MaybeUninit::<DEVMODEW>::uninit();
+            unsafe {
+                std::ptr::addr_of_mut!((*m.as_mut_ptr()).dmSize)
+                    .write(std::mem::size_of::<DEVMODEW>() as _);
+                std::ptr::addr_of_mut!((*m.as_mut_ptr()).dmDriverExtra).write(0);
+            }
             let ok = unsafe {
                 EnumDisplaySettingsExW(
                     disp.desc.DeviceName.as_ptr(),
                     ENUM_CURRENT_SETTINGS,
-                    &mut m as _,
+                    m.as_mut_ptr() as _,
                     0,
                 )
             };
             if ok == FALSE {
                 continue;
             }
+            let m = unsafe { m.assume_init() };
             disp.desc.DesktopCoordinates.left = unsafe { m.u1.s2().dmPosition.x };
             disp.desc.DesktopCoordinates.top = unsafe { m.u1.s2().dmPosition.y };
             disp.desc.DesktopCoordinates.right =
@@ -719,10 +731,9 @@ impl Displays {
         // We get the display's details.
 
         let desc = unsafe {
-            #[allow(invalid_value)]
-            let mut desc = mem::MaybeUninit::uninit().assume_init();
-            (*output.0).GetDesc(&mut desc);
-            desc
+            let mut desc = mem::MaybeUninit::<DXGI_OUTPUT_DESC>::uninit();
+            (*output.0).GetDesc(desc.as_mut_ptr());
+            desc.assume_init()
         };
 
         // We cast it up to the version needed for desktop duplication.
@@ -842,9 +853,9 @@ impl Display {
     pub fn adapter_luid(&self) -> Option<i64> {
         unsafe {
             if !self.adapter.is_null() {
-                #[allow(invalid_value)]
-                let mut adapter_desc1 = mem::MaybeUninit::uninit().assume_init();
-                if wrap_hresult((*self.adapter.0).GetDesc1(&mut adapter_desc1)).is_ok() {
+                let mut adapter_desc1 = mem::MaybeUninit::<DXGI_ADAPTER_DESC1>::uninit();
+                if wrap_hresult((*self.adapter.0).GetDesc1(adapter_desc1.as_mut_ptr())).is_ok() {
+                    let adapter_desc1 = adapter_desc1.assume_init();
                     let luid = ((adapter_desc1.AdapterLuid.HighPart as i64) << 32)
                         | adapter_desc1.AdapterLuid.LowPart as i64;
                     return Some(luid);

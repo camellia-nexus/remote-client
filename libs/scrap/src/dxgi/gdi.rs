@@ -41,11 +41,12 @@ impl CapturerGDI {
         /*
         shared::windef::HMONITOR,
         winuser::{GetMonitorInfoW, GetSystemMetrics, MONITORINFOEXW},
-        let mut mi: MONITORINFOEXW = std::mem::MaybeUninit::uninit().assume_init();
-        mi.cbSize = size_of::<MONITORINFOEXW>() as _;
-        if GetMonitorInfoW(m, &mut mi as *mut MONITORINFOEXW as _) == 0 {
+        let mut mi = std::mem::MaybeUninit::<MONITORINFOEXW>::uninit();
+        std::ptr::addr_of_mut!((*mi.as_mut_ptr()).cbSize).write(size_of::<MONITORINFOEXW>() as _);
+        if GetMonitorInfoW(m, mi.as_mut_ptr() as _) == 0 {
             return Err(format!("Failed to get monitor information of: {:?}", m).into());
         }
+        let mi = mi.assume_init();
         */
         unsafe {
             if name.is_empty() {

@@ -288,6 +288,59 @@ pub fn peer_has_password(id: String) -> bool {
     !PeerConfig::load(&id).password.is_empty()
 }
 
+pub const SECRET_PEER_OPTIONS: &[&str] = &["rdp_password", "os-password"];
+
+pub fn is_secret_peer_option(key: &str) -> bool {
+    SECRET_PEER_OPTIONS.contains(&key)
+}
+
+pub fn peer_has_rdp_password(id: &str) -> bool {
+    let c = PeerConfig::load(id);
+    c.options
+        .get("rdp_password")
+        .map_or(false, |p| !p.is_empty())
+}
+
+pub fn set_peer_rdp_options(
+    id: String,
+    port: String,
+    username: String,
+    password_action: String,
+    new_password: Option<String>,
+) {
+    let mut c = PeerConfig::load(&id);
+    if port.is_empty() {
+        c.options.remove("rdp_port");
+    } else {
+        c.options.insert("rdp_port".to_owned(), port);
+    }
+    if username.is_empty() {
+        c.options.remove("rdp_username");
+    } else {
+        c.options.insert("rdp_username".to_owned(), username);
+    }
+    match password_action.as_str() {
+        "replace" => {
+            if let Some(pwd) = new_password {
+                if pwd.is_empty() {
+                    c.options.remove("rdp_password");
+                } else {
+                    c.options.insert("rdp_password".to_owned(), pwd);
+                }
+            } else {
+                c.options.remove("rdp_password");
+            }
+        }
+        "clear" => {
+            c.options.remove("rdp_password");
+        }
+        "keep" | _ => {
+            // Keep existing password unchanged
+        }
+    }
+    c.store(&id);
+}
+
 #[inline]
 pub fn forget_password(id: String) {
     let mut c = PeerConfig::load(&id);
@@ -297,6 +350,12 @@ pub fn forget_password(id: String) {
 
 #[inline]
 pub fn get_peer_option(id: String, name: String) -> String {
+    if is_secret_peer_option(&name) {
+        return "".to_owned();
+    }
+    if name == "has_rdp_password" {
+        return peer_has_rdp_password(&id).to_string();
+    }
     let c = PeerConfig::load(&id);
     c.options.get(&name).unwrap_or(&"".to_owned()).to_owned()
 }
@@ -304,6 +363,9 @@ pub fn get_peer_option(id: String, name: String) -> String {
 #[inline]
 #[cfg(feature = "flutter")]
 pub fn get_peer_flutter_option(id: String, name: String) -> String {
+    if is_secret_peer_option(&name) {
+        return "".to_owned();
+    }
     let c = PeerConfig::load(&id);
     c.ui_flutter.get(&name).unwrap_or(&"".to_owned()).to_owned()
 }

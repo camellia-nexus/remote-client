@@ -107,29 +107,32 @@ impl PrivacyModeImpl {
 
         let mut i: DWORD = 0;
         loop {
-            #[allow(invalid_value)]
-            let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
-            let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut dd as _, 0) };
+            let mut dd = std::mem::MaybeUninit::<DISPLAY_DEVICEW>::uninit();
+            unsafe {
+                std::ptr::addr_of_mut!((*dd.as_mut_ptr()).cb)
+                    .write(std::mem::size_of::<DISPLAY_DEVICEW>() as _);
+            }
+            let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, dd.as_mut_ptr() as _, 0) };
             if ok == FALSE {
                 break;
             }
+            let dd = unsafe { dd.assume_init() };
             i += 1;
             if 0 == (dd.StateFlags & DISPLAY_DEVICE_ACTIVE)
                 || (dd.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) > 0
             {
                 continue;
             }
-            #[allow(invalid_value)]
-            let mut dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
-            dm.dmDriverExtra = 0;
+            let mut dm = std::mem::MaybeUninit::<DEVMODEW>::uninit();
             unsafe {
+                std::ptr::addr_of_mut!((*dm.as_mut_ptr()).dmSize)
+                    .write(std::mem::size_of::<DEVMODEW>() as _);
+                std::ptr::addr_of_mut!((*dm.as_mut_ptr()).dmDriverExtra).write(0);
                 if FALSE
                     == EnumDisplaySettingsExW(
                         dd.DeviceName.as_ptr(),
                         ENUM_CURRENT_SETTINGS,
-                        &mut dm as _,
+                        dm.as_mut_ptr() as _,
                         0,
                     )
                 {
@@ -137,7 +140,7 @@ impl PrivacyModeImpl {
                         == EnumDisplaySettingsExW(
                             dd.DeviceName.as_ptr(),
                             ENUM_REGISTRY_SETTINGS,
-                            &mut dm as _,
+                            dm.as_mut_ptr() as _,
                             0,
                         )
                     {
@@ -145,6 +148,7 @@ impl PrivacyModeImpl {
                     }
                 }
             }
+            let dm = unsafe { dm.assume_init() };
 
             let primary = (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) > 0;
             let display = Display {
@@ -191,16 +195,16 @@ impl PrivacyModeImpl {
         let display = &self.virtual_displays[0];
         let display_name = std::string::String::from_utf16(&display.name)?;
 
-        #[allow(invalid_value)]
-        let mut new_primary_dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-        new_primary_dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
-        new_primary_dm.dmDriverExtra = 0;
         unsafe {
+            let mut new_primary_dm = std::mem::MaybeUninit::<DEVMODEW>::uninit();
+            std::ptr::addr_of_mut!((*new_primary_dm.as_mut_ptr()).dmSize)
+                .write(std::mem::size_of::<DEVMODEW>() as _);
+            std::ptr::addr_of_mut!((*new_primary_dm.as_mut_ptr()).dmDriverExtra).write(0);
             if FALSE
                 == EnumDisplaySettingsW(
                     display.name.as_ptr(),
                     ENUM_CURRENT_SETTINGS,
-                    &mut new_primary_dm,
+                    new_primary_dm.as_mut_ptr(),
                 )
             {
                 bail!(
@@ -209,6 +213,7 @@ impl PrivacyModeImpl {
                     Error::last_os_error()
                 );
             }
+            let mut new_primary_dm = new_primary_dm.assume_init();
 
             // Windows 24H2 requires the virtual display to be set first.
             let flags = CDS_UPDATEREGISTRY | CDS_NORESET;
@@ -235,14 +240,20 @@ impl PrivacyModeImpl {
 
             let mut i: DWORD = 0;
             loop {
-                #[allow(invalid_value)]
-                let mut dd: DISPLAY_DEVICEW = std::mem::MaybeUninit::uninit().assume_init();
-                dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
+                let mut dd = std::mem::MaybeUninit::<DISPLAY_DEVICEW>::uninit();
+                std::ptr::addr_of_mut!((*dd.as_mut_ptr()).cb)
+                    .write(std::mem::size_of::<DISPLAY_DEVICEW>() as _);
                 if FALSE
-                    == EnumDisplayDevicesW(NULL as _, i, &mut dd, EDD_GET_DEVICE_INTERFACE_NAME)
+                    == EnumDisplayDevicesW(
+                        NULL as _,
+                        i,
+                        dd.as_mut_ptr(),
+                        EDD_GET_DEVICE_INTERFACE_NAME,
+                    )
                 {
                     break;
                 }
+                let dd = dd.assume_init();
                 i += 1;
                 if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) == 0 {
                     continue;
@@ -252,12 +263,16 @@ impl PrivacyModeImpl {
                     continue;
                 }
 
-                #[allow(invalid_value)]
-                let mut dm: DEVMODEW = std::mem::MaybeUninit::uninit().assume_init();
-                dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
-                dm.dmDriverExtra = 0;
+                let mut dm = std::mem::MaybeUninit::<DEVMODEW>::uninit();
+                std::ptr::addr_of_mut!((*dm.as_mut_ptr()).dmSize)
+                    .write(std::mem::size_of::<DEVMODEW>() as _);
+                std::ptr::addr_of_mut!((*dm.as_mut_ptr()).dmDriverExtra).write(0);
                 if FALSE
-                    == EnumDisplaySettingsW(dd.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut dm)
+                    == EnumDisplaySettingsW(
+                        dd.DeviceName.as_ptr(),
+                        ENUM_CURRENT_SETTINGS,
+                        dm.as_mut_ptr(),
+                    )
                 {
                     bail!(
                         "Failed EnumDisplaySettingsW, device name: {:?}, error: {}",
@@ -265,6 +280,7 @@ impl PrivacyModeImpl {
                         Error::last_os_error()
                     );
                 }
+                let mut dm = dm.assume_init();
 
                 dm.u1.s2_mut().dmPosition.x -= offx;
                 dm.u1.s2_mut().dmPosition.y -= offy;
