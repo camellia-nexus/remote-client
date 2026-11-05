@@ -8,8 +8,10 @@ use camellia_remote_protocol::message_proto::{
     terminal_action, CloseTerminal, ResizeTerminal, TerminalAction, TerminalData,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+static TEST_REGISTRY_MUTEX: Mutex<()> = Mutex::new(());
 
 // ============================================================================
 // RES-022 Tests: OutputBuffer Strict Byte Bounding and Invariant Checks
@@ -90,6 +92,7 @@ fn test_res022_output_buffer_mixed_newlines_and_giant_chunks() {
 
 #[test]
 fn test_res020_service_limits_and_session_count_accuracy() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let test_svc_id = format!("test_res020_svc_{}", uuid::Uuid::new_v4());
 
     // Create service
@@ -113,6 +116,7 @@ fn test_res020_service_limits_and_session_count_accuracy() {
 
 #[test]
 fn test_res020_max_services_limit_rejection() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let mut created_ids = Vec::new();
 
     // Create services up to MAX_SERVICES
@@ -145,6 +149,7 @@ fn test_res020_max_services_limit_rejection() {
 
 #[test]
 fn test_res021_oversized_terminal_data_does_not_panic_or_freeze() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let test_svc_id = format!("test_res021_svc_{}", uuid::Uuid::new_v4());
     let _svc = get_or_create_service(test_svc_id.clone(), true, false)
         .expect("Service creation must succeed");
@@ -168,6 +173,7 @@ fn test_res021_oversized_terminal_data_does_not_panic_or_freeze() {
 
 #[test]
 fn test_res021_terminal_resize_extreme_dimensions_clamped() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let test_svc_id = format!("test_res021_resize_{}", uuid::Uuid::new_v4());
     let _svc = get_or_create_service(test_svc_id.clone(), true, false)
         .expect("Service creation must succeed");
@@ -203,6 +209,7 @@ fn test_res021_terminal_resize_extreme_dimensions_clamped() {
 
 #[test]
 fn test_res023_remove_service_does_not_deadlock_with_concurrent_lookup() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let test_svc_id = format!("test_res023_deadlock_{}", uuid::Uuid::new_v4());
     let _svc = get_or_create_service(test_svc_id.clone(), true, false)
         .expect("Service creation must succeed");
@@ -228,6 +235,7 @@ fn test_res023_remove_service_does_not_deadlock_with_concurrent_lookup() {
 
 #[test]
 fn test_res023_handle_close_non_existent_session_returns_ok_none() {
+    let _lock = TEST_REGISTRY_MUTEX.lock().unwrap();
     let test_svc_id = format!("test_res023_close_{}", uuid::Uuid::new_v4());
     let _svc = get_or_create_service(test_svc_id.clone(), true, false)
         .expect("Service creation must succeed");
