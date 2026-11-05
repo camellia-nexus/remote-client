@@ -715,6 +715,21 @@ class RustdeskImpl {
     required String key,
     required String value,
   }) => ffi.mainSetPeerOptionSync(id: id, key: key, value: value);
+  bool mainPeerHasRdpPassword({required String id}) =>
+      ffi.mainPeerHasRdpPassword(id: id);
+  Future<void> mainSetPeerRdpOptions({
+    required String id,
+    required String port,
+    required String username,
+    required String passwordAction,
+    String? newPassword,
+  }) => ffi.mainSetPeerRdpOptions(
+    id: id,
+    port: port,
+    username: username,
+    passwordAction: passwordAction,
+    newPassword: newPassword,
+  );
   Future<void> mainSetPeerAlias({required String id, required String alias}) =>
       ffi.mainSetPeerAlias(id: id, alias: alias);
   Future<String> mainGetNewStoredPeers() => ffi.mainGetNewStoredPeers();
@@ -917,6 +932,10 @@ class RustdeskImpl {
   Future<String> mainGetBuildDate() => ffi.mainGetBuildDate();
   String translate({required String name, required String locale}) =>
       ffi.translate(name: name, locale: locale);
+  Uint8List? sessionGetRgbaFrame({
+    required UuidValue sessionId,
+    required int display,
+  }) => ffi.sessionGetRgbaFrame(sessionId: sessionId, display: display);
   int sessionGetRgbaSize({
     required UuidValue sessionId,
     required int display,

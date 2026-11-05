@@ -1097,6 +1097,23 @@ bool mainSetPeerOptionSync({
   value: value,
 );
 
+bool mainPeerHasRdpPassword({required String id}) =>
+    RustLib.instance.api.crateFlutterFfiMainPeerHasRdpPassword(id: id);
+
+Future<void> mainSetPeerRdpOptions({
+  required String id,
+  required String port,
+  required String username,
+  required String passwordAction,
+  String? newPassword,
+}) => RustLib.instance.api.crateFlutterFfiMainSetPeerRdpOptions(
+  id: id,
+  port: port,
+  username: username,
+  passwordAction: passwordAction,
+  newPassword: newPassword,
+);
+
 Future<void> mainSetPeerAlias({required String id, required String alias}) =>
     RustLib.instance.api.crateFlutterFfiMainSetPeerAlias(id: id, alias: alias);
 
@@ -1506,6 +1523,14 @@ Future<String> mainGetBuildDate() =>
 
 String translate({required String name, required String locale}) =>
     RustLib.instance.api.crateFlutterFfiTranslate(name: name, locale: locale);
+
+Uint8List? sessionGetRgbaFrame({
+  required UuidValue sessionId,
+  required int display,
+}) => RustLib.instance.api.crateFlutterFfiSessionGetRgbaFrame(
+  sessionId: sessionId,
+  display: display,
+);
 
 int sessionGetRgbaSize({required UuidValue sessionId, required int display}) =>
     RustLib.instance.api.crateFlutterFfiSessionGetRgbaSize(
