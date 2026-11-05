@@ -39,7 +39,9 @@ impl Capturer {
                 return;
             }
             if status == FrameComplete {
-                handler(unsafe { Frame::new(surface) });
+                if let Some(frame) = unsafe { Frame::try_new(surface) } {
+                    handler(frame);
+                }
             }
         })
         .copy();

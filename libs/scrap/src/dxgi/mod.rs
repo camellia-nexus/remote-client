@@ -194,16 +194,16 @@ impl Capturer {
             println!("create rotations");
             if !device.is_null() && !context.is_null() {
                 unsafe {
-                    (*context).QueryInterface(
+                    let hr_ctx = (*context).QueryInterface(
                         &IID_ID3D11VideoContext,
                         &mut video_context as *mut *mut _ as *mut *mut _,
                     );
-                    if !video_context.is_null() {
-                        (*device).QueryInterface(
+                    if hr_ctx >= 0 && !video_context.is_null() {
+                        let hr_dev = (*device).QueryInterface(
                             &IID_ID3D11VideoDevice,
                             &mut video_device as *mut *mut _ as *mut *mut _,
                         );
-                        if !video_device.is_null() {
+                        if hr_dev >= 0 && !video_device.is_null() {
                             let (input_width, input_height) = match display.rotation() {
                                 DXGI_MODE_ROTATION_ROTATE90 | DXGI_MODE_ROTATION_ROTATE270 => {
                                     (display.height(), display.width())
@@ -227,11 +227,11 @@ impl Capturer {
                                 OutputHeight: output_height as _,
                                 Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
                             };
-                            (*video_device).CreateVideoProcessorEnumerator(
+                            let hr_enum = (*video_device).CreateVideoProcessorEnumerator(
                                 &content_desc,
                                 &mut video_processor_enum,
                             );
-                            if !video_processor_enum.is_null() {
+                            if hr_enum >= 0 && !video_processor_enum.is_null() {
                                 let mut caps: D3D11_VIDEO_PROCESSOR_CAPS = mem::zeroed();
                                 if S_OK == (*video_processor_enum).GetVideoProcessorCaps(&mut caps)
                                 {
@@ -239,12 +239,12 @@ impl Capturer {
                                         & D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION
                                         != 0
                                     {
-                                        (*video_device).CreateVideoProcessor(
+                                        let hr_proc = (*video_device).CreateVideoProcessor(
                                             video_processor_enum,
                                             0,
                                             &mut video_processor,
                                         );
-                                        if !video_processor.is_null() {
+                                        if hr_proc >= 0 && !video_processor.is_null() {
                                             (*video_context).VideoProcessorSetStreamRotation(
                                                 video_processor,
                                                 0,
@@ -356,11 +356,23 @@ impl Capturer {
 
     // copy from GPU memory to system memory
     unsafe fn ohgodwhat(&mut self, frame: *mut IDXGIResource) -> io::Result<*mut IDXGISurface> {
+        if frame.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Frame resource pointer is NULL",
+            ));
+        }
         let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-        (*frame).QueryInterface(
+        wrap_hresult((*frame).QueryInterface(
             &IID_ID3D11Texture2D,
             &mut texture as *mut *mut _ as *mut *mut _,
-        );
+        ))?;
+        if texture.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "QueryInterface for ID3D11Texture2D returned NULL",
+            ));
+        }
         let texture = ComPtr(texture);
 
         let mut texture_desc = mem::MaybeUninit::<D3D11_TEXTURE2D_DESC>::uninit();
@@ -378,14 +390,26 @@ impl Capturer {
             ptr::null(),
             &mut readable,
         ))?;
+        if readable.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "CreateTexture2D returned NULL readable texture",
+            ));
+        }
         (*readable).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
         let readable = ComPtr(readable);
 
         let mut surface = ptr::null_mut();
-        (*readable.0).QueryInterface(
+        wrap_hresult((*readable.0).QueryInterface(
             &IID_IDXGISurface,
             &mut surface as *mut *mut _ as *mut *mut _,
-        );
+        ))?;
+        if surface.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "QueryInterface for IDXGISurface returned NULL",
+            ));
+        }
 
         (*self.context.0).CopyResource(readable.0 as *mut _, texture.0 as *mut _);
 
@@ -491,10 +515,16 @@ impl Capturer {
             }
 
             let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-            (*frame.0).QueryInterface(
+            wrap_hresult((*frame.0).QueryInterface(
                 &IID_ID3D11Texture2D,
                 &mut texture as *mut *mut _ as *mut *mut _,
-            );
+            ))?;
+            if texture.is_null() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "QueryInterface for ID3D11Texture2D returned NULL",
+                ));
+            }
             let texture = ComPtr(texture);
             self.texture = texture;
 
@@ -523,8 +553,11 @@ impl Capturer {
                     self.rotate.texture.1 = true;
                     let mut rotated_texture: *mut ID3D11Texture2D = ptr::null_mut();
                     desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-                    (*self.device.0).CreateTexture2D(&desc, ptr::null(), &mut rotated_texture);
-                    self.rotate.texture.0 = ComPtr(rotated_texture);
+                    let hr =
+                        (*self.device.0).CreateTexture2D(&desc, ptr::null(), &mut rotated_texture);
+                    if hr >= 0 && !rotated_texture.is_null() {
+                        self.rotate.texture.0 = ComPtr(rotated_texture);
+                    }
                 }
                 if !self.rotate.texture.0.is_null()
                     && desc.Width == self.width as u32
@@ -539,26 +572,26 @@ impl Capturer {
                         },
                     };
                     let mut input_view = ptr::null_mut();
-                    (*self.rotate.video_device.0).CreateVideoProcessorInputView(
+                    let hr_in = (*self.rotate.video_device.0).CreateVideoProcessorInputView(
                         self.texture.0 as *mut _,
                         self.rotate.video_processor_enum.0 as *mut _,
                         &input_view_desc,
                         &mut input_view,
                     );
-                    if !input_view.is_null() {
+                    if hr_in >= 0 && !input_view.is_null() {
                         let input_view = ComPtr(input_view);
                         let mut output_view_desc: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC =
                             mem::zeroed();
                         output_view_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
                         output_view_desc.u.Texture2D_mut().MipSlice = 0;
                         let mut output_view = ptr::null_mut();
-                        (*self.rotate.video_device.0).CreateVideoProcessorOutputView(
+                        let hr_out = (*self.rotate.video_device.0).CreateVideoProcessorOutputView(
                             self.rotate.texture.0 .0 as *mut _,
                             self.rotate.video_processor_enum.0 as *mut _,
                             &output_view_desc,
                             &mut output_view,
                         );
-                        if !output_view.is_null() {
+                        if hr_out >= 0 && !output_view.is_null() {
                             let output_view = ComPtr(output_view);
                             let mut stream_data: D3D11_VIDEO_PROCESSOR_STREAM = mem::zeroed();
                             stream_data.Enable = TRUE;
@@ -575,6 +608,12 @@ impl Capturer {
                         }
                     }
                 }
+            }
+            if final_texture.is_null() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Failed to obtain valid texture",
+                ));
             }
             Ok((final_texture, rotation))
         }

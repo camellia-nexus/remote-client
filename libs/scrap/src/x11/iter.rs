@@ -10,9 +10,15 @@ use super::{Display, Rect, Server};
 
 //TODO: Do I have to free the displays?
 
+struct RawMonitorInfo {
+    primary: bool,
+    rect: Rect,
+    name: xcb_atom_t,
+}
+
 pub struct DisplayIter {
     outer: xcb_screen_iterator_t,
-    inner: Option<(xcb_randr_monitor_info_iterator_t, xcb_window_t)>,
+    inner: Option<(std::vec::IntoIter<RawMonitorInfo>, xcb_window_t)>,
     server: Rc<Server>,
 }
 
@@ -30,12 +36,16 @@ impl DisplayIter {
     fn next_screen(
         outer: &mut xcb_screen_iterator_t,
         server: &Server,
-    ) -> Option<(xcb_randr_monitor_info_iterator_t, xcb_window_t)> {
+    ) -> Option<(std::vec::IntoIter<RawMonitorInfo>, xcb_window_t)> {
         if outer.rem == 0 {
             return None;
         }
 
         unsafe {
+            if outer.data.is_null() {
+                xcb_screen_next(outer);
+                return None;
+            }
             let root = (*outer.data).root;
 
             let cookie = xcb_randr_get_monitors_unchecked(
@@ -45,13 +55,34 @@ impl DisplayIter {
             );
 
             let response = xcb_randr_get_monitors_reply(server.raw(), cookie, ptr::null_mut());
+            if response.is_null() {
+                xcb_screen_next(outer);
+                return None;
+            }
 
-            let inner = xcb_randr_get_monitors_monitors_iterator(response);
+            let mut monitors = Vec::new();
+            let mut iter = xcb_randr_get_monitors_monitors_iterator(response);
+            while iter.rem > 0 {
+                if !iter.data.is_null() {
+                    let data = &*iter.data;
+                    monitors.push(RawMonitorInfo {
+                        primary: data.primary != 0,
+                        rect: Rect {
+                            x: data.x,
+                            y: data.y,
+                            w: data.width,
+                            h: data.height,
+                        },
+                        name: data.name,
+                    });
+                }
+                xcb_randr_monitor_info_next(&mut iter);
+            }
 
             libc::free(response as *mut _);
             xcb_screen_next(outer);
 
-            Some((inner, root))
+            Some((monitors.into_iter(), root))
         }
     }
 }
@@ -63,26 +94,19 @@ impl Iterator for DisplayIter {
         loop {
             if let Some((ref mut inner, root)) = self.inner {
                 // If there is something in the current screen, return that.
-                if inner.rem != 0 {
+                if let Some(monitor) = inner.next() {
                     unsafe {
-                        let data = &*inner.data;
-                        let name = get_atom_name(self.server.raw(), data.name);
+                        let name = get_atom_name(self.server.raw(), monitor.name);
                         let pixfmt = get_pixfmt(self.server.raw(), root).unwrap_or(Pixfmt::BGRA);
                         let display = Display::new(
                             self.server.clone(),
-                            data.primary != 0,
-                            Rect {
-                                x: data.x,
-                                y: data.y,
-                                w: data.width,
-                                h: data.height,
-                            },
+                            monitor.primary,
+                            monitor.rect,
                             root,
                             name,
                             pixfmt,
                         );
 
-                        xcb_randr_monitor_info_next(inner);
                         return Some(display);
                     }
                 }
@@ -105,7 +129,7 @@ fn get_atom_name(conn: *mut xcb_connection_t, atom: xcb_atom_t) -> String {
     unsafe {
         let mut e: *mut xcb_generic_error_t = std::ptr::null_mut();
         let reply = xcb_get_atom_name_reply(conn, xcb_get_atom_name(conn, atom), &mut e as _);
-        if reply == std::ptr::null() {
+        if reply.is_null() {
             return empty;
         }
         let length = xcb_get_atom_name_name_length(reply);
