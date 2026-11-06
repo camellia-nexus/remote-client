@@ -110,19 +110,105 @@ fn get_active_user_id_name_from_cache() -> Option<(String, String)> {
     Some((entry.uid.clone(), entry.username.clone()))
 }
 
+/// RAII guard for libxdo context ownership, ensuring `libxdo_sys::xdo_free`
+/// is automatically called when a thread terminates or the guard is dropped (RES-048).
+#[derive(Debug)]
+pub struct XdoGuard(pub *mut xdo_t);
+
+impl XdoGuard {
+    #[inline]
+    pub fn raw(&self) -> *mut xdo_t {
+        self.0
+    }
+
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        !self.0.is_null()
+    }
+}
+
+impl Drop for XdoGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                libxdo_sys::xdo_free(self.0);
+            }
+            self.0 = std::ptr::null_mut();
+        }
+    }
+}
+
+/// RAII guard for X11 Display handle ownership, ensuring `XCloseDisplay`
+/// is automatically called when a thread terminates or the guard is dropped (RES-048).
+#[derive(Debug)]
+pub struct DisplayGuard(pub *mut c_void);
+
+impl DisplayGuard {
+    #[inline]
+    pub fn raw(&self) -> *mut c_void {
+        self.0
+    }
+
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        !self.0.is_null()
+    }
+}
+
+impl Drop for DisplayGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                XCloseDisplay(self.0);
+            }
+            self.0 = std::ptr::null_mut();
+        }
+    }
+}
+
 thread_local! {
     // XDO context - created via libxdo-sys (which uses dynamic loading stub).
     // If libxdo is not available, xdo will be null and xdo-based functions become no-ops.
-    static XDO: RefCell<*mut xdo_t> = RefCell::new({
+    // Wrapped in XdoGuard with RAII Drop calling libxdo_sys::xdo_free on thread exit (RES-048).
+    static XDO: RefCell<Option<XdoGuard>> = RefCell::new({
         let xdo = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
         if xdo.is_null() {
             log::warn!("Failed to create xdo context, xdo functions will be disabled");
+            None
         } else {
             log::info!("xdo context created successfully");
+            Some(XdoGuard(xdo))
         }
-        xdo
     });
-    static DISPLAY: RefCell<*mut c_void> = RefCell::new(unsafe { XOpenDisplay(std::ptr::null())});
+
+    // X11 Display connection.
+    // Wrapped in DisplayGuard with RAII Drop calling XCloseDisplay on thread exit (RES-048).
+    static DISPLAY: RefCell<Option<DisplayGuard>> = RefCell::new({
+        let d = unsafe { XOpenDisplay(std::ptr::null()) };
+        if d.is_null() {
+            None
+        } else {
+            Some(DisplayGuard(d))
+        }
+    });
+}
+
+#[inline]
+pub fn reset_xdo() {
+    XDO.with(|xdo| {
+        if let Ok(mut cell) = xdo.try_borrow_mut() {
+            *cell = None;
+        }
+    });
+}
+
+#[inline]
+pub fn reset_display() {
+    DISPLAY.with(|conn| {
+        if let Ok(mut cell) = conn.try_borrow_mut() {
+            *cell = None;
+        }
+    });
 }
 
 // X11 error event structure for the custom error handler.
@@ -172,7 +258,7 @@ unsafe extern "C" fn handle_x_error(_display: *mut c_void, event: *mut XErrorEve
 #[link(name = "X11")]
 extern "C" {
     fn XOpenDisplay(display_name: *const c_char) -> *mut c_void;
-    // fn XCloseDisplay(d: *mut c_void) -> c_int;
+    fn XCloseDisplay(d: *mut c_void) -> c_int;
     fn XSetErrorHandler(handler: Option<XErrorHandler>) -> Option<XErrorHandler>;
 }
 
@@ -215,21 +301,23 @@ fn sleep_millis(millis: u64) {
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     let mut res = None;
     XDO.with(|xdo| {
-        if let Ok(xdo) = xdo.try_borrow() {
-            if xdo.is_null() {
-                return;
+        if let Ok(guard_ref) = xdo.try_borrow() {
+            if let Some(guard) = guard_ref.as_ref() {
+                if !guard.is_valid() {
+                    return;
+                }
+                let mut x: c_int = 0;
+                let mut y: c_int = 0;
+                unsafe {
+                    libxdo_sys::xdo_get_mouse_location(
+                        guard.raw() as *const _,
+                        &mut x as _,
+                        &mut y as _,
+                        std::ptr::null_mut(),
+                    );
+                }
+                res = Some((x, y));
             }
-            let mut x: c_int = 0;
-            let mut y: c_int = 0;
-            unsafe {
-                libxdo_sys::xdo_get_mouse_location(
-                    *xdo as *const _,
-                    &mut x as _,
-                    &mut y as _,
-                    std::ptr::null_mut(),
-                );
-            }
-            res = Some((x, y));
         }
     });
     res
@@ -239,20 +327,22 @@ pub fn set_cursor_pos(x: i32, y: i32) -> bool {
     let mut res = false;
     XDO.with(|xdo| {
         match xdo.try_borrow() {
-            Ok(xdo) => {
-                if xdo.is_null() {
-                    log::debug!("set_cursor_pos: xdo is null");
-                    return;
-                }
-                unsafe {
-                    let ret = libxdo_sys::xdo_move_mouse(*xdo as *const _, x, y, 0);
-                    if ret != 0 {
-                        log::debug!(
-                            "set_cursor_pos: xdo_move_mouse failed with code {} for coordinates ({}, {})",
-                            ret, x, y
-                        );
+            Ok(guard_ref) => {
+                if let Some(guard) = guard_ref.as_ref() {
+                    if !guard.is_valid() {
+                        log::debug!("set_cursor_pos: xdo is null");
+                        return;
                     }
-                    res = ret == 0;
+                    unsafe {
+                        let ret = libxdo_sys::xdo_move_mouse(guard.raw() as *const _, x, y, 0);
+                        if ret != 0 {
+                            log::debug!(
+                                "set_cursor_pos: xdo_move_mouse failed with code {} for coordinates ({}, {})",
+                                ret, x, y
+                            );
+                        }
+                        res = ret == 0;
+                    }
                 }
             }
             Err(_) => {
@@ -290,69 +380,72 @@ pub fn reset_input_cache() {}
 pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
     let mut res = None;
     XDO.with(|xdo| {
-        if let Ok(xdo) = xdo.try_borrow() {
-            if xdo.is_null() {
-                return;
-            }
-            let mut x: c_int = 0;
-            let mut y: c_int = 0;
-            let mut width: c_uint = 0;
-            let mut height: c_uint = 0;
-            let mut window: Window = 0;
-
-            unsafe {
-                if libxdo_sys::xdo_get_active_window(*xdo as *const _, &mut window) != 0 {
+        if let Ok(guard_ref) = xdo.try_borrow() {
+            if let Some(guard) = guard_ref.as_ref() {
+                if !guard.is_valid() {
                     return;
                 }
+                let mut x: c_int = 0;
+                let mut y: c_int = 0;
+                let mut width: c_uint = 0;
+                let mut height: c_uint = 0;
+                let mut window: Window = 0;
 
-                // XSetErrorHandler is process-global, not scoped to this Display/thread.
-                // This path is currently called by the single window_focus service thread.
-                // While installed, this handler can still observe unrelated X11 errors from
-                // other threads; unexpected errors make this geometry query fail.
-                X_BAD_WINDOW_DETECTED.store(false, Ordering::SeqCst);
-                X_UNEXPECTED_ERROR_DETECTED.store(false, Ordering::SeqCst);
-                let prev_handler = XSetErrorHandler(Some(handle_x_error));
+                unsafe {
+                    if libxdo_sys::xdo_get_active_window(guard.raw() as *const _, &mut window) != 0
+                    {
+                        return;
+                    }
 
-                let loc_ret = libxdo_sys::xdo_get_window_location(
-                    *xdo as *const _,
-                    window,
-                    &mut x as _,
-                    &mut y as _,
-                    std::ptr::null_mut(),
-                );
-                let size_ret = if loc_ret == XDO_SUCCESS {
-                    libxdo_sys::xdo_get_window_size(
-                        *xdo as *const _,
+                    // XSetErrorHandler is process-global, not scoped to this Display/thread.
+                    // This path is currently called by the single window_focus service thread.
+                    // While installed, this handler can still observe unrelated X11 errors from
+                    // other threads; unexpected errors make this geometry query fail.
+                    X_BAD_WINDOW_DETECTED.store(false, Ordering::SeqCst);
+                    X_UNEXPECTED_ERROR_DETECTED.store(false, Ordering::SeqCst);
+                    let prev_handler = XSetErrorHandler(Some(handle_x_error));
+
+                    let loc_ret = libxdo_sys::xdo_get_window_location(
+                        guard.raw() as *const _,
                         window,
-                        &mut width,
-                        &mut height,
-                    )
-                } else {
-                    XDO_ERROR
-                };
+                        &mut x as _,
+                        &mut y as _,
+                        std::ptr::null_mut(),
+                    );
+                    let size_ret = if loc_ret == XDO_SUCCESS {
+                        libxdo_sys::xdo_get_window_size(
+                            guard.raw() as *const _,
+                            window,
+                            &mut width,
+                            &mut height,
+                        )
+                    } else {
+                        XDO_ERROR
+                    };
 
-                // Do not call XSync(DISPLAY) here: DISPLAY is a separate
-                // XOpenDisplay() connection, while libxdo owns the Display*
-                // used by these geometry queries. These libxdo calls are
-                // synchronous XGetWindowAttributes-based queries, so the target
-                // BadWindow is expected to be delivered before the calls return.
-                XSetErrorHandler(prev_handler);
-                if X_BAD_WINDOW_DETECTED.load(Ordering::SeqCst)
-                    || X_UNEXPECTED_ERROR_DETECTED.load(Ordering::SeqCst)
-                    || loc_ret != XDO_SUCCESS
-                    || size_ret != XDO_SUCCESS
-                {
-                    return;
+                    // Do not call XSync(DISPLAY) here: DISPLAY is a separate
+                    // XOpenDisplay() connection, while libxdo owns the Display*
+                    // used by these geometry queries. These libxdo calls are
+                    // synchronous XGetWindowAttributes-based queries, so the target
+                    // BadWindow is expected to be delivered before the calls return.
+                    XSetErrorHandler(prev_handler);
+                    if X_BAD_WINDOW_DETECTED.load(Ordering::SeqCst)
+                        || X_UNEXPECTED_ERROR_DETECTED.load(Ordering::SeqCst)
+                        || loc_ret != XDO_SUCCESS
+                        || size_ret != XDO_SUCCESS
+                    {
+                        return;
+                    }
+
+                    let center_x = x + (width / 2) as c_int;
+                    let center_y = y + (height / 2) as c_int;
+                    res = displays.iter().position(|d| {
+                        center_x >= d.x
+                            && center_x < d.x + d.width
+                            && center_y >= d.y
+                            && center_y < d.y + d.height
+                    });
                 }
-
-                let center_x = x + (width / 2) as c_int;
-                let center_y = y + (height / 2) as c_int;
-                res = displays.iter().position(|d| {
-                    center_x >= d.x
-                        && center_x < d.x + d.width
-                        && center_y >= d.y
-                        && center_y < d.y + d.height
-                });
             }
         }
     });
@@ -362,13 +455,15 @@ pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
 pub fn get_cursor() -> ResultType<Option<u64>> {
     let mut res = None;
     DISPLAY.with(|conn| {
-        if let Ok(d) = conn.try_borrow_mut() {
-            if !d.is_null() {
-                unsafe {
-                    let img = XFixesGetCursorImage(*d);
-                    if !img.is_null() {
-                        res = Some((*img).cursor_serial as u64);
-                        XFree(img as _);
+        if let Ok(guard_ref) = conn.try_borrow() {
+            if let Some(guard) = guard_ref.as_ref() {
+                if guard.is_valid() {
+                    unsafe {
+                        let img = XFixesGetCursorImage(guard.raw());
+                        if !img.is_null() {
+                            res = Some((*img).cursor_serial as u64);
+                            XFree(img as _);
+                        }
                     }
                 }
             }
@@ -380,45 +475,49 @@ pub fn get_cursor() -> ResultType<Option<u64>> {
 pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
     let mut res = None;
     DISPLAY.with(|conn| {
-        if let Ok(ref mut d) = conn.try_borrow_mut() {
-            if !d.is_null() {
-                unsafe {
-                    let img = XFixesGetCursorImage(**d);
-                    if !img.is_null() && hcursor == (*img).cursor_serial as u64 {
-                        let mut cd: CursorData = Default::default();
-                        cd.hotx = (*img).xhot as _;
-                        cd.hoty = (*img).yhot as _;
-                        cd.width = (*img).width as _;
-                        cd.height = (*img).height as _;
-                        // to-do: how about if it is 0
-                        cd.id = (*img).cursor_serial as _;
-                        let pixels =
-                            std::slice::from_raw_parts((*img).pixels, (cd.width * cd.height) as _);
-                        // cd.colors.resize(pixels.len() * 4, 0);
-                        let mut cd_colors = vec![0_u8; pixels.len() * 4];
-                        for y in 0..cd.height {
-                            for x in 0..cd.width {
-                                let pos = (y * cd.width + x) as usize;
-                                let p = pixels[pos];
-                                let a = (p >> 24) & 0xff;
-                                let r = (p >> 16) & 0xff;
-                                let g = (p >> 8) & 0xff;
-                                let b = (p >> 0) & 0xff;
-                                if a == 0 {
-                                    continue;
+        if let Ok(guard_ref) = conn.try_borrow() {
+            if let Some(guard) = guard_ref.as_ref() {
+                if guard.is_valid() {
+                    unsafe {
+                        let img = XFixesGetCursorImage(guard.raw());
+                        if !img.is_null() && hcursor == (*img).cursor_serial as u64 {
+                            let mut cd: CursorData = Default::default();
+                            cd.hotx = (*img).xhot as _;
+                            cd.hoty = (*img).yhot as _;
+                            cd.width = (*img).width as _;
+                            cd.height = (*img).height as _;
+                            // to-do: how about if it is 0
+                            cd.id = (*img).cursor_serial as _;
+                            let pixels = std::slice::from_raw_parts(
+                                (*img).pixels,
+                                (cd.width * cd.height) as _,
+                            );
+                            // cd.colors.resize(pixels.len() * 4, 0);
+                            let mut cd_colors = vec![0_u8; pixels.len() * 4];
+                            for y in 0..cd.height {
+                                for x in 0..cd.width {
+                                    let pos = (y * cd.width + x) as usize;
+                                    let p = pixels[pos];
+                                    let a = (p >> 24) & 0xff;
+                                    let r = (p >> 16) & 0xff;
+                                    let g = (p >> 8) & 0xff;
+                                    let b = (p >> 0) & 0xff;
+                                    if a == 0 {
+                                        continue;
+                                    }
+                                    let pos = pos * 4;
+                                    cd_colors[pos] = r as _;
+                                    cd_colors[pos + 1] = g as _;
+                                    cd_colors[pos + 2] = b as _;
+                                    cd_colors[pos + 3] = a as _;
                                 }
-                                let pos = pos * 4;
-                                cd_colors[pos] = r as _;
-                                cd_colors[pos + 1] = g as _;
-                                cd_colors[pos + 2] = b as _;
-                                cd_colors[pos + 3] = a as _;
                             }
+                            cd.colors = cd_colors.into();
+                            res = Some(cd);
                         }
-                        cd.colors = cd_colors.into();
-                        res = Some(cd);
-                    }
-                    if !img.is_null() {
-                        XFree(img as _);
+                        if !img.is_null() {
+                            XFree(img as _);
+                        }
                     }
                 }
             }

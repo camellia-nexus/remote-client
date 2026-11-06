@@ -522,6 +522,7 @@ extern "C" {
     pub(crate) fn init_cliprdr(context: *mut CliprdrClientContext) -> BOOL;
     pub(crate) fn uninit_cliprdr(context: *mut CliprdrClientContext) -> BOOL;
     pub(crate) fn empty_cliprdr(context: *mut CliprdrClientContext, connID: UINT32) -> BOOL;
+    pub(crate) fn set_cliprdr_is_stopped(context: *mut CliprdrClientContext);
 }
 
 unsafe impl Send for CliprdrClientContext {}
@@ -588,9 +589,9 @@ impl Drop for CliprdrClientContext {
     fn drop(&mut self) {
         unsafe {
             if FALSE == uninit_cliprdr(&mut *self) {
-                println!("Failed to uninit cliprdr");
+                log::warn!("Failed to uninit cliprdr");
             } else {
-                println!("Succeeded to uninit cliprdr");
+                log::info!("Succeeded to uninit cliprdr");
             }
         }
     }
@@ -599,6 +600,9 @@ impl Drop for CliprdrClientContext {
 impl CliprdrServiceContext for CliprdrClientContext {
     fn set_is_stopped(&mut self) -> Result<(), CliprdrError> {
         self.IsStopped = TRUE;
+        unsafe {
+            set_cliprdr_is_stopped(&mut *self);
+        }
         Ok(())
     }
 
@@ -615,7 +619,9 @@ impl CliprdrServiceContext for CliprdrClientContext {
         None
     }
 
-    fn cancel(&mut self) {}
+    fn cancel(&mut self) {
+        let _ = self.set_is_stopped();
+    }
 }
 
 fn ret_to_result(ret: u32) -> Result<(), CliprdrError> {
@@ -1138,7 +1144,7 @@ extern "C" fn client_format_list(
         let msg_channel = VEC_MSG_CHANNEL.read().unwrap();
         msg_channel
             .iter()
-            .for_each(|msg_channel| allow_err!(msg_channel.sender.send(data.clone())));
+            .for_each(|msg_channel| allow_err!(msg_channel.sender.try_send(data.clone())));
     } else {
         match send_data(conn_id, data) {
             Ok(_) => {}

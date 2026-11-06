@@ -307,6 +307,10 @@ struct wf_clipboard
 	fnAddClipboardFormatListener AddClipboardFormatListener;
 	fnRemoveClipboardFormatListener RemoveClipboardFormatListener;
 	fnGetUpdatedClipboardFormats GetUpdatedClipboardFormats;
+
+	HANDLE stopEvent;                  // CONC-009: manual-reset event signaled on stop/cancel
+	HANDLE readyEvent;                 // UNSAFE-009: handshake event signaled when worker window is ready
+	BOOL init_success;                 // UNSAFE-009: indicates if worker thread initialized successfully
 };
 typedef struct wf_clipboard wfClipboard;
 
@@ -317,6 +321,7 @@ typedef struct wf_clipboard wfClipboard;
 BOOL wf_cliprdr_init(wfClipboard *clipboard, CliprdrClientContext *cliprdr);
 BOOL wf_cliprdr_uninit(wfClipboard *clipboard, CliprdrClientContext *cliprdr);
 BOOL wf_do_empty_cliprdr(wfClipboard *clipboard);
+void set_cliprdr_is_stopped(CliprdrClientContext *context);
 
 static BOOL wf_create_file_obj(UINT32 *connID, wfClipboard *clipboard, IDataObject **ppDataObject);
 static void wf_destroy_file_obj(IDataObject *instance);
@@ -1718,13 +1723,37 @@ UINT try_reset_event(HANDLE event)
 UINT wait_response_event(UINT32 connID, wfClipboard *clipboard, HANDLE event, BOOL* recvedFlag, void **data)
 {
 	UINT rc = ERROR_SUCCESS;
+	if (!clipboard || !clipboard->context)
+		return ERROR_INTERNAL_ERROR;
+
 	clipboard->context->IsStopped = FALSE;
+	if (clipboard->stopEvent)
+		ResetEvent(clipboard->stopEvent);
+
 	DWORD waitOnceTimeoutMillis = 50;
 	int waitCount = 1000 * clipboard->context->ResponseWaitTimeoutSecs / waitOnceTimeoutMillis;
 	int i = 0;
+	HANDLE waitHandles[2];
+	DWORD numHandles = 1;
+	waitHandles[0] = event;
+	if (clipboard->stopEvent)
+	{
+		waitHandles[1] = clipboard->stopEvent;
+		numHandles = 2;
+	}
+
 	for (; i < waitCount; i++)
 	{
-		DWORD waitRes = WaitForSingleObject(event, waitOnceTimeoutMillis);
+		DWORD waitRes = WaitForMultipleObjects(numHandles, waitHandles, FALSE, waitOnceTimeoutMillis);
+
+		// CONC-009: Check if stopEvent was signaled
+		if (numHandles > 1 && waitRes == WAIT_OBJECT_0 + 1)
+		{
+			DEBUG_CLIPRDR("wait_response_event canceled by stopEvent");
+			wf_do_empty_cliprdr(clipboard);
+			return ERROR_INTERNAL_ERROR;
+		}
+
 		if (waitRes == WAIT_TIMEOUT && clipboard->context->IsStopped == FALSE)
 		{
 			if ((*recvedFlag) == TRUE) {
@@ -1769,7 +1798,8 @@ UINT wait_response_event(UINT32 connID, wfClipboard *clipboard, HANDLE event, BO
 		msg.type = 2;
 		msg.msg = "clipboard_wait_response_timeout_tip";
 		msg.details = NULL;
-		clipboard->context->NotifyClipboardMsg(connID, &msg);
+		if (clipboard->context && clipboard->context->NotifyClipboardMsg)
+			clipboard->context->NotifyClipboardMsg(connID, &msg);
 		rc = ERROR_INTERNAL_ERROR;
 
 		if (!ResetEvent(event))
@@ -1935,26 +1965,32 @@ static LRESULT CALLBACK cliprdr_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM 
 	case WM_CREATE:
 		DEBUG_CLIPRDR("info: WM_CREATE");
 		clipboard = (wfClipboard *)((CREATESTRUCT *)lParam)->lpCreateParams;
-		clipboard->hwnd = hWnd;
+		if (clipboard)
+		{
+			clipboard->hwnd = hWnd;
 
-		if (!clipboard->legacyApi)
-			clipboard->AddClipboardFormatListener(hWnd);
-		else
-			clipboard->hWndNextViewer = SetClipboardViewer(hWnd);
+			if (!clipboard->legacyApi && clipboard->AddClipboardFormatListener)
+				clipboard->AddClipboardFormatListener(hWnd);
+			else
+				clipboard->hWndNextViewer = SetClipboardViewer(hWnd);
+		}
 
 		break;
 
 	case WM_CLOSE:
 		DEBUG_CLIPRDR("info: WM_CLOSE");
 
-		if (!clipboard->legacyApi)
+		if (clipboard && !clipboard->legacyApi && clipboard->RemoveClipboardFormatListener)
 			clipboard->RemoveClipboardFormatListener(hWnd);
 
 		break;
 
 	case WM_DESTROY:
-		if (clipboard->legacyApi)
+		if (clipboard && clipboard->legacyApi)
 			ChangeClipboardChain(hWnd, clipboard->hWndNextViewer);
+		if (clipboard)
+			clipboard->hwnd = NULL;
+		clipboard = NULL;
 
 		break;
 
@@ -2175,13 +2211,26 @@ static DWORD WINAPI cliprdr_thread_func(LPVOID arg)
 	MSG msg;
 	BOOL mcode;
 	wfClipboard *clipboard = (wfClipboard *)arg;
-	OleInitialize(0);
+	HRESULT hr = OleInitialize(0);
 
-	if ((ret = create_cliprdr_window(clipboard)) != 0)
+	if ((ret = create_cliprdr_window(clipboard)) != 0 || !clipboard->hwnd)
 	{
-		OleUninitialize();
+		if (SUCCEEDED(hr))
+			OleUninitialize();
 		DEBUG_CLIPRDR("error: create clipboard window failed.");
+		if (clipboard && clipboard->readyEvent)
+		{
+			clipboard->init_success = FALSE;
+			SetEvent(clipboard->readyEvent);
+		}
 		return 0;
+	}
+
+	// UNSAFE-009: Signal ready handshake to wf_cliprdr_init now that window is valid
+	clipboard->init_success = TRUE;
+	if (clipboard->readyEvent)
+	{
+		SetEvent(clipboard->readyEvent);
 	}
 
 	while ((mcode = GetMessage(&msg, 0, 0, 0)) != 0)
@@ -2198,7 +2247,8 @@ static DWORD WINAPI cliprdr_thread_func(LPVOID arg)
 		}
 	}
 
-	OleUninitialize();
+	if (SUCCEEDED(hr))
+		OleUninitialize();
 	return 0;
 }
 
@@ -3493,6 +3543,9 @@ BOOL wf_cliprdr_init(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 	if (!clipboard || !cliprdr)
 		return FALSE;
 
+	// UNSAFE-009: Ensure clean zeroed state before initialization
+	memset(clipboard, 0, sizeof(wfClipboard));
+
 	clipboard->context = cliprdr;
 	clipboard->sync = FALSE;
 	clipboard->map_capacity = 32;
@@ -3519,6 +3572,15 @@ BOOL wf_cliprdr_init(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 			  (formatMapping *)calloc(clipboard->map_capacity, sizeof(formatMapping))))
 		goto error;
 
+	// CONC-009: manual-reset event signaled on stop/cancel
+	if (!(clipboard->stopEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
+		goto error;
+
+	// UNSAFE-009: worker ready handshake event
+	if (!(clipboard->readyEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
+		goto error;
+	clipboard->init_success = FALSE;
+
 	if (!(clipboard->formatDataRespEvent = CreateEvent(NULL, TRUE, FALSE, NULL)))
 		goto error;
 	clipboard->formatDataRespReceived = FALSE;
@@ -3536,6 +3598,16 @@ BOOL wf_cliprdr_init(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 
 	if (!(clipboard->thread = CreateThread(NULL, 0, cliprdr_thread_func, clipboard, 0, NULL)))
 		goto error;
+
+	// UNSAFE-009: Worker ready handshake.
+	// Wait for the background worker thread to initialize COM and create the message window.
+	// Bounded timeout of 5000ms prevents hanging if worker thread creation fails.
+	DWORD waitReady = WaitForSingleObject(clipboard->readyEvent, 5000);
+	if (waitReady != WAIT_OBJECT_0 || !clipboard->init_success || !clipboard->hwnd)
+	{
+		DEBUG_CLIPRDR("error: clipboard worker thread failed to initialize or timed out.");
+		goto error;
+	}
 
 	cliprdr->MonitorReady = wf_cliprdr_monitor_ready;
 	cliprdr->ServerCapabilities = wf_cliprdr_server_capabilities;
@@ -3556,14 +3628,23 @@ error:
 
 BOOL wf_cliprdr_uninit(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 {
-	if (!clipboard || !cliprdr)
+	if (!clipboard)
 		return FALSE;
 
+	// CONC-009: Signal stopEvent immediately to abort any waiting threads
+	if (clipboard->stopEvent)
+	{
+		SetEvent(clipboard->stopEvent);
+	}
+
 	clipboard->copied = FALSE;
-	cliprdr->Custom = NULL;
+	if (cliprdr)
+	{
+		cliprdr->Custom = NULL;
+	}
 
 	/* discard all contexts in clipboard */
-	if (try_open_clipboard(clipboard->hwnd))
+	if (clipboard->hwnd && try_open_clipboard(clipboard->hwnd))
 	{
 		if (is_set_by_instance(clipboard) || is_file_descriptor_from_remote())
 		{
@@ -3577,19 +3658,23 @@ BOOL wf_cliprdr_uninit(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 			// critical error!!!
 		}
 	}
-	else
+	else if (clipboard->hwnd)
 	{
 		DEBUG_CLIPRDR("OpenClipboard failed with 0x%x", GetLastError());
 	}
 
 	if (clipboard->hwnd)
+	{
 		PostMessage(clipboard->hwnd, WM_QUIT, 0, 0);
+	}
 
 	if (clipboard->thread)
 	{
-		WaitForSingleObject(clipboard->thread, INFINITE);
+		WaitForSingleObject(clipboard->thread, 5000);
 		CloseHandle(clipboard->thread);
+		clipboard->thread = NULL;
 	}
+	clipboard->hwnd = NULL;
 
 	if (clipboard->data_obj)
 	{
@@ -3597,24 +3682,74 @@ BOOL wf_cliprdr_uninit(wfClipboard *clipboard, CliprdrClientContext *cliprdr)
 		clipboard->data_obj = NULL;
 	}
 
+	if (clipboard->hmem)
+	{
+		GlobalFree(clipboard->hmem);
+		clipboard->hmem = NULL;
+		clipboard->hmem_data_len = 0;
+	}
+
 	if (clipboard->formatDataRespEvent)
+	{
 		CloseHandle(clipboard->formatDataRespEvent);
+		clipboard->formatDataRespEvent = NULL;
+	}
 
 	if (clipboard->data_obj_mutex)
+	{
 		CloseHandle(clipboard->data_obj_mutex);
+		clipboard->data_obj_mutex = NULL;
+	}
 
 	if (clipboard->req_fevent)
+	{
 		CloseHandle(clipboard->req_fevent);
+		clipboard->req_fevent = NULL;
+	}
 
 	if (clipboard->req_f_mutex)
+	{
 		CloseHandle(clipboard->req_f_mutex);
+		clipboard->req_f_mutex = NULL;
+	}
 
 	if (clipboard->req_f_state_mutex)
+	{
 		CloseHandle(clipboard->req_f_state_mutex);
+		clipboard->req_f_state_mutex = NULL;
+	}
+
+	if (clipboard->stopEvent)
+	{
+		CloseHandle(clipboard->stopEvent);
+		clipboard->stopEvent = NULL;
+	}
+
+	if (clipboard->readyEvent)
+	{
+		CloseHandle(clipboard->readyEvent);
+		clipboard->readyEvent = NULL;
+	}
+
+	if (clipboard->hUser32)
+	{
+		FreeLibrary(clipboard->hUser32);
+		clipboard->hUser32 = NULL;
+		clipboard->AddClipboardFormatListener = NULL;
+		clipboard->RemoveClipboardFormatListener = NULL;
+		clipboard->GetUpdatedClipboardFormats = NULL;
+	}
 
 	clear_file_array(clipboard);
 	clear_format_map(clipboard);
-	free(clipboard->format_mappings);
+	if (clipboard->format_mappings)
+	{
+		free(clipboard->format_mappings);
+		clipboard->format_mappings = NULL;
+	}
+
+	// UNSAFE-009: Clear entire struct to zero so subsequent runs cannot observe stale handles
+	memset(clipboard, 0, sizeof(wfClipboard));
 	return TRUE;
 }
 
@@ -3628,6 +3763,18 @@ BOOL init_cliprdr(CliprdrClientContext *context)
 BOOL uninit_cliprdr(CliprdrClientContext *context)
 {
 	return wf_cliprdr_uninit(&clipboard, context);
+}
+
+void set_cliprdr_is_stopped(CliprdrClientContext *context)
+{
+	if (!context)
+		return;
+	context->IsStopped = TRUE;
+	wfClipboard *cb = (wfClipboard *)context->Custom;
+	if (cb && cb->stopEvent)
+	{
+		SetEvent(cb->stopEvent);
+	}
 }
 
 BOOL empty_cliprdr(CliprdrClientContext *context, UINT32 connID)
@@ -3645,7 +3792,7 @@ BOOL empty_cliprdr(CliprdrClientContext *context, UINT32 connID)
 	}
 
 	clipboard = (wfClipboard *)context->Custom;
-	if (!clipboard)
+	if (!clipboard || !clipboard->hwnd)
 	{
 		return FALSE;
 	}
