@@ -162,8 +162,17 @@ fn test_audio_zero_count_noise_gate_atomicity_conc006() {
 // CONC-007 Tests: Keyboard Translator State Multi-Session Isolation
 // ============================================================================
 
+static KEYBOARD_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+fn acquire_keyboard_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    KEYBOARD_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn test_keyboard_translator_state_session_isolation_conc007() {
+    let _lock = acquire_keyboard_test_lock();
     reset_all_translator_states();
 
     let session1: u128 = 0x1001;
@@ -206,6 +215,7 @@ fn test_keyboard_translator_state_session_isolation_conc007() {
 
 #[test]
 fn test_keyboard_hook_modifier_snapshot_concurrency_conc007() {
+    let _lock = acquire_keyboard_test_lock();
     reset_all_translator_states();
 
     const WORKERS: usize = 64;
