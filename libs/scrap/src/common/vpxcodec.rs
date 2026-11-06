@@ -14,6 +14,7 @@ use crate::codec::{base_bitrate, codec_thread_num, EncoderApi};
 use crate::{EncodeInput, EncodeYuvFormat, GoogleImage, Pixfmt, STRIDE_ALIGN};
 
 use super::vpx::{vp8e_enc_control_id::*, vpx_codec_err_t::*, *};
+pub use super::vpx::{vpx_image_t, vpx_img_fmt, vpx_img_fmt_t};
 use crate::{generate_call_macro, generate_call_ptr_macro, Error, Result};
 use camellia_remote_protocol::bytes::Bytes;
 use std::os::raw::{c_int, c_uint};
@@ -538,43 +539,62 @@ pub struct DecodeFrames<'a> {
 }
 
 impl<'a> Iterator for DecodeFrames<'a> {
-    type Item = Image;
+    type Item = DecodedImage<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         let img = unsafe { vpx_codec_get_frame(self.ctx, &mut self.iter) };
         if img.is_null() {
-            return None;
+            None
         } else {
-            return Some(Image(img));
+            Some(DecodedImage {
+                raw: img,
+                _marker: std::marker::PhantomData,
+            })
         }
     }
 }
 
-// https://chromium.googlesource.com/webm/libvpx/+/bali/vpx/src/vpx_image.c
-pub struct Image(*mut vpx_image_t);
-impl Image {
-    #[inline]
-    pub fn new() -> Self {
-        Self(std::ptr::null_mut())
-    }
+/// Borrowed image from the decoder context, valid only for the lifetime of the decode borrow.
+///
+/// Under libvpx, `vpx_codec_get_frame` returns a pointer into the decoder's internal buffers.
+/// This pointer MUST NOT be freed via `vpx_img_free`, and is only valid until the next decode call
+/// or until the decoder is destroyed.
+pub struct DecodedImage<'decoder> {
+    raw: *mut vpx_image_t,
+    _marker: std::marker::PhantomData<&'decoder mut vpx_codec_ctx_t>,
+}
 
+impl<'decoder> DecodedImage<'decoder> {
     #[inline]
     pub fn is_null(&self) -> bool {
-        self.0.is_null()
+        self.raw.is_null()
     }
 
     #[inline]
     pub fn format(&self) -> vpx_img_fmt_t {
-        // VPX_IMG_FMT_I420
         self.inner().fmt
     }
 
     #[inline]
     pub fn inner(&self) -> &vpx_image_t {
-        unsafe { &*self.0 }
+        unsafe { &*self.raw }
+    }
+
+    #[inline]
+    pub fn as_raw(&self) -> *mut vpx_image_t {
+        self.raw
+    }
+
+    /// Creates an owned copy of this decoded image.
+    ///
+    /// Allocates a new `vpx_image_t` buffer using `vpx_img_alloc` and copies
+    /// the active image planes (Y, U, V). The returned `OwnedImage` safely
+    /// frees the allocated buffer upon `Drop`.
+    pub fn to_owned(&self) -> Result<OwnedImage> {
+        unsafe { OwnedImage::copy_from_raw(self.raw) }
     }
 }
 
-impl GoogleImage for Image {
+impl<'decoder> GoogleImage for DecodedImage<'decoder> {
     #[inline]
     fn width(&self) -> usize {
         self.inner().d_w as _
@@ -603,12 +623,174 @@ impl GoogleImage for Image {
     }
 }
 
-impl Drop for Image {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { vpx_img_free(self.0) };
+/// An owned image allocated via `vpx_img_alloc`.
+///
+/// Unlike borrowed `DecodedImage`, an `OwnedImage` owns its underlying memory
+/// and frees it via `vpx_img_free` on `Drop`.
+pub struct OwnedImage(*mut vpx_image_t);
+
+impl OwnedImage {
+    #[inline]
+    pub fn new() -> Self {
+        Self(ptr::null_mut())
+    }
+
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    #[inline]
+    pub fn format(&self) -> vpx_img_fmt_t {
+        self.inner().fmt
+    }
+
+    #[inline]
+    pub fn inner(&self) -> &vpx_image_t {
+        unsafe { &*self.0 }
+    }
+
+    #[inline]
+    pub fn as_raw(&self) -> *mut vpx_image_t {
+        self.0
+    }
+
+    /// Creates an owned deep copy of this `OwnedImage`.
+    pub fn try_clone(&self) -> Result<Self> {
+        unsafe { Self::copy_from_raw(self.0) }
+    }
+
+    /// Checked copy helper to allocate an owned image from a raw `vpx_image_t` pointer.
+    ///
+    /// # Safety
+    /// If `src` is non-null, it must point to a valid, initialized `vpx_image_t`
+    /// whose plane pointers and dimensions are valid to read for the duration of this call.
+    pub unsafe fn copy_from_raw(src: *const vpx_image_t) -> Result<Self> {
+        if src.is_null() {
+            return Err(Error::FailedCall(
+                "Source image pointer is null".to_string(),
+            ));
+        }
+        let src_ref = unsafe { &*src };
+        let (w, h) = (src_ref.d_w, src_ref.d_h);
+        if w == 0 || h == 0 || w > 16384 || h > 16384 {
+            return Err(Error::FailedCall("Invalid image dimensions".to_string()));
+        }
+        if src_ref.x_chroma_shift > 3 || src_ref.y_chroma_shift > 3 {
+            return Err(Error::FailedCall(
+                "Invalid chroma subsampling shift".to_string(),
+            ));
+        }
+        let num_planes = match src_ref.fmt {
+            vpx_img_fmt::VPX_IMG_FMT_I444
+            | vpx_img_fmt::VPX_IMG_FMT_I420
+            | vpx_img_fmt::VPX_IMG_FMT_I422
+            | vpx_img_fmt::VPX_IMG_FMT_I440
+            | vpx_img_fmt::VPX_IMG_FMT_YV12
+            | vpx_img_fmt::VPX_IMG_FMT_I42016
+            | vpx_img_fmt::VPX_IMG_FMT_I42216
+            | vpx_img_fmt::VPX_IMG_FMT_I44416
+            | vpx_img_fmt::VPX_IMG_FMT_I44016 => 3,
+            _ => {
+                return Err(Error::FailedCall(format!(
+                    "Unsupported image format: {:?}",
+                    src_ref.fmt
+                )))
+            }
+        };
+
+        let dst_ptr = unsafe { vpx_img_alloc(ptr::null_mut(), src_ref.fmt, w, h, 16) };
+        if dst_ptr.is_null() {
+            return Err(Error::FailedCall(
+                "Failed to allocate vpx_image_t".to_string(),
+            ));
+        }
+
+        // Wrap immediately into OwnedImage so RAII cleans up dst_ptr if any subsequent check fails
+        let owned = Self(dst_ptr);
+        let dst_ref = unsafe { &*owned.0 };
+        let bpp = if src_ref.bit_depth > 8 { 2 } else { 1 };
+
+        for i in 0..num_planes {
+            let src_plane = src_ref.planes[i];
+            let dst_plane = dst_ref.planes[i];
+            if src_plane.is_null() || dst_plane.is_null() {
+                continue;
+            }
+            if src_ref.stride[i] <= 0 || dst_ref.stride[i] <= 0 {
+                return Err(Error::FailedCall(
+                    "Non-positive image stride is not supported".to_string(),
+                ));
+            }
+            let (plane_w, plane_h) = if i == 0 {
+                (w as usize, h as usize)
+            } else {
+                let pw =
+                    ((w + (1 << src_ref.x_chroma_shift) - 1) >> src_ref.x_chroma_shift) as usize;
+                let ph =
+                    ((h + (1 << src_ref.y_chroma_shift) - 1) >> src_ref.y_chroma_shift) as usize;
+                (pw, ph)
+            };
+            let row_bytes = plane_w * bpp;
+            let src_stride = src_ref.stride[i] as usize;
+            let dst_stride = dst_ref.stride[i] as usize;
+            let copy_bytes = row_bytes.min(src_stride).min(dst_stride);
+
+            for row in 0..plane_h {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src_plane.add(row * src_stride),
+                        dst_plane.add(row * dst_stride),
+                        copy_bytes,
+                    );
+                }
+            }
+        }
+
+        Ok(owned)
+    }
+}
+
+impl GoogleImage for OwnedImage {
+    #[inline]
+    fn width(&self) -> usize {
+        self.inner().d_w as _
+    }
+
+    #[inline]
+    fn height(&self) -> usize {
+        self.inner().d_h as _
+    }
+
+    #[inline]
+    fn stride(&self) -> Vec<i32> {
+        self.inner().stride.iter().map(|x| *x as i32).collect()
+    }
+
+    #[inline]
+    fn planes(&self) -> Vec<*mut u8> {
+        self.inner().planes.iter().map(|p| *p as *mut u8).collect()
+    }
+
+    fn chroma(&self) -> Chroma {
+        match self.inner().fmt {
+            vpx_img_fmt::VPX_IMG_FMT_I444 => Chroma::I444,
+            _ => Chroma::I420,
         }
     }
 }
 
+impl Drop for OwnedImage {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { vpx_img_free(self.0) };
+            self.0 = ptr::null_mut();
+        }
+    }
+}
+
+// Backwards compatibility alias
+pub type Image = OwnedImage;
+
+unsafe impl Send for OwnedImage {}
 unsafe impl Send for vpx_codec_ctx_t {}

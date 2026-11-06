@@ -53,12 +53,21 @@ impl DeviceError {
     }
 }
 
+/// Helper to determine if an HDEVINFO handle returned by SetupAPI is valid.
+///
+/// SetupAPI functions like `SetupDiCreateDeviceInfoList` and `SetupDiGetClassDevsExW`
+/// return `INVALID_HANDLE_VALUE` ((HANDLE)-1) on failure, not NULL.
+#[inline]
+pub fn is_valid_hdevinfo(handle: HDEVINFO) -> bool {
+    !handle.is_null() && handle != INVALID_HANDLE_VALUE
+}
+
 struct DeviceInfo(HDEVINFO);
 
 impl DeviceInfo {
     fn setup_di_create_device_info_list(class_guid: &mut GUID) -> Result<Self, DeviceError> {
         let dev_info = unsafe { SetupDiCreateDeviceInfoList(class_guid, null_mut()) };
-        if dev_info == null_mut() {
+        if !is_valid_hdevinfo(dev_info) {
             return Err(DeviceError::new_api_last_err("SetupDiCreateDeviceInfoList"));
         }
 
@@ -80,7 +89,7 @@ impl DeviceInfo {
                 null_mut(),
             )
         };
-        if dev_info == null_mut() {
+        if !is_valid_hdevinfo(dev_info) {
             return Err(DeviceError::new_api_last_err("SetupDiGetClassDevsExW"));
         }
         Ok(Self(dev_info))
@@ -89,8 +98,11 @@ impl DeviceInfo {
 
 impl Drop for DeviceInfo {
     fn drop(&mut self) {
-        unsafe {
-            SetupDiDestroyDeviceInfoList(self.0);
+        if is_valid_hdevinfo(self.0) {
+            unsafe {
+                SetupDiDestroyDeviceInfoList(self.0);
+            }
+            self.0 = INVALID_HANDLE_VALUE;
         }
     }
 }
@@ -456,4 +468,26 @@ unsafe fn open_device_handle(interface_guid: &GUID) -> Result<HANDLE, DeviceErro
         return Err(DeviceError::new_api_last_err("CreateFileW"));
     }
     Ok(h_device)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_valid_hdevinfo_sentinels() {
+        assert!(!is_valid_hdevinfo(null_mut()));
+        assert!(!is_valid_hdevinfo(INVALID_HANDLE_VALUE));
+        assert!(is_valid_hdevinfo(0x1234 as HDEVINFO));
+    }
+
+    #[test]
+    fn test_device_info_drop_on_sentinel_safe() {
+        // Dropping DeviceInfo holding null_mut() or INVALID_HANDLE_VALUE must not call
+        // SetupDiDestroyDeviceInfoList.
+        let dev_null = DeviceInfo(null_mut());
+        drop(dev_null);
+        let dev_invalid = DeviceInfo(INVALID_HANDLE_VALUE);
+        drop(dev_invalid);
+    }
 }

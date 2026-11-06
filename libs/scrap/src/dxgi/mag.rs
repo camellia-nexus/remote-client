@@ -129,7 +129,7 @@ pub type MagSetImageScalingCallbackFunc = ::std::option::Option<
 >;
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct MagInterface {
     init_succeeded: bool,
     lib_handle: HINSTANCE,
@@ -241,16 +241,16 @@ impl MagInterface {
                     }
                 }
             }
-            if !self.lib_handle.is_null() {
-                unsafe {
-                    if FALSE == FreeLibrary(self.lib_handle) {
-                        println!("Failed FreeLibrary, error {}", Error::last_os_error())
-                    }
-                }
-                self.lib_handle = NULL as _;
-            }
+            self.init_succeeded = false;
         }
-        self.init_succeeded = false;
+        if !self.lib_handle.is_null() {
+            unsafe {
+                if FALSE == FreeLibrary(self.lib_handle) {
+                    println!("Failed FreeLibrary, error {}", Error::last_os_error())
+                }
+            }
+            self.lib_handle = NULL as _;
+        }
     }
 }
 
