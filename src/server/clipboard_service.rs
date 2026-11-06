@@ -19,11 +19,7 @@ use clipboard::platform::unix::fuse::{init_fuse_context, uninit_fuse_context};
 use clipboard_master::CallbackResult;
 #[cfg(target_os = "android")]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    io,
-    sync::mpsc::{channel, RecvTimeoutError},
-    time::Duration,
-};
+use std::{io, sync::mpsc::RecvTimeoutError, time::Duration};
 #[cfg(windows)]
 use tokio::runtime::Runtime;
 
@@ -66,9 +62,8 @@ fn run(sp: EmptyExtraFieldService) -> ResultType<()> {
         }
     };
 
-    let (tx_cb_result, rx_cb_result) = channel();
+    let rx_cb_result = clipboard_listener::subscribe(sp.name())?;
     let ctx = Some(ClipboardContext::new().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?);
-    clipboard_listener::subscribe(sp.name(), tx_cb_result)?;
     let mut handler = Handler {
         ctx,
         #[cfg(target_os = "windows")]

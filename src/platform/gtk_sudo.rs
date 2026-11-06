@@ -22,7 +22,7 @@ use std::{
     ffi::CString,
     fs::File,
     io::{Read, Write},
-    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd, OwnedFd, RawFd},
     sync::{
         mpsc::{channel, Receiver, Sender},
         Arc, Mutex,
@@ -222,13 +222,18 @@ fn ui(args: Vec<String>) {
     std::process::exit(EXIT_CODE);
 }
 
+#[inline]
+pub fn master_to_file(master: OwnedFd) -> File {
+    File::from(master)
+}
+
 fn cmd_parent(child: Pid, master: OwnedFd) -> ResultType<()> {
-    let raw_fd = master.as_raw_fd();
+    let mut file = File::from(master);
+    let raw_fd = file.as_raw_fd();
     if unsafe { fcntl(raw_fd, nix::libc::F_SETFL, nix::libc::O_NONBLOCK) } != 0 {
         let errno = std::io::Error::last_os_error();
         bail!("fcntl error: {errno:?}");
     }
-    let mut file = unsafe { File::from_raw_fd(raw_fd) };
     let mut stdout = std::io::stdout();
     let stdin = std::io::stdin();
     let stdin_fd = stdin.as_raw_fd();
@@ -328,13 +333,13 @@ fn ui_parent(
     initial_password: Option<String>,
 ) -> ResultType<()> {
     let mut initial_password = initial_password;
-    let raw_fd = master.as_raw_fd();
+    let mut file = File::from(master);
+    let raw_fd = file.as_raw_fd();
     if unsafe { fcntl(raw_fd, nix::libc::F_SETFL, nix::libc::O_NONBLOCK) } != 0 {
         let errno = std::io::Error::last_os_error();
         tx_to_ui.send(Message::ErrorDialog(format!("fcntl error: {errno:?}")))?;
         bail!("fcntl error: {errno:?}");
     }
-    let mut file = unsafe { File::from_raw_fd(raw_fd) };
 
     let mut first = initial_password.is_none();
     let mut su_password_sent = false;

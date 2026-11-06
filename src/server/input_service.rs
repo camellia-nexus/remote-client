@@ -30,7 +30,7 @@ use std::{
 #[cfg(windows)]
 use winapi::um::winuser::WHEEL_DELTA;
 
-const INVALID_CURSOR_POS: i32 = i32::MIN;
+pub const INVALID_CURSOR_POS: i32 = i32::MIN;
 const INVALID_DISPLAY_IDX: i32 = -1;
 
 #[derive(Default)]
@@ -346,7 +346,7 @@ pub fn new_window_focus() -> GenericService {
 }
 
 #[inline]
-fn update_last_cursor_pos(x: i32, y: i32) {
+pub fn update_last_cursor_pos(x: i32, y: i32) {
     let mut lock = LATEST_SYS_CURSOR_POS.lock().unwrap();
     if lock.1 .0 != x || lock.1 .1 != y {
         (lock.0, lock.1) = (Some(Instant::now()), (x, y))
@@ -491,11 +491,11 @@ pub(crate) fn clear_relative_mouse_active(conn: i32) {
 
 static EXITING: AtomicBool = AtomicBool::new(false);
 
+#[allow(dead_code)]
 const MOUSE_MOVE_PROTECTION_TIMEOUT: Duration = Duration::from_millis(1_000);
 // Actual diff of (x,y) is (1,1) here. But 5 may be tolerant.
+#[allow(dead_code)]
 const MOUSE_ACTIVE_DISTANCE: i32 = 5;
-
-static RECORD_CURSOR_POS_RUNNING: AtomicBool = AtomicBool::new(false);
 
 // https://github.com/rustdesk/rustdesk/issues/9729
 // We need to do some special handling for macOS when using the legacy mode.
@@ -517,34 +517,113 @@ fn set_last_legacy_mode(v: bool) {
     ENIGO.lock().unwrap().set_ignore_flags(!v);
 }
 
-pub fn try_start_record_cursor_pos() -> Option<thread::JoinHandle<()>> {
-    if RECORD_CURSOR_POS_RUNNING.load(Ordering::SeqCst) {
-        return None;
+#[derive(Clone)]
+pub struct ActiveCursorWorker {
+    pub stop_signal: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+pub struct CursorRecordSupervisor {
+    generation: u64,
+    current_worker: Option<ActiveCursorWorker>,
+}
+
+impl CursorRecordSupervisor {
+    pub const fn new() -> Self {
+        Self {
+            generation: 0,
+            current_worker: None,
+        }
     }
 
-    RECORD_CURSOR_POS_RUNNING.store(true, Ordering::SeqCst);
-    let handle = thread::spawn(|| {
-        let interval = time::Duration::from_millis(33);
-        loop {
-            if !RECORD_CURSOR_POS_RUNNING.load(Ordering::SeqCst) {
-                break;
-            }
+    #[inline]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
 
-            let now = time::Instant::now();
-            if let Some((x, y)) = crate::get_cursor_pos() {
-                update_last_cursor_pos(x, y);
-            }
-            let elapsed = now.elapsed();
-            if elapsed < interval {
-                thread::sleep(interval - elapsed);
+    #[inline]
+    pub fn is_running(&self) -> bool {
+        self.current_worker
+            .as_ref()
+            .map(|w| !w.stop_signal.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    }
+
+    pub fn stop(&mut self) -> Option<ActiveCursorWorker> {
+        if let Some(worker) = self.current_worker.take() {
+            worker.stop_signal.store(true, Ordering::SeqCst);
+            Some(worker)
+        } else {
+            None
+        }
+    }
+
+    pub fn start(&mut self) -> Option<(u64, Arc<AtomicBool>)> {
+        if let Some(active) = &self.current_worker {
+            if !active.stop_signal.load(Ordering::SeqCst) {
+                return None;
             }
         }
-        update_last_cursor_pos(INVALID_CURSOR_POS, INVALID_CURSOR_POS);
-    });
-    Some(handle)
+        self.generation = self.generation.wrapping_add(1);
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        self.current_worker = Some(ActiveCursorWorker {
+            stop_signal: stop_signal.clone(),
+        });
+        Some((self.generation, stop_signal))
+    }
+
+    #[inline]
+    pub fn is_generation_current(&self, gen: u64) -> bool {
+        self.generation == gen
+    }
+}
+
+pub static CURSOR_RECORD_SUPERVISOR: Mutex<CursorRecordSupervisor> =
+    Mutex::new(CursorRecordSupervisor::new());
+
+pub fn try_start_record_cursor_pos() -> Option<thread::JoinHandle<()>> {
+    let mut supervisor = CURSOR_RECORD_SUPERVISOR.lock().unwrap();
+    let (gen, stop_signal) = supervisor.start()?;
+
+    let stop_signal_clone = stop_signal.clone();
+    let spawn_res = thread::Builder::new()
+        .name("cursor_pos_recorder".to_string())
+        .spawn(move || {
+            let interval = time::Duration::from_millis(33);
+            loop {
+                if stop_signal_clone.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                let now = time::Instant::now();
+                if let Some((x, y)) = crate::get_cursor_pos() {
+                    update_last_cursor_pos(x, y);
+                }
+                let elapsed = now.elapsed();
+                if elapsed < interval {
+                    thread::sleep(interval - elapsed);
+                }
+            }
+            {
+                let supervisor = CURSOR_RECORD_SUPERVISOR.lock().unwrap();
+                if supervisor.is_generation_current(gen) {
+                    update_last_cursor_pos(INVALID_CURSOR_POS, INVALID_CURSOR_POS);
+                }
+            }
+        });
+
+    match spawn_res {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            log::error!("Failed to spawn cursor pos recorder thread: {}", e);
+            supervisor.stop();
+            None
+        }
+    }
 }
 
 pub fn try_stop_record_cursor_pos() {
+    let mut supervisor = CURSOR_RECORD_SUPERVISOR.lock().unwrap();
     let remote_count = AUTHED_CONNS
         .lock()
         .unwrap()
@@ -554,7 +633,24 @@ pub fn try_stop_record_cursor_pos() {
     if remote_count > 0 {
         return;
     }
-    RECORD_CURSOR_POS_RUNNING.store(false, Ordering::SeqCst);
+    supervisor.stop();
+}
+
+pub fn stop_record_cursor_pos_force() {
+    let mut supervisor = CURSOR_RECORD_SUPERVISOR.lock().unwrap();
+    supervisor.stop();
+}
+
+pub fn get_cursor_record_generation() -> u64 {
+    CURSOR_RECORD_SUPERVISOR.lock().unwrap().generation()
+}
+
+pub fn is_cursor_record_running() -> bool {
+    CURSOR_RECORD_SUPERVISOR.lock().unwrap().is_running()
+}
+
+pub fn get_last_cursor_pos() -> (i32, i32) {
+    LATEST_SYS_CURSOR_POS.lock().unwrap().1
 }
 
 // mac key input must be run in main thread, otherwise crash on >= osx 10.15

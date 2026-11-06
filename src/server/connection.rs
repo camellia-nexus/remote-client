@@ -283,6 +283,16 @@ pub struct SessionKey {
     session_id: u64,
 }
 
+impl SessionKey {
+    pub fn new(peer_id: String, name: String, session_id: u64) -> Self {
+        Self {
+            peer_id,
+            name,
+            session_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Session {
     last_recv_time: Arc<Mutex<Instant>>,

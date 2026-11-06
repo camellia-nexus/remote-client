@@ -1173,37 +1173,179 @@ pub mod clipboard_listener {
     use std::{
         collections::HashMap,
         io,
-        sync::mpsc::{channel, Sender},
-        sync::{Arc, Mutex},
+        sync::mpsc::{channel, RecvTimeoutError, Sender},
+        sync::{Arc, Condvar, Mutex},
         thread::JoinHandle,
+        time::Duration,
     };
 
     lazy_static::lazy_static! {
         pub static ref CLIPBOARD_LISTENER: Arc<Mutex<ClipboardListener>> = Default::default();
     }
 
+    struct SubscriberState {
+        pending_next: bool,
+        control: Option<CallbackResult>,
+        closed: bool,
+        sender_count: usize,
+    }
+
+    struct SubscriberInner {
+        state: Mutex<SubscriberState>,
+        cvar: Condvar,
+    }
+
+    pub struct ClipboardSender {
+        inner: Arc<SubscriberInner>,
+    }
+
+    impl Clone for ClipboardSender {
+        fn clone(&self) -> Self {
+            {
+                let mut state = self.inner.state.lock().unwrap();
+                state.sender_count += 1;
+            }
+            Self {
+                inner: self.inner.clone(),
+            }
+        }
+    }
+
+    impl Drop for ClipboardSender {
+        fn drop(&mut self) {
+            let mut state = self.inner.state.lock().unwrap();
+            state.sender_count = state.sender_count.saturating_sub(1);
+            if state.sender_count == 0 {
+                self.inner.cvar.notify_all();
+            }
+        }
+    }
+
+    impl ClipboardSender {
+        pub fn send(&self, result: CallbackResult) -> Result<(), ()> {
+            let mut state = self.inner.state.lock().unwrap();
+            if state.closed {
+                return Err(());
+            }
+            match result {
+                CallbackResult::Next => {
+                    if !state.pending_next {
+                        state.pending_next = true;
+                        self.inner.cvar.notify_one();
+                    }
+                }
+                CallbackResult::Stop | CallbackResult::StopWithError(_) => {
+                    state.closed = true;
+                    state.pending_next = false;
+                    if state.control.is_none() {
+                        state.control = Some(result);
+                    }
+                    self.inner.cvar.notify_all();
+                }
+            }
+            Ok(())
+        }
+
+        pub fn close(&self) {
+            let mut state = self.inner.state.lock().unwrap();
+            state.closed = true;
+            state.pending_next = false;
+            if state.control.is_none() {
+                state.control = Some(CallbackResult::Stop);
+            }
+            self.inner.cvar.notify_all();
+        }
+    }
+
+    pub struct ClipboardReceiver {
+        inner: Arc<SubscriberInner>,
+    }
+
+    impl Drop for ClipboardReceiver {
+        fn drop(&mut self) {
+            let mut state = self.inner.state.lock().unwrap();
+            state.closed = true;
+        }
+    }
+
+    impl ClipboardReceiver {
+        pub fn recv_timeout(&self, timeout: Duration) -> Result<CallbackResult, RecvTimeoutError> {
+            let mut state = self.inner.state.lock().unwrap();
+            let deadline = std::time::Instant::now()
+                .checked_add(timeout)
+                .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(86400 * 365));
+
+            loop {
+                // High priority control notifications preempt/deliver immediately
+                if let Some(control) = state.control.take() {
+                    return Ok(control);
+                }
+                // Coalesced Next notifications
+                if state.pending_next {
+                    state.pending_next = false;
+                    return Ok(CallbackResult::Next);
+                }
+                // Disconnected or closed
+                if state.closed || state.sender_count == 0 {
+                    return Err(RecvTimeoutError::Disconnected);
+                }
+
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    return Err(RecvTimeoutError::Timeout);
+                }
+                let remaining = deadline - now;
+                let (s, _) = self.inner.cvar.wait_timeout(state, remaining).unwrap();
+                state = s;
+            }
+        }
+    }
+
+    pub fn clipboard_channel() -> (ClipboardSender, ClipboardReceiver) {
+        let inner = Arc::new(SubscriberInner {
+            state: Mutex::new(SubscriberState {
+                pending_next: false,
+                control: None,
+                closed: false,
+                sender_count: 1,
+            }),
+            cvar: Condvar::new(),
+        });
+        (
+            ClipboardSender {
+                inner: inner.clone(),
+            },
+            ClipboardReceiver { inner },
+        )
+    }
+
     struct Handler {
-        subscribers: Arc<Mutex<HashMap<String, Sender<CallbackResult>>>>,
+        subscribers: Arc<Mutex<HashMap<String, ClipboardSender>>>,
     }
 
     impl ClipboardHandler for Handler {
         fn on_clipboard_change(&mut self) -> CallbackResult {
-            let sub_lock = self.subscribers.lock().unwrap();
-            for tx in sub_lock.values() {
-                tx.send(CallbackResult::Next).ok();
+            let senders: Vec<ClipboardSender> = {
+                let sub_lock = self.subscribers.lock().unwrap();
+                sub_lock.values().cloned().collect()
+            };
+            for tx in senders {
+                let _ = tx.send(CallbackResult::Next);
             }
             CallbackResult::Next
         }
 
         fn on_clipboard_error(&mut self, error: io::Error) -> CallbackResult {
             let msg = format!("Clipboard listener error: {}", error);
-            let sub_lock = self.subscribers.lock().unwrap();
-            for tx in sub_lock.values() {
-                tx.send(CallbackResult::StopWithError(io::Error::new(
+            let senders: Vec<ClipboardSender> = {
+                let sub_lock = self.subscribers.lock().unwrap();
+                sub_lock.values().cloned().collect()
+            };
+            for tx in senders {
+                let _ = tx.send(CallbackResult::StopWithError(io::Error::new(
                     io::ErrorKind::Other,
                     msg.clone(),
-                )))
-                .ok();
+                )));
             }
             CallbackResult::Next
         }
@@ -1211,18 +1353,22 @@ pub mod clipboard_listener {
 
     #[derive(Default)]
     pub struct ClipboardListener {
-        subscribers: Arc<Mutex<HashMap<String, Sender<CallbackResult>>>>,
+        subscribers: Arc<Mutex<HashMap<String, ClipboardSender>>>,
         handle: Option<(Shutdown, JoinHandle<()>)>,
     }
 
-    pub fn subscribe(name: String, tx: Sender<CallbackResult>) -> ResultType<()> {
+    pub fn subscribe(name: String) -> ResultType<ClipboardReceiver> {
         log::info!("Subscribe clipboard listener: {}", &name);
+        let (tx, rx) = clipboard_channel();
         let mut listener_lock = CLIPBOARD_LISTENER.lock().unwrap();
-        listener_lock
+        let old_tx = listener_lock
             .subscribers
             .lock()
             .unwrap()
             .insert(name.clone(), tx);
+        if let Some(old) = old_tx {
+            old.close();
+        }
 
         cleanup_stale_listener(&mut listener_lock);
         if listener_lock.handle.is_none() {
@@ -1235,10 +1381,11 @@ pub mod clipboard_listener {
             let shutdown = match rx_start_res.recv() {
                 Ok((Some(s), _)) => s,
                 Ok((None, err)) => {
+                    listener_lock.subscribers.lock().unwrap().remove(&name);
                     bail!(err);
                 }
-
                 Err(e) => {
+                    listener_lock.subscribers.lock().unwrap().remove(&name);
                     bail!("Failed to create clipboard listener: {}", e);
                 }
             };
@@ -1247,7 +1394,7 @@ pub mod clipboard_listener {
         }
 
         log::info!("Clipboard listener subscribed: {}", name);
-        Ok(())
+        Ok(rx)
     }
 
     fn cleanup_stale_listener(listener: &mut ClipboardListener) {
@@ -1277,7 +1424,7 @@ pub mod clipboard_listener {
         let is_empty = {
             let mut sub_lock = listener_lock.subscribers.lock().unwrap();
             if let Some(tx) = sub_lock.remove(name) {
-                tx.send(CallbackResult::Stop).ok();
+                tx.close();
             }
             sub_lock.is_empty()
         };
@@ -1296,7 +1443,6 @@ pub mod clipboard_listener {
         handler: impl ClipboardHandler + Send + 'static,
         tx_start_res: Sender<(Option<Shutdown>, String)>,
     ) -> JoinHandle<()> {
-        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage#:~:text=The%20window%20must%20belong%20to%20the%20current%20thread.
         let h = std::thread::spawn(move || match Master::new(handler) {
             Ok(mut master) => {
                 tx_start_res

@@ -962,13 +962,14 @@ impl Client {
             return None;
         }
 
-        let (tx_cb_result, rx_cb_result) = mpsc::channel();
-        if let Err(e) =
-            clipboard_listener::subscribe(Self::CLIENT_CLIPBOARD_NAME.to_owned(), tx_cb_result)
-        {
-            log::error!("Failed to subscribe clipboard listener: {}", e);
-            return None;
-        }
+        let rx_cb_result =
+            match clipboard_listener::subscribe(Self::CLIENT_CLIPBOARD_NAME.to_owned()) {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Failed to subscribe clipboard listener: {}", e);
+                    return None;
+                }
+            };
 
         clipboard_lock.running = true;
         let (tx_started, rx_started) = unbounded_channel();
