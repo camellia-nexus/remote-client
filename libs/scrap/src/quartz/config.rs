@@ -33,6 +33,16 @@ impl Config {
                 &self.queue_length as *const _ as *const c_void,
             );
 
+            if throttle.is_null() || queue_length.is_null() {
+                if !throttle.is_null() {
+                    CFRelease(throttle);
+                }
+                if !queue_length.is_null() {
+                    CFRelease(queue_length);
+                }
+                return ptr::null_mut();
+            }
+
             let keys: [CFStringRef; 4] = [
                 kCGDisplayStreamShowCursor,
                 kCGDisplayStreamPreserveAspectRatio,
@@ -55,8 +65,12 @@ impl Config {
                 &kCFTypeDictionaryValueCallBacks,
             );
 
-            CFRelease(throttle);
-            CFRelease(queue_length);
+            if !throttle.is_null() {
+                CFRelease(throttle);
+            }
+            if !queue_length.is_null() {
+                CFRelease(queue_length);
+            }
 
             res
         }

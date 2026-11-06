@@ -58,6 +58,9 @@ pub struct Capturer {
     output_texture: bool,
     adapter_desc1: DXGI_ADAPTER_DESC1,
     rotate: Rotate,
+    frame_acquired: bool,
+    surface_mapped: bool,
+    desktop_mapped: bool,
 }
 
 impl Capturer {
@@ -172,6 +175,9 @@ impl Capturer {
             output_texture: false,
             adapter_desc1,
             rotate,
+            frame_acquired: false,
+            surface_mapped: false,
+            desktop_mapped: false,
         })
     }
 
@@ -313,13 +319,27 @@ impl Capturer {
     }
 
     pub fn set_gdi(&mut self) -> bool {
+        self.unmap();
         self.gdi_capturer = self.display.create_gdi();
         self.is_gdi()
     }
 
     pub fn cancel_gdi(&mut self) {
+        self.unmap();
         self.gdi_buffer = Vec::new();
         self.gdi_capturer.take();
+    }
+
+    pub fn is_frame_acquired(&self) -> bool {
+        self.frame_acquired
+    }
+
+    pub fn is_surface_mapped(&self) -> bool {
+        self.surface_mapped
+    }
+
+    pub fn is_desktop_mapped(&self) -> bool {
+        self.desktop_mapped
     }
 
     #[cfg(feature = "vram")]
@@ -328,6 +348,8 @@ impl Capturer {
     }
 
     unsafe fn load_frame(&mut self, timeout: UINT) -> io::Result<(*const u8, i32)> {
+        self.unmap();
+
         let mut frame = ptr::null_mut();
         let mut info = mem::MaybeUninit::<DXGI_OUTDUPL_FRAME_INFO>::uninit();
 
@@ -336,19 +358,38 @@ impl Capturer {
             info.as_mut_ptr(),
             &mut frame,
         ))?;
+        self.frame_acquired = true;
+
         let info = info.assume_init();
         let frame = ComPtr(frame);
 
         if *info.LastPresentTime.QuadPart() == 0 {
+            self.unmap();
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
 
         let mut rect = mem::MaybeUninit::<DXGI_MAPPED_RECT>::uninit();
         if self.fastlane {
-            wrap_hresult((*self.duplication.0).MapDesktopSurface(rect.as_mut_ptr()))?;
+            if let Err(e) = wrap_hresult((*self.duplication.0).MapDesktopSurface(rect.as_mut_ptr()))
+            {
+                self.unmap();
+                return Err(e);
+            }
+            self.desktop_mapped = true;
         } else {
-            self.surface = ComPtr(self.ohgodwhat(frame.0)?);
-            wrap_hresult((*self.surface.0).Map(rect.as_mut_ptr(), DXGI_MAP_READ))?;
+            let surface = match self.ohgodwhat(frame.0) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.unmap();
+                    return Err(e);
+                }
+            };
+            self.surface = ComPtr(surface);
+            if let Err(e) = wrap_hresult((*self.surface.0).Map(rect.as_mut_ptr(), DXGI_MAP_READ)) {
+                self.unmap();
+                return Err(e);
+            }
+            self.surface_mapped = true;
         }
         let rect = rect.assume_init();
         Ok((rect.pBits, rect.Pitch))
@@ -450,14 +491,20 @@ impl Capturer {
                         }
                     }
                 } else {
-                    self.unmap();
-                    let r = self.load_frame(timeout)?;
+                    let r = match self.load_frame(timeout) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            self.unmap();
+                            return Err(e);
+                        }
+                    };
                     let rotate = match self.display.rotation() {
                         DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED => kRotate0,
                         DXGI_MODE_ROTATION_ROTATE90 => kRotate90,
                         DXGI_MODE_ROTATION_ROTATE180 => kRotate180,
                         DXGI_MODE_ROTATION_ROTATE270 => kRotate270,
                         _ => {
+                            self.unmap();
                             return Err(io::Error::new(
                                 io::ErrorKind::Other,
                                 "Unknown rotation".to_string(),
@@ -498,7 +545,7 @@ impl Capturer {
             if self.duplication.0.is_null() {
                 return Err(std::io::ErrorKind::AddrNotAvailable.into());
             }
-            (*self.duplication.0).ReleaseFrame();
+            self.unmap();
             let mut frame = ptr::null_mut();
             let mut info = mem::MaybeUninit::<DXGI_OUTDUPL_FRAME_INFO>::uninit();
 
@@ -507,19 +554,26 @@ impl Capturer {
                 info.as_mut_ptr(),
                 &mut frame,
             ))?;
+            self.frame_acquired = true;
+
             let info = info.assume_init();
             let frame = ComPtr(frame);
 
             if info.AccumulatedFrames == 0 || *info.LastPresentTime.QuadPart() == 0 {
+                self.unmap();
                 return Err(std::io::ErrorKind::WouldBlock.into());
             }
 
             let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-            wrap_hresult((*frame.0).QueryInterface(
+            if let Err(e) = wrap_hresult((*frame.0).QueryInterface(
                 &IID_ID3D11Texture2D,
                 &mut texture as *mut *mut _ as *mut *mut _,
-            ))?;
+            )) {
+                self.unmap();
+                return Err(e);
+            }
             if texture.is_null() {
+                self.unmap();
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     "QueryInterface for ID3D11Texture2D returned NULL",
@@ -610,6 +664,7 @@ impl Capturer {
                 }
             }
             if final_texture.is_null() {
+                self.unmap();
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     "Failed to obtain valid texture",
@@ -619,15 +674,29 @@ impl Capturer {
         }
     }
 
-    fn unmap(&self) {
+    fn unmap(&mut self) {
+        if self.duplication.0.is_null() {
+            return;
+        }
         unsafe {
-            (*self.duplication.0).ReleaseFrame();
-            if self.fastlane {
-                (*self.duplication.0).UnMapDesktopSurface();
-            } else {
+            // Reverse destruction order: UnMap surface/desktop FIRST, ReleaseFrame SECOND.
+            // Microsoft DirectX Desktop Duplication spec mandates that the mapped surface memory
+            // becomes invalid once ReleaseFrame is called.
+            if self.desktop_mapped {
+                let _ = (*self.duplication.0).UnMapDesktopSurface();
+                self.desktop_mapped = false;
+            }
+            if self.surface_mapped {
                 if !self.surface.is_null() {
-                    (*self.surface.0).Unmap();
+                    let _ = (*self.surface.0).Unmap();
+                    self.surface = ComPtr(ptr::null_mut());
                 }
+                self.surface_mapped = false;
+            }
+            if self.frame_acquired {
+                let _ = (*self.duplication.0).ReleaseFrame();
+                self.frame_acquired = false;
+                self.texture = ComPtr(ptr::null_mut());
             }
         }
     }

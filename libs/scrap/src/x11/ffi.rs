@@ -1,4 +1,4 @@
-#![allow(non_camel_case_types)]
+#![allow(non_camel_case_types, dead_code)]
 
 use camellia_remote_protocol::libc::c_void;
 
@@ -9,6 +9,8 @@ extern "C" {
     pub fn xcb_connect(displayname: *const i8, screenp: *mut i32) -> *mut xcb_connection_t;
 
     pub fn xcb_disconnect(c: *mut xcb_connection_t);
+
+    pub fn xcb_flush(c: *mut xcb_connection_t) -> i32;
 
     pub fn xcb_connection_has_error(c: *mut xcb_connection_t) -> i32;
 
@@ -26,6 +28,18 @@ extern "C" {
         shmid: u32,
         read_only: u8,
     ) -> xcb_void_cookie_t;
+
+    pub fn xcb_shm_attach_checked(
+        c: *mut xcb_connection_t,
+        shmseg: xcb_shm_seg_t,
+        shmid: u32,
+        read_only: u8,
+    ) -> xcb_void_cookie_t;
+
+    pub fn xcb_request_check(
+        c: *mut xcb_connection_t,
+        cookie: xcb_void_cookie_t,
+    ) -> *mut xcb_generic_error_t;
 
     pub fn xcb_shm_detach(c: *mut xcb_connection_t, shmseg: xcb_shm_seg_t) -> xcb_void_cookie_t;
 
