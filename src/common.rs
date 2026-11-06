@@ -574,6 +574,10 @@ pub fn reset_nat_probe_cooldown_for_test() {
 }
 
 pub fn test_nat_type() {
+    if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+        log::debug!("test_nat_type skipped: stop requested");
+        return;
+    }
     test_ipv6_sync();
     // Cooldown check
     {
@@ -593,7 +597,6 @@ pub fn test_nat_type() {
         log::debug!("test_nat_type skipped: probe already running");
         return;
     }
-    NAT_PROBE_STOP.store(false, Ordering::SeqCst);
     *NAT_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
 
     std::thread::spawn(move || {
@@ -626,6 +629,9 @@ pub fn test_nat_type() {
                 }
                 _ => {}
             }
+            if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+                break;
+            }
             if Config::get_nat_type() != 0 {
                 break;
             }
@@ -652,10 +658,16 @@ pub fn test_nat_type() {
 
 #[tokio::main(flavor = "current_thread")]
 async fn test_nat_type_() -> ResultType<bool> {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(4), async {
         log::info!("Testing nat ...");
         let start = std::time::Instant::now();
         let server1 = Config::get_rendezvous_server();
+        if server1.is_empty() {
+            return Ok(false);
+        }
         let server2 = crate::increase_port(&server1, -1);
         let mut msg_out = RendezvousMessage::new();
         let serial = Config::get_serial();
@@ -668,9 +680,16 @@ async fn test_nat_type_() -> ResultType<bool> {
         let mut local_addr = None;
         let key = crate::get_key(true).await;
         for i in 0..2 {
+            if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+                return Ok(false);
+            }
             let server = if i == 0 { &*server1 } else { &*server2 };
-            let mut socket =
-                socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
+            let mut socket = socket_client::connect_tcp_local(
+                server,
+                local_addr,
+                RENDEZVOUS_CONNECT_TIMEOUT.as_millis() as u64,
+            )
+            .await?;
             if i == 0 {
                 // reuse the local addr is required for nat test
                 local_addr = Some(socket.local_addr());

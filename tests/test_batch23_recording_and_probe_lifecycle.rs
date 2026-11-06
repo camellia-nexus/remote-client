@@ -500,18 +500,23 @@ fn test_nat_probe_resumes_after_stop() {
     stop_nat_probe();
     assert!(NAT_PROBE_STOP.load(Ordering::SeqCst));
 
+    // Calling test_nat_type while stop is active must be rejected
+    test_nat_type();
+    assert!(!is_nat_probe_running());
+    assert!(NAT_PROBE_STOP.load(Ordering::SeqCst));
+
+    // Resetting stop flag allows new probe to proceed
+    reset_nat_probe_stop();
+    assert!(!NAT_PROBE_STOP.load(Ordering::SeqCst));
+
     reset_nat_probe_cooldown_for_test();
     test_nat_type();
 
-    // Starting a new test_nat_type probe must clear NAT_PROBE_STOP
-    assert!(
-        !NAT_PROBE_STOP.load(Ordering::SeqCst),
-        "A newly launched NAT probe must reset NAT_PROBE_STOP to allow execution"
-    );
-
-    // Wait bounded time for NAT probe to exit
+    // Clean up
+    stop_nat_probe();
     let start = Instant::now();
     while is_nat_probe_running() && start.elapsed() < Duration::from_millis(1000) {
         thread::sleep(Duration::from_millis(5));
     }
+    reset_nat_probe_stop();
 }
