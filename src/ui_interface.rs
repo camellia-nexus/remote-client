@@ -469,6 +469,9 @@ pub fn get_sound_inputs() -> Vec<String> {
 
 #[inline]
 pub fn set_options(m: HashMap<String, String>) {
+    if m.contains_key("custom-rendezvous-server") || m.contains_key("rendezvous-servers") {
+        crate::common::bump_rendezvous_generation();
+    }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         *OPTIONS.lock().unwrap() = m.clone();
@@ -480,6 +483,9 @@ pub fn set_options(m: HashMap<String, String>) {
 
 #[inline]
 pub fn set_option(key: String, value: String) {
+    if &key == "custom-rendezvous-server" || &key == "rendezvous-servers" {
+        crate::common::bump_rendezvous_generation();
+    }
     if &key == "stop-service" {
         #[cfg(target_os = "macos")]
         {

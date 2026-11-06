@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     future::Future,
     net::{SocketAddr, ToSocketAddrs},
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, RwLock,
+    },
     task::Poll,
 };
 
@@ -548,109 +551,171 @@ impl Drop for CheckTestNatType {
     }
 }
 
+pub static NAT_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
+pub static NAT_PROBE_STOP: AtomicBool = AtomicBool::new(false);
+static NAT_LAST_PROBE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const NAT_PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+pub const MAX_NAT_PROBE_RETRIES: usize = 5;
+
+pub fn is_nat_probe_running() -> bool {
+    NAT_PROBE_RUNNING.load(Ordering::SeqCst)
+}
+
+pub fn stop_nat_probe() {
+    NAT_PROBE_STOP.store(true, Ordering::SeqCst);
+}
+
+pub fn reset_nat_probe_stop() {
+    NAT_PROBE_STOP.store(false, Ordering::SeqCst);
+}
+
+pub fn reset_nat_probe_cooldown_for_test() {
+    *NAT_LAST_PROBE.lock().unwrap() = None;
+}
+
 pub fn test_nat_type() {
     test_ipv6_sync();
-    use std::sync::atomic::{AtomicBool, Ordering};
-    std::thread::spawn(move || {
-        static IS_RUNNING: AtomicBool = AtomicBool::new(false);
-        if IS_RUNNING.load(Ordering::SeqCst) {
-            return;
+    // Cooldown check
+    {
+        let last = NAT_LAST_PROBE.lock().unwrap();
+        if let Some(instant) = *last {
+            if instant.elapsed() < NAT_PROBE_COOLDOWN {
+                log::debug!("test_nat_type skipped: cooldown active");
+                return;
+            }
         }
-        IS_RUNNING.store(true, Ordering::SeqCst);
+    }
+    // Atomic compare_exchange BEFORE spawning OS thread
+    if NAT_PROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::debug!("test_nat_type skipped: probe already running");
+        return;
+    }
+    NAT_PROBE_STOP.store(false, Ordering::SeqCst);
+    *NAT_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
+
+    std::thread::spawn(move || {
+        struct NatGuard;
+        impl Drop for NatGuard {
+            fn drop(&mut self) {
+                NAT_PROBE_RUNNING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = NatGuard;
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::ipc::get_socks_ws();
         let is_direct = Config::get_socks().is_none() && !config::use_ws();
         if !is_direct {
             Config::set_nat_type(NatType::SYMMETRIC as _);
-            IS_RUNNING.store(false, Ordering::SeqCst);
             return;
         }
 
-        let mut i = 0;
-        loop {
+        let mut backoff = 1u64;
+        for attempt in 0..MAX_NAT_PROBE_RETRIES {
+            if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+                log::info!("test_nat_type cancelled");
+                break;
+            }
             match test_nat_type_() {
                 Ok(true) => break,
                 Err(err) => {
-                    log::error!("test nat: {}", err);
+                    log::error!("test nat attempt {} failed: {}", attempt + 1, err);
                 }
                 _ => {}
             }
             if Config::get_nat_type() != 0 {
                 break;
             }
-            i = i * 2 + 1;
-            if i > 300 {
-                i = 300;
+            if attempt + 1 >= MAX_NAT_PROBE_RETRIES {
+                log::warn!(
+                    "test_nat_type reached max retries ({}), stopping",
+                    MAX_NAT_PROBE_RETRIES
+                );
+                break;
             }
-            std::thread::sleep(std::time::Duration::from_secs(i));
-        }
 
-        IS_RUNNING.store(false, Ordering::SeqCst);
+            let sleep_deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(backoff);
+            while std::time::Instant::now() < sleep_deadline {
+                if NAT_PROBE_STOP.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            backoff = (backoff * 2).min(30);
+        }
     });
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn test_nat_type_() -> ResultType<bool> {
-    log::info!("Testing nat ...");
-    let start = std::time::Instant::now();
-    let server1 = Config::get_rendezvous_server();
-    let server2 = crate::increase_port(&server1, -1);
-    let mut msg_out = RendezvousMessage::new();
-    let serial = Config::get_serial();
-    msg_out.set_test_nat_request(TestNatRequest {
-        serial,
-        ..Default::default()
-    });
-    let mut port1 = 0;
-    let mut port2 = 0;
-    let mut local_addr = None;
-    let key = crate::get_key(true).await;
-    for i in 0..2 {
-        let server = if i == 0 { &*server1 } else { &*server2 };
-        let mut socket =
-            socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
-        if i == 0 {
-            // reuse the local addr is required for nat test
-            local_addr = Some(socket.local_addr());
-            Config::set_option(
-                "local-ip-addr".to_owned(),
-                socket.local_addr().ip().to_string(),
-            );
-        }
-        secure_tcp_silent(&mut socket, &key).await?;
-        socket.send(&msg_out).await?;
-        if let Some(msg_in) = get_next_nonkeyexchange_msg(&mut socket, None).await {
-            if let Some(rendezvous_message::Union::TestNatResponse(tnr)) = msg_in.union {
-                log::debug!("Got nat response from {}: port={}", server, tnr.port);
-                if i == 0 {
-                    port1 = tnr.port;
-                } else {
-                    port2 = tnr.port;
-                }
-                if let Some(cu) = tnr.cu.as_ref() {
-                    Config::set_option(
-                        "rendezvous-servers".to_owned(),
-                        cu.rendezvous_servers.join(","),
-                    );
-                    Config::set_serial(cu.serial);
-                }
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        log::info!("Testing nat ...");
+        let start = std::time::Instant::now();
+        let server1 = Config::get_rendezvous_server();
+        let server2 = crate::increase_port(&server1, -1);
+        let mut msg_out = RendezvousMessage::new();
+        let serial = Config::get_serial();
+        msg_out.set_test_nat_request(TestNatRequest {
+            serial,
+            ..Default::default()
+        });
+        let mut port1 = 0;
+        let mut port2 = 0;
+        let mut local_addr = None;
+        let key = crate::get_key(true).await;
+        for i in 0..2 {
+            let server = if i == 0 { &*server1 } else { &*server2 };
+            let mut socket =
+                socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
+            if i == 0 {
+                // reuse the local addr is required for nat test
+                local_addr = Some(socket.local_addr());
+                Config::set_option(
+                    "local-ip-addr".to_owned(),
+                    socket.local_addr().ip().to_string(),
+                );
             }
-        } else {
-            break;
+            secure_tcp_silent(&mut socket, &key).await?;
+            socket.send(&msg_out).await?;
+            if let Some(msg_in) = get_next_nonkeyexchange_msg(&mut socket, None).await {
+                if let Some(rendezvous_message::Union::TestNatResponse(tnr)) = msg_in.union {
+                    log::debug!("Got nat response from {}: port={}", server, tnr.port);
+                    if i == 0 {
+                        port1 = tnr.port;
+                    } else {
+                        port2 = tnr.port;
+                    }
+                    if let Some(cu) = tnr.cu.as_ref() {
+                        bump_rendezvous_generation();
+                        Config::set_option(
+                            "rendezvous-servers".to_owned(),
+                            cu.rendezvous_servers.join(","),
+                        );
+                        Config::set_serial(cu.serial);
+                    }
+                }
+            } else {
+                break;
+            }
         }
-    }
-    let ok = port1 > 0 && port2 > 0;
-    if ok {
-        let t = if port1 == port2 {
-            NatType::ASYMMETRIC
-        } else {
-            NatType::SYMMETRIC
-        };
-        Config::set_nat_type(t as _);
-        log::info!("Tested nat type: {:?} in {:?}", t, start.elapsed());
-    }
-    Ok(ok)
+        let ok = port1 > 0 && port2 > 0;
+        if ok {
+            let t = if port1 == port2 {
+                NatType::ASYMMETRIC
+            } else {
+                NatType::SYMMETRIC
+            };
+            Config::set_nat_type(t as _);
+            log::info!("Tested nat type: {:?} in {:?}", t, start.elapsed());
+        }
+        Ok(ok)
+    })
+    .await
+    .map_err(|_| camellia_remote_protocol::anyhow::anyhow!("test_nat_type timed out"))?
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>, bool) {
@@ -707,51 +772,174 @@ pub async fn get_nat_type(ms_timeout: u64) -> i32 {
     crate::ipc::get_nat_type(ms_timeout).await
 }
 
+const RENDEZVOUS_PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+pub const MAX_RENDEZVOUS_SERVERS_PROBE: usize = 16;
+pub const RENDEZVOUS_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+pub static RENDEZVOUS_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
+static RENDEZVOUS_LAST_PROBE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+pub static RENDEZVOUS_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+pub fn bump_rendezvous_generation() -> u64 {
+    RENDEZVOUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn get_rendezvous_generation() -> u64 {
+    RENDEZVOUS_GENERATION.load(Ordering::SeqCst)
+}
+
+pub fn is_rendezvous_probe_running() -> bool {
+    RENDEZVOUS_PROBE_RUNNING.load(Ordering::SeqCst)
+}
+
+pub fn reset_rendezvous_probe_cooldown_for_test() {
+    *RENDEZVOUS_LAST_PROBE.lock().unwrap() = None;
+}
+
 // used for client to test which server is faster in case stop-servic=Y
 #[tokio::main(flavor = "current_thread")]
-async fn test_rendezvous_server_() {
-    let servers = Config::get_rendezvous_servers();
+pub async fn test_rendezvous_server_() {
+    let generation = RENDEZVOUS_GENERATION.load(Ordering::SeqCst);
+    let mut servers = Config::get_rendezvous_servers();
     if servers.len() <= 1 {
         return;
+    }
+    if servers.len() > MAX_RENDEZVOUS_SERVERS_PROBE {
+        servers.truncate(MAX_RENDEZVOUS_SERVERS_PROBE);
     }
     let mut futs = Vec::new();
     for host in servers {
         futs.push(tokio::spawn(async move {
             let tm = std::time::Instant::now();
-            let connection = socket_client::connect_tcp(
-                crate::check_port(&host, RENDEZVOUS_PORT),
-                CONNECT_TIMEOUT,
+            let connection = tokio::time::timeout(
+                RENDEZVOUS_CONNECT_TIMEOUT,
+                socket_client::connect_tcp(
+                    crate::check_port(&host, RENDEZVOUS_PORT),
+                    RENDEZVOUS_CONNECT_TIMEOUT.as_millis() as u64,
+                ),
             )
             .await;
-            let healthy = if let Ok(mut connection) = connection {
-                let key = crate::get_key(true).await;
-                secure_tcp_silent(&mut connection, &key).await.is_ok()
-            } else {
-                false
+            let healthy = match connection {
+                Ok(Ok(mut conn)) => {
+                    let key = crate::get_key(true).await;
+                    tokio::time::timeout(
+                        RENDEZVOUS_CONNECT_TIMEOUT,
+                        secure_tcp_silent(&mut conn, &key),
+                    )
+                    .await
+                    .map(|res| res.is_ok())
+                    .unwrap_or(false)
+                }
+                _ => false,
             };
             if healthy {
                 let elapsed = tm.elapsed().as_micros();
-                Config::update_latency(&host, elapsed as _);
+                (host, elapsed as i64)
             } else {
-                Config::update_latency(&host, -1);
+                (host, -1i64)
             }
         }));
     }
-    join_all(futs).await;
+    let results = join_all(futs).await;
+
+    // Fencing check: if generation has changed, discard results
+    if RENDEZVOUS_GENERATION.load(Ordering::SeqCst) != generation {
+        log::info!(
+            "Rendezvous probe results discarded: generation changed from {} to {}",
+            generation,
+            RENDEZVOUS_GENERATION.load(Ordering::SeqCst)
+        );
+        return;
+    }
+
+    let current_servers = Config::get_rendezvous_servers();
+    for res in results {
+        if let Ok((host, elapsed)) = res {
+            if current_servers.contains(&host) {
+                Config::update_latency(&host, elapsed as _);
+            }
+        }
+    }
     Config::reset_online();
 }
 
 pub fn test_rendezvous_server() {
-    std::thread::spawn(test_rendezvous_server_);
+    // Cooldown check
+    {
+        let last = RENDEZVOUS_LAST_PROBE.lock().unwrap();
+        if let Some(instant) = *last {
+            if instant.elapsed() < RENDEZVOUS_PROBE_COOLDOWN {
+                log::debug!("test_rendezvous_server skipped: cooldown active");
+                return;
+            }
+        }
+    }
+    // Single-flight check BEFORE spawning thread
+    if RENDEZVOUS_PROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::debug!("test_rendezvous_server skipped: already running");
+        return;
+    }
+    *RENDEZVOUS_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
+
+    std::thread::spawn(|| {
+        struct ProbeGuard;
+        impl Drop for ProbeGuard {
+            fn drop(&mut self) {
+                RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = ProbeGuard;
+        test_rendezvous_server_();
+    });
 }
 
 pub fn refresh_rendezvous_server() {
+    // Cooldown check
+    {
+        let last = RENDEZVOUS_LAST_PROBE.lock().unwrap();
+        if let Some(instant) = *last {
+            if instant.elapsed() < RENDEZVOUS_PROBE_COOLDOWN {
+                log::debug!("refresh_rendezvous_server skipped: cooldown active");
+                return;
+            }
+        }
+    }
+    // Single-flight check BEFORE spawning thread
+    if RENDEZVOUS_PROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::debug!("refresh_rendezvous_server skipped: already running");
+        return;
+    }
+    *RENDEZVOUS_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
+
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    test_rendezvous_server();
+    std::thread::spawn(|| {
+        struct ProbeGuard;
+        impl Drop for ProbeGuard {
+            fn drop(&mut self) {
+                RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = ProbeGuard;
+        test_rendezvous_server_();
+    });
+
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     std::thread::spawn(|| {
+        struct ProbeGuard;
+        impl Drop for ProbeGuard {
+            fn drop(&mut self) {
+                RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = ProbeGuard;
         if crate::ipc::test_rendezvous_server().is_err() {
-            test_rendezvous_server();
+            test_rendezvous_server_();
         }
     });
 }
@@ -2327,9 +2515,48 @@ pub async fn punch_udp(
     }
 }
 
-fn test_ipv6_sync() {
+pub static IPV6_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
+static IPV6_LAST_PROBE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const IPV6_PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+
+pub fn is_ipv6_probe_running() -> bool {
+    IPV6_PROBE_RUNNING.load(Ordering::SeqCst)
+}
+
+pub fn reset_ipv6_probe_cooldown_for_test() {
+    *IPV6_LAST_PROBE.lock().unwrap() = None;
+}
+
+pub fn test_ipv6_sync() {
+    // Cooldown check
+    {
+        let last = IPV6_LAST_PROBE.lock().unwrap();
+        if let Some(instant) = *last {
+            if instant.elapsed() < IPV6_PROBE_COOLDOWN {
+                log::debug!("test_ipv6_sync skipped: cooldown active");
+                return;
+            }
+        }
+    }
+    // Single-flight check BEFORE spawning thread
+    if IPV6_PROBE_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::debug!("test_ipv6_sync skipped: already running");
+        return;
+    }
+    *IPV6_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
+
     #[tokio::main(flavor = "current_thread")]
     async fn func() {
+        struct Ipv6Guard;
+        impl Drop for Ipv6Guard {
+            fn drop(&mut self) {
+                IPV6_PROBE_RUNNING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = Ipv6Guard;
         if let Some(job) = test_ipv6().await {
             job.await.ok();
         }

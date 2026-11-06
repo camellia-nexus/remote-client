@@ -9,22 +9,43 @@ use reqwest::{
     blocking::{Body, Client, Response},
     StatusCode,
 };
-use scrap::record::RecordState;
+use scrap::record::{RecordChannelCloser, RecordState, RecordStateReceiver};
 use serde_derive::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
     io::{prelude::*, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::Receiver,
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct ActiveWorkerEntry {
+    id: u64,
+    stop_signal: Arc<AtomicBool>,
+    closer: RecordChannelCloser,
+}
+
+static NEXT_WORKER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+lazy_static::lazy_static! {
+    static ref ACTIVE_WORKERS: Mutex<HashMap<String, ActiveWorkerEntry>> =
+        Mutex::new(HashMap::new());
+}
+
+pub fn active_worker_count() -> usize {
+    ACTIVE_WORKERS.lock().unwrap().len()
+}
+
+pub fn is_worker_active_for_dir(dir: &str) -> bool {
+    ACTIVE_WORKERS.lock().unwrap().contains_key(dir)
+}
 
 const PROTOCOL_VERSION: u8 = 2;
 const SHOULD_SEND_TIME: Duration = Duration::from_secs(1);
@@ -54,22 +75,31 @@ pub fn is_enable() -> bool {
 pub struct RecordUploadHandle {
     stop_signal: Arc<AtomicBool>,
     join_handle: Option<std::thread::JoinHandle<()>>,
+    closer: Option<RecordChannelCloser>,
 }
 
 impl RecordUploadHandle {
-    pub fn new(stop_signal: Arc<AtomicBool>, handle: std::thread::JoinHandle<()>) -> Self {
+    pub fn new(
+        stop_signal: Arc<AtomicBool>,
+        handle: std::thread::JoinHandle<()>,
+        closer: Option<RecordChannelCloser>,
+    ) -> Self {
         Self {
             stop_signal,
             join_handle: Some(handle),
+            closer,
         }
     }
 
     pub fn stop(&mut self, deadline: Duration) -> bool {
         self.stop_signal.store(true, Ordering::SeqCst);
+        if let Some(closer) = &self.closer {
+            closer.close();
+        }
         if let Some(handle) = self.join_handle.take() {
             let start = Instant::now();
             while !handle.is_finished() && start.elapsed() < deadline {
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(5));
             }
             if handle.is_finished() {
                 let _ = handle.join();
@@ -89,14 +119,56 @@ impl RecordUploadHandle {
 
 impl Drop for RecordUploadHandle {
     fn drop(&mut self) {
-        self.stop(Duration::from_millis(500));
+        if self.join_handle.is_some() {
+            self.stop(Duration::from_millis(1000));
+        }
     }
 }
 
-pub fn run(rx: Receiver<RecordState>, recording_dir: String) -> RecordUploadHandle {
+pub fn run(rx: RecordStateReceiver, recording_dir: String) -> RecordUploadHandle {
     let stop_signal = Arc::new(AtomicBool::new(false));
     let stop_signal_clone = stop_signal.clone();
+    let closer = rx.closer();
+    let worker_id = NEXT_WORKER_ID.fetch_add(1, Ordering::SeqCst);
+
+    // Responsive cancellation of any active worker for this recording directory
+    {
+        let mut active = ACTIVE_WORKERS.lock().unwrap();
+        if let Some(old) = active.remove(&recording_dir) {
+            old.stop_signal.store(true, Ordering::SeqCst);
+            old.closer.close();
+        }
+        active.insert(
+            recording_dir.clone(),
+            ActiveWorkerEntry {
+                id: worker_id,
+                stop_signal: stop_signal.clone(),
+                closer: closer.clone(),
+            },
+        );
+    }
+
+    let dir_for_worker = recording_dir.clone();
     let handle = std::thread::spawn(move || {
+        struct WorkerGuard {
+            dir: String,
+            worker_id: u64,
+        }
+        impl Drop for WorkerGuard {
+            fn drop(&mut self) {
+                let mut active = ACTIVE_WORKERS.lock().unwrap();
+                if let Some(entry) = active.get(&self.dir) {
+                    if entry.id == self.worker_id {
+                        active.remove(&self.dir);
+                    }
+                }
+            }
+        }
+        let _worker_guard = WorkerGuard {
+            dir: dir_for_worker.clone(),
+            worker_id,
+        };
+
         let api_server = crate::get_api_server(
             Config::get_option("api-server"),
             Config::get_option("custom-rendezvous-server"),
@@ -108,10 +180,10 @@ pub fn run(rx: Receiver<RecordState>, recording_dir: String) -> RecordUploadHand
         // Lazy construction permits recovery after an invalid proxy is repaired
         // without abandoning this recording's durable state or receiver.
         let mut uploader = RecordUploader::new(api_server);
-        uploader.recover_pending(&recording_dir);
+        uploader.recover_pending(&dir_for_worker, &stop_signal_clone);
 
         while !stop_signal_clone.load(Ordering::SeqCst) {
-            let msg = match rx.recv_timeout(Duration::from_millis(200)) {
+            let msg = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(m) => m,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -119,35 +191,21 @@ pub fn run(rx: Receiver<RecordState>, recording_dir: String) -> RecordUploadHand
                     break;
                 }
             };
+            if stop_signal_clone.load(Ordering::SeqCst) {
+                break;
+            }
             let result = match msg {
                 RecordState::NewFile(filepath) => uploader.handle_new_file(filepath),
                 RecordState::NewFrame => {
-                    // Coalesce any redundant NewFrame messages already waiting in the channel
-                    let mut extra_non_frame = None;
-                    while let Ok(extra) = rx.try_recv() {
-                        match extra {
-                            RecordState::NewFrame => {} // drop duplicate NewFrame
-                            other => {
-                                extra_non_frame = Some(other);
-                                break;
-                            }
-                        }
+                    if uploader.state.is_none() {
+                        Ok(())
+                    } else {
+                        uploader
+                            .handle_frame_with_stop(false, &stop_signal_clone)
+                            .map(|_| ())
                     }
-                    let res = uploader.handle_frame(false).map(|_| ());
-                    if let Some(other) = extra_non_frame {
-                        let res2 = match other {
-                            RecordState::NewFile(filepath) => uploader.handle_new_file(filepath),
-                            RecordState::WriteTail => uploader.handle_tail_with_retry(),
-                            RecordState::RemoveFile => uploader.handle_abort(),
-                            RecordState::NewFrame => Ok(()),
-                        };
-                        if let Err(e) = res2 {
-                            log::error!("recording upload error on coalesced event: {}", e);
-                        }
-                    }
-                    res
                 }
-                RecordState::WriteTail => uploader.handle_tail_with_retry(),
+                RecordState::WriteTail => uploader.handle_tail_with_retry(&stop_signal_clone),
                 RecordState::RemoveFile => uploader.handle_abort(),
             };
             if let Err(error) = result {
@@ -158,7 +216,7 @@ pub fn run(rx: Receiver<RecordState>, recording_dir: String) -> RecordUploadHand
             }
         }
     });
-    RecordUploadHandle::new(stop_signal, handle)
+    RecordUploadHandle::new(stop_signal, handle, Some(closer))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -305,7 +363,10 @@ impl RecordUploader {
             .is_some_and(|deadline| Instant::now() < deadline)
     }
 
-    fn recover_pending(&mut self, recording_dir: &str) {
+    fn recover_pending(&mut self, recording_dir: &str, stop_signal: &AtomicBool) {
+        if stop_signal.load(Ordering::SeqCst) {
+            return;
+        }
         let pending_paths = match discover_state_paths(Path::new(recording_dir)) {
             Ok(paths) => paths,
             Err(error) => {
@@ -314,6 +375,9 @@ impl RecordUploader {
             }
         };
         for filepath in pending_paths {
+            if stop_signal.load(Ordering::SeqCst) {
+                return;
+            }
             let loaded = match load_state(&filepath, &self.api_server_fingerprint) {
                 Ok(Some(loaded)) => loaded,
                 Ok(None) => continue,
@@ -331,7 +395,7 @@ impl RecordUploader {
                 .map(|state| state.final_size.is_some() && !state.abort_requested)
                 .unwrap_or(false);
             let result = if finalizing {
-                self.handle_tail_with_retry()
+                self.handle_tail_with_retry(stop_signal)
             } else {
                 self.handle_abort()
             };
@@ -400,7 +464,20 @@ impl RecordUploader {
         self.store_state(updated)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn handle_frame(&mut self, flush: bool) -> ResultType<bool> {
+        let dummy = AtomicBool::new(false);
+        self.handle_frame_with_stop(flush, &dummy)
+    }
+
+    fn handle_frame_with_stop(
+        &mut self,
+        flush: bool,
+        stop_signal: &AtomicBool,
+    ) -> ResultType<bool> {
+        if stop_signal.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
         // Recorded-frame notifications can arrive many times per second. A
         // retryable server rejection must suppress that hot path as well as
         // the HTTP request itself, otherwise every frame would still emit an
@@ -415,6 +492,9 @@ impl RecordUploader {
         let state = self.current_state()?.clone();
         if state.abort_requested {
             bail!("recording upload is aborting");
+        }
+        if stop_signal.load(Ordering::SeqCst) {
+            return Ok(false);
         }
         if !flush && self.last_send.elapsed() < SHOULD_SEND_TIME {
             return Ok(false);
@@ -527,19 +607,25 @@ impl RecordUploader {
         self.store_state(updated)
     }
 
-    fn handle_tail_with_retry(&mut self) -> ResultType<()> {
-        let mut result = self.handle_tail();
+    fn handle_tail_with_retry(&mut self, stop_signal: &AtomicBool) -> ResultType<()> {
+        let mut result = self.handle_tail(stop_signal);
         for delay in FINALIZE_RETRY_DELAYS {
-            if result.is_ok() {
+            if result.is_ok() || stop_signal.load(Ordering::SeqCst) {
                 return result;
             }
-            std::thread::sleep(delay);
-            result = self.handle_tail();
+            let deadline = Instant::now() + delay;
+            while Instant::now() < deadline {
+                if stop_signal.load(Ordering::SeqCst) {
+                    return result;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result = self.handle_tail(stop_signal);
         }
         result
     }
 
-    fn handle_tail(&mut self) -> ResultType<()> {
+    fn handle_tail(&mut self, stop_signal: &AtomicBool) -> ResultType<()> {
         if self.current_state()?.final_size.is_none() {
             let state = self.current_state()?.clone();
             let (final_size, final_digest) = hash_local_file(&state.filepath)?;
@@ -548,7 +634,11 @@ impl RecordUploader {
             finalizing.final_digest = Some(final_digest);
             self.store_state(finalizing)?;
         }
-        while self.handle_frame(true)? {}
+        while self.handle_frame_with_stop(true, stop_signal)? {
+            if stop_signal.load(Ordering::SeqCst) {
+                bail!("recording upload stopped");
+            }
+        }
         let state = self.current_state()?.clone();
         if state.pending_chunk.is_some() {
             bail!("recording still has an uncommitted chunk");
@@ -1096,7 +1186,7 @@ mod tests {
 
         let mut uploader = RecordUploader::new("https://management.example.test".to_owned());
         uploader.retry_not_before = Some(Instant::now() + Duration::from_secs(30));
-        assert_eq!(uploader.handle_frame(false).unwrap(), false);
+        assert!(!uploader.handle_frame(false).unwrap());
     }
 
     #[test]

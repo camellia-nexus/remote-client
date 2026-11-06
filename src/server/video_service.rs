@@ -1041,10 +1041,10 @@ fn setup_encoder(
     );
     Encoder::set_fallback(&encoder_cfg);
     let codec_format = Encoder::negotiated_codec();
-    let (recorder, upload_handle) =
-        get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
+    let (recorder, upload_handle) =
+        get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
     Ok((
         encoder,
         encoder_cfg,
@@ -1152,7 +1152,7 @@ fn get_recorder(
 
         let recording_dir = crate::ui_interface::video_save_directory(root);
         let (tx, upload_handle) = if record_upload::is_enable() {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = scrap::record::create_record_channel();
             let handle = record_upload::run(rx, recording_dir.clone());
             (Some(tx), Some(handle))
         } else {

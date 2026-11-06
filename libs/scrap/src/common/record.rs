@@ -9,16 +9,227 @@ use camellia_remote_protocol::{
 #[cfg(feature = "hwcodec")]
 use hwcodec::mux::{MuxContext, Muxer};
 use std::{
+    collections::VecDeque,
     fs::{File, OpenOptions},
     io,
     ops::{Deref, DerefMut},
     path::PathBuf,
-    sync::mpsc::Sender,
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 use webm::mux::{self, Segment, Track, VideoTrack, Writer};
 
 const MIN_SECS: u64 = 1;
+const MAX_CONTROL_QUEUE_SIZE: usize = 64;
+
+#[derive(Debug)]
+struct RecordChannelState {
+    control_queue: VecDeque<RecordState>,
+    pending_frame: bool,
+    closed: bool,
+    sender_count: usize,
+}
+
+#[derive(Debug)]
+pub struct RecordChannelInner {
+    state: Mutex<RecordChannelState>,
+    cvar: Condvar,
+}
+
+pub struct RecordStateSender {
+    inner: Arc<RecordChannelInner>,
+}
+
+impl std::fmt::Debug for RecordStateSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordStateSender").finish()
+    }
+}
+
+impl Clone for RecordStateSender {
+    fn clone(&self) -> Self {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.sender_count += 1;
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl Drop for RecordStateSender {
+    fn drop(&mut self) {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.sender_count = inner.sender_count.saturating_sub(1);
+        if inner.sender_count == 0 {
+            self.inner.cvar.notify_all();
+        }
+    }
+}
+
+impl RecordStateSender {
+    pub fn send(&self, state: RecordState) -> Result<(), RecordState> {
+        let mut inner = self.inner.state.lock().unwrap();
+        if inner.closed {
+            return Err(state);
+        }
+        match state {
+            RecordState::NewFrame => {
+                if !inner.pending_frame {
+                    inner.pending_frame = true;
+                    self.inner.cvar.notify_one();
+                }
+            }
+            control => {
+                if inner.control_queue.len() >= MAX_CONTROL_QUEUE_SIZE {
+                    log::warn!(
+                        "Record channel control queue exceeded limit ({}), dropping oldest control message",
+                        MAX_CONTROL_QUEUE_SIZE
+                    );
+                    inner.control_queue.pop_front();
+                }
+                inner.control_queue.push_back(control);
+                self.inner.cvar.notify_one();
+            }
+        }
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.closed = true;
+        self.inner.cvar.notify_all();
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.state.lock().unwrap().closed
+    }
+}
+
+pub struct RecordStateReceiver {
+    inner: Arc<RecordChannelInner>,
+}
+
+impl std::fmt::Debug for RecordStateReceiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordStateReceiver").finish()
+    }
+}
+
+impl Drop for RecordStateReceiver {
+    fn drop(&mut self) {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.closed = true;
+        self.inner.cvar.notify_all();
+    }
+}
+
+impl RecordStateReceiver {
+    pub fn try_recv(&self) -> Result<RecordState, std::sync::mpsc::TryRecvError> {
+        let mut inner = self.inner.state.lock().unwrap();
+        if let Some(control) = inner.control_queue.pop_front() {
+            return Ok(control);
+        }
+        if inner.pending_frame {
+            inner.pending_frame = false;
+            return Ok(RecordState::NewFrame);
+        }
+        if inner.closed || inner.sender_count == 0 {
+            return Err(std::sync::mpsc::TryRecvError::Disconnected);
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    }
+
+    pub fn recv(&self) -> Result<RecordState, std::sync::mpsc::RecvError> {
+        let mut inner = self.inner.state.lock().unwrap();
+        loop {
+            if let Some(control) = inner.control_queue.pop_front() {
+                return Ok(control);
+            }
+            if inner.pending_frame {
+                inner.pending_frame = false;
+                return Ok(RecordState::NewFrame);
+            }
+            if inner.closed || inner.sender_count == 0 {
+                return Err(std::sync::mpsc::RecvError);
+            }
+            inner = self.inner.cvar.wait(inner).unwrap();
+        }
+    }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<RecordState, std::sync::mpsc::RecvTimeoutError> {
+        let mut inner = self.inner.state.lock().unwrap();
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(86400 * 365));
+        loop {
+            if let Some(control) = inner.control_queue.pop_front() {
+                return Ok(control);
+            }
+            if inner.pending_frame {
+                inner.pending_frame = false;
+                return Ok(RecordState::NewFrame);
+            }
+            if inner.closed || inner.sender_count == 0 {
+                return Err(std::sync::mpsc::RecvTimeoutError::Disconnected);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(std::sync::mpsc::RecvTimeoutError::Timeout);
+            }
+            let remaining = deadline - now;
+            let (next_inner, _) = self.inner.cvar.wait_timeout(inner, remaining).unwrap();
+            inner = next_inner;
+        }
+    }
+
+    pub fn close(&self) {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.closed = true;
+        self.inner.cvar.notify_all();
+    }
+
+    pub fn closer(&self) -> RecordChannelCloser {
+        RecordChannelCloser {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordChannelCloser {
+    inner: Arc<RecordChannelInner>,
+}
+
+impl RecordChannelCloser {
+    pub fn close(&self) {
+        let mut inner = self.inner.state.lock().unwrap();
+        inner.closed = true;
+        self.inner.cvar.notify_all();
+    }
+}
+
+pub fn create_record_channel() -> (RecordStateSender, RecordStateReceiver) {
+    let inner = Arc::new(RecordChannelInner {
+        state: Mutex::new(RecordChannelState {
+            control_queue: VecDeque::with_capacity(MAX_CONTROL_QUEUE_SIZE),
+            pending_frame: false,
+            closed: false,
+            sender_count: 1,
+        }),
+        cvar: Condvar::new(),
+    });
+    (
+        RecordStateSender {
+            inner: inner.clone(),
+        },
+        RecordStateReceiver { inner },
+    )
+}
+
+pub use create_record_channel as record_state_channel;
 
 // Replace characters that are invalid in Windows filename components so recordings remain portable.
 // Control characters are also replaced because they can make filenames invalid
@@ -43,7 +254,7 @@ pub struct RecorderContext {
     pub dir: String,
     pub display_idx: usize,
     pub camera: bool,
-    pub tx: Option<Sender<RecordState>>,
+    pub tx: Option<RecordStateSender>,
 }
 
 #[derive(Debug, Clone)]

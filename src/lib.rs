@@ -60,7 +60,7 @@ mod ui_cm_interface;
 pub mod ui_interface;
 pub mod ui_session_interface;
 
-mod hbbs_http;
+pub mod hbbs_http;
 mod http_bridge;
 mod management_operation_journal;
 

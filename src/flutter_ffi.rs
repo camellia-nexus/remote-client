@@ -1056,6 +1056,9 @@ pub fn main_set_option(key: String, value: String) {
         || key.eq(config::keys::OPTION_DISABLE_UDP)
         || key.eq("api-server")
     {
+        if key.eq("custom-rendezvous-server") {
+            crate::common::bump_rendezvous_generation();
+        }
         set_option(key, value.clone());
         #[cfg(target_os = "android")]
         crate::rendezvous_mediator::RendezvousMediator::restart();

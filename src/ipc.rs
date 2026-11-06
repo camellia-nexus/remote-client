@@ -1889,6 +1889,9 @@ pub fn set_option(key: &str, value: &str) {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
+    if value.contains_key("custom-rendezvous-server") || value.contains_key("rendezvous-servers") {
+        crate::common::bump_rendezvous_generation();
+    }
     let _nat = CheckTestNatType::new();
     if let Ok(mut c) = connect(1000, "").await {
         c.send(&Data::Options(Some(value.clone()))).await?;
