@@ -202,7 +202,10 @@ pub fn rust_args_to_c_args(args: Vec<String>, outlen: *mut c_int) -> *mut *mut c
         match CString::new(s) {
             Ok(cs) => c_strings.push(cs.into_raw()),
             Err(err) => {
-                log::error!("rust_args_to_c_args encountered string containing embedded NUL: {:?}", err);
+                log::error!(
+                    "rust_args_to_c_args encountered string containing embedded NUL: {:?}",
+                    err
+                );
                 for raw in c_strings {
                     if !raw.is_null() {
                         unsafe { drop(CString::from_raw(raw)) };
@@ -248,7 +251,10 @@ pub fn free_c_args_impl(ptr: *mut *mut c_char, len: c_int) -> bool {
     let entry = match entry_opt {
         Some(e) => e,
         None => {
-            log::warn!("free_c_args called with untracked, forged, or double-freed pointer: {:p}", ptr);
+            log::warn!(
+                "free_c_args called with untracked, forged, or double-freed pointer: {:p}",
+                ptr
+            );
             return false;
         }
     };

@@ -60,7 +60,11 @@ fn test_ffi003_rust_args_to_c_args_roundtrip_and_memory_layout() {
     let c_args = rust_args_to_c_args(sample_args.clone(), &mut outlen);
 
     assert!(!c_args.is_null(), "Allocation must succeed");
-    assert_eq!(outlen as usize, sample_args.len(), "Length must match input count");
+    assert_eq!(
+        outlen as usize,
+        sample_args.len(),
+        "Length must match input count"
+    );
 
     // Read back each C-string to verify byte-for-byte exactness
     unsafe {
@@ -156,10 +160,7 @@ fn test_ffi003_embedded_nul_rejection_and_leak_freedom() {
         ptr.is_null(),
         "rust_args_to_c_args must return NULL on embedded NUL"
     );
-    assert_eq!(
-        outlen, 0,
-        "outlen must be reset to 0 on embedded NUL error"
-    );
+    assert_eq!(outlen, 0, "outlen must be reset to 0 on embedded NUL error");
 }
 
 #[test]
@@ -192,7 +193,10 @@ fn test_ffi003_empty_args_handling() {
     let mut outlen: c_int = -1;
     let ptr = rust_args_to_c_args(empty_args, &mut outlen);
 
-    assert!(!ptr.is_null(), "Allocation for empty args must return valid pointer");
+    assert!(
+        !ptr.is_null(),
+        "Allocation for empty args must return valid pointer"
+    );
     assert_eq!(outlen, 0, "Length must be 0");
 
     assert!(
@@ -295,13 +299,13 @@ fn test_platform007_flawed_trim_regression_proof() {
     let s = "--cm";
     let last_non_space = s.rfind(|c: char| !c.is_whitespace());
     assert_eq!(last_non_space, Some(3)); // index of 'm'
-    // In C++ std::string::erase(pos), calling erase(3) erases from index 3 to end!
-    // That means '--cm' would become '--c'!
-    // The ONLY reason it didn't previously destroy every single argument was because
-    // Utf8FromUtf16 previously leaked a trailing '\0' (non-whitespace) at index 4,
-    // so erase(4) accidentally deleted the '\0'.
-    // With Utf8FromUtf16 corrected to have no trailing '\0', removing the erase loop
-    // is essential to prevent erasing the last visible character!
+                                         // In C++ std::string::erase(pos), calling erase(3) erases from index 3 to end!
+                                         // That means '--cm' would become '--c'!
+                                         // The ONLY reason it didn't previously destroy every single argument was because
+                                         // Utf8FromUtf16 previously leaked a trailing '\0' (non-whitespace) at index 4,
+                                         // so erase(4) accidentally deleted the '\0'.
+                                         // With Utf8FromUtf16 corrected to have no trailing '\0', removing the erase loop
+                                         // is essential to prevent erasing the last visible character!
     let correct_args = ["--cm".to_string(), "--install".to_string()];
     assert_eq!(correct_args[0], "--cm");
     assert_eq!(correct_args[1], "--install");
@@ -370,9 +374,13 @@ fn test_state004_wdk_test_cert_blob_identification() {
     let mut matching_blob = vec![0x00; 100];
     matching_blob.extend_from_slice(&TEST_CERT_BLOB);
 
-    assert!(matching_blob.windows(TEST_CERT_BLOB.len()).any(|w| w == TEST_CERT_BLOB));
+    assert!(matching_blob
+        .windows(TEST_CERT_BLOB.len())
+        .any(|w| w == TEST_CERT_BLOB));
 
     // Data not matching
     let random_blob = [0xFF; 116];
-    assert!(!random_blob.windows(TEST_CERT_BLOB.len()).any(|w| w == TEST_CERT_BLOB));
+    assert!(!random_blob
+        .windows(TEST_CERT_BLOB.len())
+        .any(|w| w == TEST_CERT_BLOB));
 }
