@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <windows.h>
 
+#include <climits>
 #include <iostream>
 
 void CreateAndAttachConsole() {
@@ -45,10 +46,11 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   if (utf16_string == nullptr) {
     return std::string();
   }
-  int input_length = static_cast<int>(wcslen(utf16_string));
-  if (input_length == 0) {
+  size_t string_length = wcslen(utf16_string);
+  if (string_length == 0 || string_length > static_cast<size_t>(INT_MAX)) {
     return std::string();
   }
+  int input_length = static_cast<int>(string_length);
   int target_length = ::WideCharToMultiByte(
       CP_UTF8, WC_ERR_INVALID_CHARS, utf16_string,
       input_length, nullptr, 0, nullptr, nullptr);
@@ -63,5 +65,6 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   if (converted_length <= 0) {
     return std::string();
   }
+  utf8_string.resize(converted_length);
   return utf8_string;
 }

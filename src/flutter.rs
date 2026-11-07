@@ -124,7 +124,7 @@ pub extern "C" fn handle_applicationShouldOpenUntitledFile() {
 #[derive(Debug)]
 #[allow(dead_code)]
 struct RegisteredCoreArgs {
-    c_strings: Vec<*mut c_char>,
+    _c_strings: Vec<CString>,
     array_buffer: Vec<*mut c_char>,
 }
 
@@ -132,24 +132,15 @@ unsafe impl Send for RegisteredCoreArgs {}
 
 // Global registry of active allocations created by rust_args_to_c_args.
 // Keyed by the raw pointer returned to C (as usize).
-static ACTIVE_CORE_ARGS: std::sync::Mutex<Option<HashMap<usize, RegisteredCoreArgs>>> =
-    std::sync::Mutex::new(None);
+static ACTIVE_CORE_ARGS: std::sync::LazyLock<std::sync::Mutex<HashMap<usize, RegisteredCoreArgs>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn with_active_core_args<F, R>(f: F) -> R
 where
     F: FnOnce(&mut HashMap<usize, RegisteredCoreArgs>) -> R,
 {
-    static INIT: std::sync::Once = std::sync::Once::new();
     let mut lock = ACTIVE_CORE_ARGS.lock().unwrap_or_else(|p| p.into_inner());
-    INIT.call_once(|| {
-        if lock.is_none() {
-            *lock = Some(HashMap::new());
-        }
-    });
-    if lock.is_none() {
-        *lock = Some(HashMap::new());
-    }
-    f(lock.as_mut().unwrap())
+    f(&mut *lock)
 }
 
 #[no_mangle]
@@ -200,35 +191,32 @@ pub fn rust_args_to_c_args(args: Vec<String>, outlen: *mut c_int) -> *mut *mut c
     let mut c_strings = Vec::with_capacity(args.len());
     for s in args {
         match CString::new(s) {
-            Ok(cs) => c_strings.push(cs.into_raw()),
+            Ok(cs) => c_strings.push(cs),
             Err(err) => {
                 log::error!(
                     "rust_args_to_c_args encountered string containing embedded NUL: {:?}",
                     err
                 );
-                for raw in c_strings {
-                    if !raw.is_null() {
-                        unsafe { drop(CString::from_raw(raw)) };
-                    }
-                }
                 return std::ptr::null_mut();
             }
         }
     }
 
     let len = c_strings.len();
-    // Ensure we allocate non-zero capacity so as_mut_ptr() yields a distinct, non-dangling heap pointer
-    let mut array_buffer: Vec<*mut c_char> = Vec::with_capacity(len.max(1));
-    for &raw in &c_strings {
-        array_buffer.push(raw);
+    // Standard C argv contract and plan.md requirement:
+    // capacity is len + 1, and argv[len] is terminated with a NULL pointer.
+    let mut array_buffer: Vec<*mut c_char> = Vec::with_capacity(len + 1);
+    for s in &c_strings {
+        array_buffer.push(s.as_ptr() as *mut c_char);
     }
+    array_buffer.push(std::ptr::null_mut()); // C argv NULL terminator
     let ptr = array_buffer.as_mut_ptr();
 
     with_active_core_args(|registry| {
         registry.insert(
             ptr as usize,
             RegisteredCoreArgs {
-                c_strings,
+                _c_strings: c_strings,
                 array_buffer,
             },
         );
@@ -259,11 +247,11 @@ pub fn free_c_args_impl(ptr: *mut *mut c_char, len: c_int) -> bool {
         }
     };
 
-    if len as usize != entry.c_strings.len() {
+    if len as usize != entry._c_strings.len() {
         log::error!(
             "free_c_args length mismatch: caller specified {}, registered allocation has {}",
             len,
-            entry.c_strings.len()
+            entry._c_strings.len()
         );
         // Put back the entry to maintain tracking and avoid corruption
         with_active_core_args(|registry| {
@@ -272,13 +260,9 @@ pub fn free_c_args_impl(ptr: *mut *mut c_char, len: c_int) -> bool {
         return false;
     }
 
-    // Drop all registered CStrings safely
-    for raw in entry.c_strings {
-        if !raw.is_null() {
-            unsafe { drop(CString::from_raw(raw)) };
-        }
-    }
-    // entry.array_buffer is dropped here with its exact original capacity and allocator layout.
+    // Dropping entry here safely drops:
+    // 1. entry._c_strings (all CString instances freed via RAII)
+    // 2. entry.array_buffer (freed with exact original layout and capacity = len + 1)
     true
 }
 

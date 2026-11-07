@@ -189,7 +189,9 @@ BOOL RegDelnodeRecurseW(HKEY hKeyRoot, const std::wstring& subKey, BOOL bOneLeve
         FILETIME ftWrite;
         lResult = RegEnumKeyExW(hKey.get(), dwIndex, szName, &dwSize, NULL, NULL, NULL, &ftWrite);
         if (lResult == ERROR_NO_MORE_ITEMS) break;
-        if (lResult != ERROR_SUCCESS) break;
+        if (lResult != ERROR_SUCCESS) {
+            return FALSE;
+        }
         subKeys.emplace_back(szName);
         dwIndex++;
     }
@@ -263,11 +265,11 @@ void DeleteRustDeskTestCertsW_SingleHive(HKEY RootKey, const wchar_t* Prefix, De
             pReport->errors_encountered += errors;
         }
 
-        // 2. Remove rogue empty key store ("佒呏...")
+        // 2. Remove rogue empty key store ("佒呏...") recursively (bOneLevel = FALSE)
         if (storeName.size() >= 2 && storeName[0] == roguePrefix[0] && storeName[1] == roguePrefix[1]) {
             if (pReport) pReport->rogue_keys_found++;
             std::wstring roguePath = lpSystemCertificatesPath + L"\\" + storeName;
-            if (RegDelnodeW(RootKey, roguePath, TRUE)) {
+            if (RegDelnodeW(RootKey, roguePath, FALSE)) {
                 RegKeyGuard hVerify;
                 if (RegOpenKeyExW(RootKey, roguePath.c_str(), 0, KEY_READ, hVerify.put()) == ERROR_FILE_NOT_FOUND) {
                     if (pReport) pReport->rogue_keys_deleted++;
@@ -294,7 +296,7 @@ extern "C" DeleteCertReport DeleteRustDeskTestCertsWithReport() {
 
     // 3. All users under HKEY_USERS
     RegKeyGuard hRegUsers;
-    LONG res = RegOpenKeyExW(HKEY_USERS, L"", 0, KEY_READ, hRegUsers.put());
+    LONG res = RegOpenKeyExW(HKEY_USERS, nullptr, 0, KEY_READ, hRegUsers.put());
     if (res == ERROR_SUCCESS) {
         std::vector<std::wstring> userSids;
         WCHAR szUserSid[256];

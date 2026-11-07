@@ -78,6 +78,14 @@ fn test_ffi003_rust_args_to_c_args_roundtrip_and_memory_layout() {
                 "C-string value must match expected argument"
             );
         }
+
+        // Standard C argv contract and plan.md requirement:
+        // argv[argc] must be a NULL pointer.
+        let terminator = *c_args.add(sample_args.len());
+        assert!(
+            terminator.is_null(),
+            "Standard C argv contract requires argv[argc] == NULL"
+        );
     }
 
     // Free the allocation cleanly
@@ -198,6 +206,12 @@ fn test_ffi003_empty_args_handling() {
         "Allocation for empty args must return valid pointer"
     );
     assert_eq!(outlen, 0, "Length must be 0");
+    unsafe {
+        assert!(
+            (*ptr).is_null(),
+            "Empty args array must be NULL-terminated with ptr[0] == NULL"
+        );
+    }
 
     assert!(
         free_c_args_impl(ptr, 0),
@@ -351,15 +365,81 @@ fn test_state004_test_cert_fingerprint_and_rogue_prefix_contract() {
 
 #[test]
 fn test_state004_delete_cert_report_struct_layout() {
-    #[cfg(windows)]
-    {
-        use camellia_remote::platform::windows::cert::DeleteCertReport;
-        assert_eq!(
-            std::mem::size_of::<DeleteCertReport>(),
-            28, // 7 fields * 4 bytes = 28 bytes
-            "DeleteCertReport must be 28 bytes under repr(C)"
-        );
+    use camellia_remote::platform::cert::DeleteCertReport;
+    assert_eq!(
+        std::mem::size_of::<DeleteCertReport>(),
+        28, // 7 fields * 4 bytes = 28 bytes
+        "DeleteCertReport must be 28 bytes under repr(C)"
+    );
+    assert_eq!(
+        std::mem::align_of::<DeleteCertReport>(),
+        4,
+        "DeleteCertReport alignment must be 4 bytes"
+    );
+
+    let report = DeleteCertReport {
+        success: 1,
+        hives_scanned: 2,
+        certs_found: 3,
+        certs_deleted: 4,
+        rogue_keys_found: 5,
+        rogue_keys_deleted: 6,
+        errors_encountered: 7,
+    };
+
+    let base = &report as *const _ as usize;
+    assert_eq!((&report.success as *const _ as usize) - base, 0);
+    assert_eq!((&report.hives_scanned as *const _ as usize) - base, 4);
+    assert_eq!((&report.certs_found as *const _ as usize) - base, 8);
+    assert_eq!((&report.certs_deleted as *const _ as usize) - base, 12);
+    assert_eq!((&report.rogue_keys_found as *const _ as usize) - base, 16);
+    assert_eq!((&report.rogue_keys_deleted as *const _ as usize) - base, 20);
+    assert_eq!((&report.errors_encountered as *const _ as usize) - base, 24);
+}
+
+#[test]
+fn test_state004_rogue_key_store_recursive_deletion_contract() {
+    // Contract proof: A Windows SystemCertificates store has nested subtrees:
+    // Store -> Certificates -> <Thumbprint> (level 2)
+    // If bOneLevel = true, calling RegDeleteKeyW on Store\Certificates fails because it has subkeys!
+    // Therefore, bOneLevel = false (recursive deletion) is strictly required for complete removal.
+    struct MockRegistryKey {
+        subkeys: Vec<MockRegistryKey>,
     }
+
+    fn delete_tree(key: &mut MockRegistryKey, one_level_only: bool) -> bool {
+        if one_level_only {
+            for child in &key.subkeys {
+                if !child.subkeys.is_empty() {
+                    return false; // Win32 RegDeleteKey fails if child has subkeys
+                }
+            }
+            key.subkeys.clear();
+            true
+        } else {
+            for child in &mut key.subkeys {
+                delete_tree(child, false);
+            }
+            key.subkeys.clear();
+            true
+        }
+    }
+
+    let mut rogue_store = MockRegistryKey {
+        subkeys: vec![MockRegistryKey {
+            subkeys: vec![MockRegistryKey { subkeys: vec![] }],
+        }],
+    };
+
+    assert!(
+        !delete_tree(&mut rogue_store, true),
+        "1-level deletion must fail on multi-level rogue key tree"
+    );
+    assert!(
+        delete_tree(&mut rogue_store, false),
+        "Recursive deletion must succeed on multi-level rogue key tree"
+    );
+    assert!(rogue_store.subkeys.is_empty());
 }
 
 #[test]

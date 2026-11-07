@@ -57,7 +57,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // std::cout << "RustDesk [" << args_str << "], core returns false, exiting without launching Flutter app." << std::endl;
     return EXIT_SUCCESS;
   }
-  std::vector<std::string> rust_args(c_args, c_args + args_len);
+  std::vector<std::string> rust_args;
+  rust_args.reserve(args_len);
+  for (int i = 0; i < args_len; ++i) {
+    if (c_args[i] != nullptr) {
+      rust_args.emplace_back(c_args[i]);
+    }
+  }
   free_c_args(c_args, args_len);
   FUNC_RUSTDESK_IS_DISABLE_INSTALLATION rustdesk_is_disable_installation =
       (FUNC_RUSTDESK_IS_DISABLE_INSTALLATION)GetProcAddress(hInstance, "rustdesk_is_disable_installation");
