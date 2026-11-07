@@ -1,406 +1,326 @@
-// https://github.com/rustdesk/rustdesk/discussions/6444#discussioncomment-9010062
-
-#include <iostream>
-#include <Windows.h>
+#include <windows.h>
 #include <strsafe.h>
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include <vector>
 
-BOOL IsCertWdkTestCert(char* lpBlobData, DWORD cchBlobData) {
-	DWORD cchIdxBlobData = 0;
-	DWORD cchIdxTestCertBlob = 0;
-	DWORD cchSizeTestCertBlob = 0;
-#pragma warning(push)
-#pragma warning(disable: 4838)
-#pragma warning(disable: 4309)
-	const char TestCertBlob[] = {
-		0X30, 0X82, 0X03, 0X0C, 0X30, 0X82, 0X01, 0XF4, 0XA0, 0X03, 0X02, 0X01, 0X02, 0X02, 0X10, 0X17,
-		0X93, 0X62, 0X03, 0XFA, 0XCD, 0X37, 0X83, 0X49, 0XE3, 0X33, 0X82, 0XC3, 0X14, 0XEC, 0X83, 0X30,
-		0X0D, 0X06, 0X09, 0X2A, 0X86, 0X48, 0X86, 0XF7, 0X0D, 0X01, 0X01, 0X05, 0X05, 0X00, 0X30, 0X2F,
-		0X31, 0X2D, 0X30, 0X2B, 0X06, 0X03, 0X55, 0X04, 0X03, 0X13, 0X24, 0X57, 0X44, 0X4B, 0X54, 0X65,
-		0X73, 0X74, 0X43, 0X65, 0X72, 0X74, 0X20, 0X61, 0X64, 0X6D, 0X69, 0X6E, 0X2C, 0X31, 0X33, 0X33,
-		0X32, 0X32, 0X35, 0X34, 0X33, 0X35, 0X37, 0X30, 0X32, 0X31, 0X31, 0X33, 0X35, 0X36, 0X37, 0X30,
-		0X1E, 0X17, 0X0D, 0X32, 0X33, 0X30, 0X33, 0X30, 0X36, 0X30, 0X32, 0X33, 0X32, 0X35, 0X31, 0X5A,
-		0X17, 0X0D, 0X33, 0X33, 0X30, 0X33, 0X30, 0X36, 0X30, 0X30, 0X30, 0X30, 0X30, 0X30, 0X5A, 0X30,
-		0X2F, 0X31, 0X2D, 0X30, 0X2B, 0X06, 0X03, 0X55, 0X04, 0X03, 0X13, 0X24, 0X57, 0X44, 0X4B, 0X54,
-		0X65, 0X73, 0X74, 0X43, 0X65, 0X72, 0X74, 0X20, 0X61, 0X64, 0X6D, 0X69, 0X6E, 0X2C, 0X31, 0X33,
-		0X33, 0X32, 0X32, 0X35, 0X34, 0X33, 0X35, 0X37, 0X30, 0X32, 0X31, 0X31, 0X33, 0X35, 0X36, 0X37,
-		0X30, 0X82, 0X01, 0X22, 0X30, 0X0D, 0X06, 0X09, 0X2A, 0X86, 0X48, 0X86, 0XF7, 0X0D, 0X01, 0X01,
-		0X01, 0X05, 0X00, 0X03, 0X82, 0X01, 0X0F, 0X00, 0X30, 0X82, 0X01, 0X0A, 0X02, 0X82, 0X01, 0X01,
-		0X00, 0XB8, 0X65, 0X75, 0XAC, 0XD1, 0X82, 0XFC, 0X3A, 0X08, 0XE4, 0X1D, 0XD9, 0X4D, 0X5A, 0XCD,
-		0X88, 0X2B, 0XDC, 0X00, 0XFD, 0X6B, 0X43, 0X13, 0XED, 0XE2, 0XCB, 0XD1, 0X26, 0X11, 0X22, 0XBF,
-		0X20, 0X31, 0X09, 0X9D, 0X06, 0X47, 0XF5, 0XAA, 0XCE, 0X7B, 0X13, 0X98, 0XE0, 0X76, 0X40, 0XDD,
-		0X2C, 0XCA, 0X98, 0XD1, 0XBB, 0X7F, 0XE2, 0X25, 0XAF, 0X48, 0X3A, 0X4E, 0X9E, 0X24, 0X38, 0X4D,
-		0X04, 0XF0, 0X68, 0XAD, 0X7C, 0X6F, 0XA6, 0XBB, 0XE4, 0X9B, 0XE3, 0X7C, 0X8E, 0X2E, 0X54, 0X7D,
-		0X5E, 0X74, 0XE3, 0XA6, 0X3D, 0XD9, 0X04, 0X22, 0X0A, 0X3E, 0XC7, 0X5C, 0XAB, 0X1F, 0X4D, 0X10,
-		0X06, 0X2A, 0X95, 0X1A, 0X1B, 0X03, 0X20, 0X75, 0X3E, 0X49, 0X36, 0X40, 0X06, 0X63, 0XDB, 0X54,
-		0X74, 0X53, 0X3C, 0X2D, 0X47, 0XE0, 0X82, 0XDD, 0X14, 0X92, 0XCC, 0XF1, 0X1A, 0X5A, 0X7F, 0X5B,
-		0X4F, 0X2E, 0X94, 0X1E, 0XCE, 0X5A, 0X73, 0XD4, 0X70, 0X47, 0XF3, 0X3E, 0X85, 0X5C, 0X62, 0XF5,
-		0X79, 0X0F, 0X4B, 0XB9, 0X69, 0X51, 0X33, 0X05, 0XF1, 0XDF, 0XE5, 0X4E, 0X6E, 0X28, 0XC6, 0X88,
-		0X89, 0X9A, 0XEF, 0X07, 0X62, 0X23, 0X53, 0X6A, 0X16, 0X2B, 0X3A, 0XF7, 0X10, 0X1B, 0X42, 0XCE,
-		0XEE, 0X33, 0XB9, 0X01, 0X30, 0X8A, 0XAB, 0X14, 0X73, 0XC5, 0XC3, 0X94, 0X2D, 0XEB, 0X00, 0XAE,
-		0X73, 0X7B, 0X78, 0X65, 0X8B, 0X8F, 0X44, 0XBD, 0XF8, 0XBC, 0XE8, 0XB3, 0X6A, 0X4E, 0XE3, 0X4F,
-		0X92, 0XE3, 0X72, 0XD9, 0X6D, 0XD1, 0X88, 0X5E, 0X1C, 0XFF, 0X8D, 0XF1, 0X76, 0XBC, 0X37, 0X4B,
-		0X11, 0X48, 0XB5, 0X8D, 0X1D, 0X1C, 0XEC, 0X82, 0X11, 0X50, 0XC6, 0XFF, 0X3A, 0X7E, 0X3A, 0X8C,
-		0X18, 0XF7, 0XA6, 0XEB, 0XAA, 0X26, 0X8E, 0XC6, 0X01, 0X7B, 0X50, 0X6A, 0XFA, 0X33, 0X3C, 0XBE,
-		0X29, 0X02, 0X03, 0X01, 0X00, 0X01, 0XA3, 0X24, 0X30, 0X22, 0X30, 0X0B, 0X06, 0X03, 0X55, 0X1D,
-		0X0F, 0X04, 0X04, 0X03, 0X02, 0X04, 0X30, 0X30, 0X13, 0X06, 0X03, 0X55, 0X1D, 0X25, 0X04, 0X0C,
-		0X30, 0X0A, 0X06, 0X08, 0X2B, 0X06, 0X01, 0X05, 0X05, 0X07, 0X03, 0X03, 0X30, 0X0D, 0X06, 0X09,
-		0X2A, 0X86, 0X48, 0X86, 0XF7, 0X0D, 0X01, 0X01, 0X05, 0X05, 0X00, 0X03, 0X82, 0X01, 0X01, 0X00,
-		0X00, 0X44, 0X78, 0XE3, 0XDB, 0X0C, 0X33, 0X2B, 0X57, 0X52, 0X91, 0XD0, 0X09, 0X80, 0X12, 0XB0,
-		0X11, 0X7C, 0X32, 0XCF, 0X24, 0XA0, 0XA5, 0X47, 0X18, 0XDE, 0XAB, 0X9E, 0X0D, 0X4A, 0X50, 0X6B,
-		0X7B, 0XD3, 0X23, 0X71, 0X32, 0XEE, 0X28, 0X1D, 0XE8, 0X2C, 0X0A, 0XDF, 0X89, 0X87, 0X9D, 0X7E,
-		0XE3, 0X59, 0X05, 0XDD, 0XC2, 0X3C, 0X48, 0XC1, 0XD5, 0X88, 0X2D, 0X60, 0X29, 0XDE, 0XA1, 0X69,
-		0XD8, 0X4E, 0X01, 0XF6, 0XBD, 0XCB, 0X41, 0XDF, 0XDF, 0X5B, 0X3D, 0X3D, 0X59, 0X93, 0X70, 0XD6,
-		0XAC, 0X03, 0X84, 0X5E, 0X2B, 0XB6, 0X62, 0X10, 0X5B, 0XB2, 0X68, 0X97, 0XC7, 0XF9, 0X44, 0X68,
-		0XBC, 0XC3, 0X26, 0XD7, 0XB5, 0X13, 0XBE, 0X0E, 0XE6, 0X7E, 0X74, 0XF0, 0XB9, 0X59, 0X63, 0XE8,
-		0X6E, 0XE2, 0X96, 0X3C, 0XFE, 0X55, 0XB9, 0XAC, 0X1A, 0XB8, 0XC5, 0X98, 0XA9, 0XD3, 0XF5, 0X30,
-		0XCB, 0X9E, 0X43, 0X89, 0X19, 0X9A, 0X5C, 0XB5, 0XFB, 0X76, 0XD5, 0X3B, 0XD4, 0X79, 0X02, 0X98,
-		0XA0, 0XC7, 0X60, 0X96, 0X84, 0X66, 0X79, 0X25, 0XC9, 0XC2, 0X77, 0X54, 0X63, 0XA1, 0X0E, 0X27,
-		0X7B, 0X2E, 0X37, 0XBE, 0X18, 0X99, 0XF6, 0X34, 0XE7, 0XCC, 0XE8, 0XE7, 0XEB, 0XE4, 0XB7, 0X37,
-		0X05, 0X35, 0X77, 0XAD, 0X76, 0XAD, 0X35, 0X84, 0X62, 0XF7, 0X7F, 0X87, 0XAB, 0X29, 0X25, 0X10,
-		0X73, 0XBF, 0X2C, 0X78, 0X93, 0XFF, 0XBF, 0X24, 0XD7, 0X49, 0X74, 0XC5, 0X07, 0X41, 0X17, 0XBA,
-		0X87, 0XBB, 0X4E, 0XB3, 0X8F, 0XF3, 0X75, 0X77, 0X2B, 0X44, 0X7B, 0X0D, 0X18, 0X24, 0X8A, 0XCB,
-		0XCC, 0X67, 0XB4, 0X00, 0XC6, 0X2A, 0XAC, 0XCD, 0X4C, 0X16, 0XF8, 0XB8, 0X61, 0X8D, 0XAF, 0X7B,
-		0XF2, 0X45, 0XE2, 0X63, 0X02, 0X4C, 0XA8, 0XB9, 0XBD, 0XB2, 0X5E, 0XF2, 0X94, 0X8F, 0X30, 0X16
-	};
-#pragma warning(pop)
+extern "C" {
 
-	cchSizeTestCertBlob = sizeof(TestCertBlob) / sizeof(TestCertBlob[0]);
-	if (cchBlobData < cchSizeTestCertBlob) return FALSE;
-	cchIdxBlobData = cchBlobData - cchSizeTestCertBlob;
-	while (cchIdxTestCertBlob < cchSizeTestCertBlob) {
-		if (lpBlobData[cchIdxBlobData] != TestCertBlob[cchIdxTestCertBlob]) {
-			return FALSE;
-		}
-		++cchIdxTestCertBlob;
-		++cchIdxBlobData;
-	}
-	return TRUE;
+struct DeleteCertReport {
+    int32_t success;
+    int32_t hives_scanned;
+    int32_t certs_found;
+    int32_t certs_deleted;
+    int32_t rogue_keys_found;
+    int32_t rogue_keys_deleted;
+    int32_t errors_encountered;
+};
+
+DeleteCertReport DeleteRustDeskTestCertsWithReport();
+int DeleteRustDeskTestCertsW();
+
+} // extern "C"
+
+namespace {
+
+const unsigned char TestCertBlob[] = {
+    0x30, 0x82, 0x03, 0x0C, 0x30, 0x82, 0x01, 0xF4, 0xA0, 0x03, 0x02, 0x01, 0x02, 0x02, 0x10, 0x17,
+    0x93, 0x62, 0x03, 0xFA, 0xCD, 0x37, 0x83, 0x49, 0xE3, 0x33, 0x82, 0xC3, 0x14, 0xEC, 0x83, 0x30,
+    0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05, 0x05, 0x00, 0x30, 0x2F,
+    0x31, 0x2D, 0x30, 0x2B, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x24, 0x57, 0x44, 0x4B, 0x54, 0x65,
+    0x73, 0x74, 0x43, 0x65, 0x72, 0x74, 0x20, 0x61, 0x64, 0x6D, 0x69, 0x6E, 0x2C, 0x31, 0x33, 0x33,
+    0x32, 0x32, 0x35, 0x34, 0x33, 0x35, 0x37, 0x30, 0x32, 0x31, 0x31, 0x33, 0x35, 0x36, 0x37, 0x30,
+    0x1E, 0x17, 0x0D, 0x32, 0x33, 0x30, 0x33, 0x30, 0x36, 0x30, 0x32, 0x33, 0x32, 0x35, 0x31, 0x5A,
+    0x17, 0x0D, 0x33, 0x33, 0x30, 0x33, 0x30, 0x36, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x5A, 0x30,
+    0x2F, 0x31, 0x2D, 0x30, 0x2B, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x24, 0x57, 0x44, 0x4B, 0x54,
+    0x65, 0x73, 0x74, 0x43, 0x65, 0x72, 0x74, 0x20, 0x61, 0x64, 0x6D, 0x69, 0x6E, 0x2C, 0x31, 0x33,
+    0x33, 0x32, 0x32, 0x35, 0x34, 0x33, 0x35, 0x37, 0x30, 0x32, 0x31, 0x31, 0x33, 0x35, 0x36, 0x37,
+    0x30, 0x82, 0x01, 0x22, 0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01,
+    0x01, 0x05, 0x00, 0x03, 0x82, 0x01, 0x0F, 0x00, 0x30, 0x82, 0x01, 0x0A, 0x02, 0x82, 0x01, 0x01,
+    0x00, 0xB8, 0x65, 0x75, 0xAC, 0xD1, 0x82, 0xFC, 0x3A, 0x08, 0xE4, 0x1D, 0xD9, 0x4D, 0x5A, 0xCD,
+    0x88, 0x2B, 0xDC, 0x00, 0xFD, 0x6B, 0x43, 0x13, 0xED, 0xE2, 0xCB, 0xD1, 0x26, 0x11, 0x22, 0xBF,
+    0x20, 0x31, 0x09, 0x9D, 0x06, 0x47, 0xF5, 0xAA, 0xCE, 0x7B, 0x13, 0x98, 0xE0, 0x76, 0x40, 0xDD,
+    0x2C, 0xCA, 0x98, 0xD1, 0xBB, 0x7F, 0xE2, 0x25, 0xAF, 0x48, 0x3A, 0x4E, 0x9E, 0x24, 0x38, 0x4D,
+    0x04, 0xF0, 0x68, 0xAD, 0x7C, 0x6F, 0xA6, 0xBB, 0xE4, 0x9B, 0xE3, 0x7C, 0x8E, 0x2E, 0x54, 0x7D,
+    0x5E, 0x74, 0xE3, 0xA6, 0x3D, 0xD9, 0x04, 0x22, 0x0A, 0x3E, 0xC7, 0x5C, 0xAB, 0x1F, 0x4D, 0x10,
+    0x06, 0x2A, 0x95, 0x1A, 0x1B, 0x03, 0x20, 0x75, 0x3E, 0x49, 0x36, 0x40, 0x06, 0x63, 0xDB, 0x54,
+    0x74, 0x53, 0x3C, 0x2D, 0x47, 0xE0, 0x82, 0xDD, 0x14, 0x92, 0xCC, 0xF1, 0x1A, 0x5A, 0x7F, 0x5B,
+    0x4F, 0x2E, 0x94, 0x1E, 0xCE, 0x5A, 0x73, 0XD4, 0x70, 0x47, 0xF3, 0x3E, 0x85, 0x5C, 0x62, 0xF5,
+    0x79, 0x0F, 0x4B, 0xB9, 0x69, 0x51, 0x33, 0x05, 0xF1, 0xDF, 0xE5, 0x4E, 0x6E, 0x28, 0xC6, 0x88,
+    0x89, 0x9A, 0xEF, 0x07, 0x62, 0x23, 0x53, 0x6A, 0x16, 0x2B, 0x3A, 0xF7, 0x10, 0x1B, 0x42, 0xCE,
+    0xEE, 0x33, 0xB9, 0x01, 0x30, 0x8A, 0xAB, 0x14, 0x73, 0xC5, 0xC3, 0x94, 0x2D, 0xEB, 0x00, 0xAE,
+    0x73, 0x7B, 0x78, 0x65, 0x8B, 0x8F, 0x44, 0xBD, 0xF8, 0xBC, 0xE8, 0xB3, 0x6A, 0x4E, 0xE3, 0x4F,
+    0x92, 0xE3, 0x72, 0xD9, 0x6D, 0xD1, 0x88, 0x5E, 0x1C, 0xFF, 0x8D, 0xF1, 0x76, 0xBC, 0x37, 0x4B,
+    0x11, 0x48, 0xB5, 0x8D, 0x1D, 0x1C, 0xEC, 0x82, 0x11, 0x50, 0xC6, 0xFF, 0x3A, 0x7E, 0x3A, 0x8C,
+    0x18, 0xF7, 0xA6, 0xEB, 0xAA, 0x26, 0x8E, 0xC6, 0x01, 0x7B, 0x50, 0x6A, 0xFA, 0x33, 0x3C, 0xBE,
+    0x29, 0x02, 0x03, 0x01, 0x00, 0x01, 0xA3, 0x24, 0x30, 0x22, 0x30, 0x0B, 0x06, 0x03, 0x55, 0x1D,
+    0x0F, 0x04, 0x04, 0x03, 0x02, 0x04, 0x30, 0x30, 0x13, 0x06, 0x03, 0x55, 0x1D, 0x25, 0x04, 0x0C,
+    0x30, 0x0A, 0x06, 0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03, 0x30, 0x0D, 0x06, 0x09,
+    0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05, 0x05, 0x00, 0x03, 0x82, 0x01, 0x01, 0x00,
+    0x00, 0x44, 0x78, 0xE3, 0xDB, 0x0C, 0x33, 0x2B, 0x57, 0x52, 0x91, 0xD0, 0x09, 0x80, 0x12, 0xB0,
+    0x11, 0x7C, 0x32, 0xCF, 0x24, 0xA0, 0xA5, 0x47, 0x18, 0xDE, 0xAB, 0x9E, 0x0D, 0x4A, 0x50, 0x6B,
+    0x7B, 0xD3, 0x23, 0x71, 0x32, 0xEE, 0x28, 0x1D, 0xE8, 0x2C, 0x0A, 0xDF, 0x89, 0x87, 0x9D, 0x7E,
+    0xE3, 0x59, 0x05, 0xDD, 0XC2, 0x3C, 0x48, 0xC1, 0xD5, 0x88, 0x2D, 0x60, 0x29, 0xDE, 0xA1, 0x69,
+    0xD8, 0x4E, 0x01, 0xF6, 0xBD, 0xCB, 0x41, 0xDF, 0xDF, 0x5B, 0x3D, 0x3D, 0x59, 0x93, 0x70, 0xD6,
+    0xAC, 0x03, 0x84, 0x5E, 0x2B, 0xB6, 0x62, 0x10, 0x5B, 0xB2, 0x68, 0x97, 0xC7, 0xF9, 0x44, 0x68,
+    0xBC, 0XC3, 0x26, 0XD7, 0xB5, 0x13, 0xBE, 0x0E, 0XE6, 0x7E, 0x74, 0xF0, 0xB9, 0x59, 0x63, 0XE8,
+    0x6E, 0XE2, 0x96, 0x3C, 0xFE, 0x55, 0xB9, 0xAC, 0x1A, 0xB8, 0xC5, 0x98, 0xA9, 0xD3, 0xF5, 0x30,
+    0xCB, 0x9E, 0x43, 0x89, 0x19, 0x9A, 0x5C, 0xB5, 0xFB, 0x76, 0xD5, 0x3B, 0xD4, 0x79, 0x02, 0x98,
+    0xA0, 0xC7, 0x60, 0x96, 0x84, 0x66, 0x79, 0x25, 0xC9, 0xC2, 0x77, 0x54, 0x63, 0xA1, 0x0E, 0x27,
+    0x7B, 0x2E, 0x37, 0xBE, 0x18, 0x99, 0xF6, 0x34, 0xE7, 0xCC, 0xE8, 0xE7, 0xEB, 0xE4, 0xB7, 0x37,
+    0x05, 0x35, 0x77, 0xAD, 0x76, 0xAD, 0x35, 0x84, 0x62, 0xF7, 0x7F, 0x87, 0xAB, 0x29, 0x25, 0x10,
+    0x73, 0xBF, 0x2C, 0x78, 0x93, 0xFF, 0xBF, 0x24, 0xD7, 0x49, 0x74, 0xC5, 0x07, 0x41, 0x17, 0xBA,
+    0x87, 0xBB, 0x4E, 0xB3, 0x8F, 0xF3, 0x75, 0x77, 0x2B, 0x44, 0x7B, 0x0D, 0x18, 0x24, 0x8A, 0xCB,
+    0xCC, 0x67, 0xB4, 0x00, 0xC6, 0x2A, 0xAC, 0xCD, 0x4C, 0x16, 0xF8, 0xB8, 0x61, 0x8D, 0xAF, 0x7B,
+    0xF2, 0x45, 0xE2, 0x63, 0x02, 0x4C, 0xA8, 0xB9, 0xBD, 0xB2, 0x5E, 0xF2, 0x94, 0x8F, 0x30, 0x16
+};
+const DWORD cchSizeTestCertBlob = sizeof(TestCertBlob);
+
+// RAII Guard for Windows Registry Keys
+class RegKeyGuard {
+public:
+    explicit RegKeyGuard(HKEY hKey = nullptr) : hKey_(hKey) {}
+    ~RegKeyGuard() { close(); }
+    RegKeyGuard(const RegKeyGuard&) = delete;
+    RegKeyGuard& operator=(const RegKeyGuard&) = delete;
+    RegKeyGuard(RegKeyGuard&& other) noexcept : hKey_(other.hKey_) { other.hKey_ = nullptr; }
+    RegKeyGuard& operator=(RegKeyGuard&& other) noexcept {
+        if (this != &other) {
+            close();
+            hKey_ = other.hKey_;
+            other.hKey_ = nullptr;
+        }
+        return *this;
+    }
+    HKEY get() const { return hKey_; }
+    HKEY* put() { close(); return &hKey_; }
+    bool valid() const { return hKey_ != nullptr; }
+    void close() {
+        if (hKey_) {
+            ::RegCloseKey(hKey_);
+            hKey_ = nullptr;
+        }
+    }
+private:
+    HKEY hKey_{nullptr};
+};
+
+bool IsCertWdkTestCert(const unsigned char* lpBlobData, DWORD cchBlobData) {
+    if (cchBlobData < cchSizeTestCertBlob) return false;
+    DWORD cchIdxBlobData = cchBlobData - cchSizeTestCertBlob;
+    for (DWORD i = 0; i < cchSizeTestCertBlob; ++i) {
+        if (lpBlobData[cchIdxBlobData + i] != TestCertBlob[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
-//*************************************************************
-//
-//  RegDelTestCertW()
-//
-//  Purpose:    Compares and deletes a test cert.
-//
-//  Parameters: hKeyRoot    -   Root key
-//              lpSubKey    -   SubKey to delete
-//
-//  Return:     TRUE if successful.
-//              FALSE if an error occurs.
-//
-//*************************************************************
+BOOL RegDelTestCertW(HKEY hKeyRoot, LPCWSTR lpSubKey, int32_t* pCertsFound, int32_t* pCertsDeleted, int32_t* pErrors) {
+    RegKeyGuard hKey;
+    LONG lResult = RegOpenKeyExW(hKeyRoot, lpSubKey, 0, KEY_READ, hKey.put());
+    if (lResult != ERROR_SUCCESS) {
+        if (lResult == ERROR_FILE_NOT_FOUND) {
+            return TRUE;
+        }
+        if (pErrors) (*pErrors)++;
+        return FALSE;
+    }
 
-BOOL RegDelTestCertW(HKEY hKeyRoot, LPCWSTR lpSubKey)
-{
-	LONG lResult;
-	HKEY hKey;
-	DWORD dValueType;
-	DWORD cchBufferSize = 0;
-	BOOL bRes = FALSE;
+    DWORD dValueType = 0;
+    DWORD cchBufferSize = 0;
+    lResult = RegQueryValueExW(hKey.get(), L"Blob", NULL, &dValueType, NULL, &cchBufferSize);
+    if (lResult != ERROR_SUCCESS || dValueType != REG_BINARY || cchBufferSize == 0) {
+        if (lResult != ERROR_FILE_NOT_FOUND && pErrors) (*pErrors)++;
+        return FALSE;
+    }
 
-	lResult = RegOpenKeyExW(hKeyRoot, lpSubKey, 0, KEY_READ, &hKey);
-	if (lResult != ERROR_SUCCESS) {
-		if (lResult == ERROR_FILE_NOT_FOUND) {
-			return TRUE;
-		}
-		else {
-			//printf("Error opening key.\n");
-			return FALSE;
-		}
-	}
+    std::vector<unsigned char> buffer(cchBufferSize);
+    lResult = RegQueryValueExW(hKey.get(), L"Blob", NULL, &dValueType, buffer.data(), &cchBufferSize);
+    if (lResult != ERROR_SUCCESS) {
+        if (pErrors) (*pErrors)++;
+        return FALSE;
+    }
 
-	do {
-		lResult = RegQueryValueExW(hKey, L"Blob", NULL, &dValueType, NULL, &cchBufferSize);
-		if (lResult == ERROR_SUCCESS) {
-			if (dValueType == REG_BINARY) {
-				LPSTR szBuffer = NULL;
-				LONG readResult = 0;
-				szBuffer = (LPSTR)malloc(cchBufferSize * sizeof(char));
-				if (szBuffer == NULL) {
-					bRes = FALSE;
-					break;
-				}
+    if (!IsCertWdkTestCert(buffer.data(), cchBufferSize)) {
+        return TRUE;
+    }
 
-				lResult = RegQueryValueExW(hKey, L"Blob", NULL, &dValueType, (LPBYTE)szBuffer, &cchBufferSize);
-				if (readResult == ERROR_SUCCESS) {
-					if (IsCertWdkTestCert(szBuffer, cchBufferSize)) {
-						free(szBuffer);
-						lResult = RegDeleteKeyW(hKeyRoot, lpSubKey);
-						if (lResult == ERROR_SUCCESS) {
-							bRes = TRUE;
-						}
-						else {
-							bRes = FALSE;
-						}
+    if (pCertsFound) (*pCertsFound)++;
 
-						break;
-					}
-				}
+    // Close handle before attempting key deletion
+    hKey.close();
 
-				free(szBuffer);
-			}
-		}
-	} while (FALSE);
-	RegCloseKey(hKey);
-	return bRes;
+    lResult = RegDeleteKeyW(hKeyRoot, lpSubKey);
+    if (lResult != ERROR_SUCCESS) {
+        if (pErrors) (*pErrors)++;
+        return FALSE;
+    }
+
+    // Post-deletion verification: confirm key is no longer accessible
+    RegKeyGuard hVerify;
+    LONG vRes = RegOpenKeyExW(hKeyRoot, lpSubKey, 0, KEY_READ, hVerify.put());
+    if (vRes == ERROR_FILE_NOT_FOUND) {
+        if (pCertsDeleted) (*pCertsDeleted)++;
+        return TRUE;
+    } else {
+        if (pErrors) (*pErrors)++;
+        return FALSE;
+    }
 }
 
-//*************************************************************
-//
-//  RegDelnodeRecurseW()
-//
-//  Purpose:    Deletes a registry key and all its subkeys / values.
-//
-//  Parameters: hKeyRoot    -   Root key
-//              lpSubKey    -   SubKey to delete
-//              bOneLevel   -   Delete lpSubKey and its first level subdirectory
-//
-//  Return:     TRUE if successful.
-//              FALSE if an error occurs.
-//
-//  Note:       If bOneLevel is TRUE, only current key and its first level subkeys are deleted.
-//              The first level subkeys are deleted only if they do not have subkeys.
-//
-//              If some subkeys have subkeys, but the previous empty subkeys are deleted.
-//              It's ok for the certificates, because the empty subkeys are not used
-//              and they can be created automatically.
-//
-//*************************************************************
+BOOL RegDelnodeRecurseW(HKEY hKeyRoot, const std::wstring& subKey, BOOL bOneLevel) {
+    // First try deleting directly
+    LONG lResult = RegDeleteKeyW(hKeyRoot, subKey.c_str());
+    if (lResult == ERROR_SUCCESS) return TRUE;
 
-BOOL RegDelnodeRecurseW(HKEY hKeyRoot, LPWSTR lpSubKey, BOOL bOneLevel)
-{
-	LPWSTR lpEnd;
-	LONG lResult;
-	DWORD dwSize;
-	WCHAR szName[MAX_PATH];
-	HKEY hKey;
-	FILETIME ftWrite;
+    RegKeyGuard hKey;
+    lResult = RegOpenKeyExW(hKeyRoot, subKey.c_str(), 0, KEY_READ, hKey.put());
+    if (lResult != ERROR_SUCCESS) {
+        return (lResult == ERROR_FILE_NOT_FOUND) ? TRUE : FALSE;
+    }
 
-	// First, see if we can delete the key without having
-	// to recurse.
+    std::vector<std::wstring> subKeys;
+    WCHAR szName[MAX_PATH];
+    DWORD dwIndex = 0;
+    while (true) {
+        DWORD dwSize = MAX_PATH;
+        FILETIME ftWrite;
+        lResult = RegEnumKeyExW(hKey.get(), dwIndex, szName, &dwSize, NULL, NULL, NULL, &ftWrite);
+        if (lResult == ERROR_NO_MORE_ITEMS) break;
+        if (lResult != ERROR_SUCCESS) break;
+        subKeys.emplace_back(szName);
+        dwIndex++;
+    }
+    hKey.close();
 
-	lResult = RegDeleteKeyW(hKeyRoot, lpSubKey);
+    for (const auto& child : subKeys) {
+        std::wstring childPath = subKey + L"\\" + child;
+        if (bOneLevel) {
+            if (RegDeleteKeyW(hKeyRoot, childPath.c_str()) != ERROR_SUCCESS) {
+                return FALSE;
+            }
+        } else {
+            if (!RegDelnodeRecurseW(hKeyRoot, childPath, bOneLevel)) {
+                return FALSE;
+            }
+        }
+    }
 
-	if (lResult == ERROR_SUCCESS)
-		return TRUE;
-
-	lResult = RegOpenKeyExW(hKeyRoot, lpSubKey, 0, KEY_READ, &hKey);
-
-	if (lResult != ERROR_SUCCESS)
-	{
-		if (lResult == ERROR_FILE_NOT_FOUND) {
-			//printf("Key not found.\n");
-			return TRUE;
-		}
-		else {
-			//printf("Error opening key.\n");
-			return FALSE;
-		}
-	}
-
-	// Check for an ending slash and add one if it is missing.
-
-	lpEnd = lpSubKey + lstrlenW(lpSubKey);
-
-	if (*(lpEnd - 1) != L'\\')
-	{
-		*lpEnd = L'\\';
-		lpEnd++;
-		*lpEnd = L'\0';
-	}
-
-	// Enumerate the keys
-
-	dwSize = MAX_PATH;
-	lResult = RegEnumKeyExW(hKey, 0, szName, &dwSize, NULL,
-		NULL, NULL, &ftWrite);
-
-	if (lResult == ERROR_SUCCESS)
-	{
-		do {
-
-			*lpEnd = L'\0';
-			StringCchCatW(lpSubKey, MAX_PATH * 2, szName);
-
-			if (bOneLevel) {
-				lResult = RegDeleteKeyW(hKeyRoot, lpSubKey);
-				if (lResult != ERROR_SUCCESS) {
-					return FALSE;
-				}
-			}
-			else {
-				if (!RegDelnodeRecurseW(hKeyRoot, lpSubKey, bOneLevel)) {
-					break;
-				}
-			}
-
-			dwSize = MAX_PATH;
-
-			lResult = RegEnumKeyExW(hKey, 0, szName, &dwSize, NULL,
-				NULL, NULL, &ftWrite);
-
-		} while (lResult == ERROR_SUCCESS);
-	}
-
-	lpEnd--;
-	*lpEnd = L'\0';
-
-	RegCloseKey(hKey);
-
-	// Try again to delete the key.
-
-	lResult = RegDeleteKeyW(hKeyRoot, lpSubKey);
-
-	if (lResult == ERROR_SUCCESS)
-		return TRUE;
-
-	return FALSE;
+    lResult = RegDeleteKeyW(hKeyRoot, subKey.c_str());
+    return (lResult == ERROR_SUCCESS);
 }
 
-//*************************************************************
-//
-//  RegDelnodeW()
-//
-//  Purpose:    Deletes a registry key and all its subkeys / values.
-//
-//  Parameters: hKeyRoot    -   Root key
-//              lpSubKey    -   SubKey to delete
-//              bOneLevel   -   Delete lpSubKey and its first level subdirectory
-//
-//  Return:     TRUE if successful.
-//              FALSE if an error occurs.
-//
-//*************************************************************
-
-BOOL RegDelnodeW(HKEY hKeyRoot, LPCWSTR lpSubKey, BOOL bOneLevel)
-{
-	//return FALSE; // For Testing
-
-	WCHAR szDelKey[MAX_PATH * 2];
-
-	StringCchCopyW(szDelKey, MAX_PATH * 2, lpSubKey);
-	return RegDelnodeRecurseW(hKeyRoot, szDelKey, bOneLevel);
+BOOL RegDelnodeW(HKEY hKeyRoot, const std::wstring& subKey, BOOL bOneLevel) {
+    return RegDelnodeRecurseW(hKeyRoot, subKey, bOneLevel);
 }
 
-//*************************************************************
-//
-//  DeleteRustDeskTestCertsW_SingleHive()
-//
-//  Purpose:    Deletes RustDesk Test certificates and wrong key stores
-//
-//  Parameters: RootKey     -   Root key
-//              Prefix      -   SID if RootKey=HKEY_USERS
-//
-//  Return:     TRUE if successful.
-//              FALSE if an error occurs.
-//
-//*************************************************************
+void DeleteRustDeskTestCertsW_SingleHive(HKEY RootKey, const wchar_t* Prefix, DeleteCertReport* pReport) {
+    if (pReport) pReport->hives_scanned++;
 
-BOOL DeleteRustDeskTestCertsW_SingleHive(HKEY RootKey, LPWSTR Prefix = NULL) {
-	// WDKTestCert to be removed from all stores
-	LPCWSTR lpCertFingerPrint = L"D1DBB672D5A500B9809689CAEA1CE49E799767F0";
+    const wchar_t* lpCertFingerPrint = L"D1DBB672D5A500B9809689CAEA1CE49E799767F0";
+    const wchar_t roguePrefix[2] = { 0x4F52, 0x544F }; // "ROOT" ANSI misread as UTF-16 ("佒呏")
 
-	// Wrong key stores to be removed completely
-	LPCSTR RootName = "ROOT";
-	LPWSTR SubKeyPrefix = (LPWSTR)RootName; // sic! Convert of ANSI to UTF-16
+    std::wstring lpSystemCertificatesPath;
+    if (Prefix == nullptr || Prefix[0] == L'\0') {
+        lpSystemCertificatesPath = L"Software\\Microsoft\\SystemCertificates";
+    } else {
+        lpSystemCertificatesPath = std::wstring(Prefix) + L"\\Software\\Microsoft\\SystemCertificates";
+    }
 
-	LPWSTR lpSystemCertificatesPath = (LPWSTR)malloc(512 * sizeof(WCHAR));
-	if (lpSystemCertificatesPath == 0) return FALSE;
-	if (Prefix == NULL) {
-		wsprintfW(lpSystemCertificatesPath, L"Software\\Microsoft\\SystemCertificates");
-	}
-	else {
-		wsprintfW(lpSystemCertificatesPath, L"%s\\Software\\Microsoft\\SystemCertificates", Prefix);
-	}
+    RegKeyGuard hRegSystemCertificates;
+    LONG res = RegOpenKeyExW(RootKey, lpSystemCertificatesPath.c_str(), 0, KEY_READ, hRegSystemCertificates.put());
+    if (res != ERROR_SUCCESS) {
+        if (res != ERROR_FILE_NOT_FOUND && pReport) {
+            pReport->errors_encountered++;
+        }
+        return;
+    }
 
-	HKEY hRegSystemCertificates;
-	LONG res = RegOpenKeyExW(RootKey, lpSystemCertificatesPath, NULL, KEY_ALL_ACCESS, &hRegSystemCertificates);
-	if (res != ERROR_SUCCESS)
-		return FALSE;
+    std::vector<std::wstring> storeNames;
+    WCHAR szStoreName[256];
+    for (DWORD index = 0; ; index++) {
+        DWORD cchStoreName = 256;
+        res = RegEnumKeyExW(hRegSystemCertificates.get(), index, szStoreName, &cchStoreName, NULL, NULL, NULL, NULL);
+        if (res == ERROR_NO_MORE_ITEMS) break;
+        if (res != ERROR_SUCCESS) {
+            if (pReport) pReport->errors_encountered++;
+            break;
+        }
+        storeNames.emplace_back(szStoreName);
+    }
+    hRegSystemCertificates.close();
 
-	for (DWORD Index = 0; ; Index++) {
-		LPWSTR SubKeyName = (LPWSTR)malloc(255 * sizeof(WCHAR));
-		if (SubKeyName == 0) break;
-		DWORD cName = 255;
-		LONG res = RegEnumKeyExW(hRegSystemCertificates, Index, SubKeyName, &cName, NULL, NULL, NULL, NULL);
-		if ((res != ERROR_SUCCESS) || (SubKeyName == NULL))
-			break;
+    for (const auto& storeName : storeNames) {
+        // 1. Remove test certificate from store
+        std::wstring certPath = lpSystemCertificatesPath + L"\\" + storeName + L"\\Certificates\\" + lpCertFingerPrint;
+        int32_t found = 0, deleted = 0, errors = 0;
+        RegDelTestCertW(RootKey, certPath.c_str(), &found, &deleted, &errors);
+        if (pReport) {
+            pReport->certs_found += found;
+            pReport->certs_deleted += deleted;
+            pReport->errors_encountered += errors;
+        }
 
-		// Remove test certificate
-		LPWSTR Complete = (LPWSTR)malloc(512 * sizeof(WCHAR));
-		if (Complete == 0) break;
-		wsprintfW(Complete, L"%s\\%s\\Certificates\\%s", lpSystemCertificatesPath, SubKeyName, lpCertFingerPrint);
-		// std::wcout << "Try delete from: " << SubKeyName << std::endl;
-		RegDelTestCertW(RootKey, Complete);
-		free(Complete);
-
-		// "佒呏..." key begins with "ROOT" encoded as UTF-16
-		if ((SubKeyName[0] == SubKeyPrefix[0]) && (SubKeyName[1] == SubKeyPrefix[1])) {
-			// Remove wrong empty key store
-			{
-				LPWSTR Complete = (LPWSTR)malloc(512 * sizeof(WCHAR));
-				if (Complete == 0) break;
-				wsprintfW(Complete, L"%s\\%s", lpSystemCertificatesPath, SubKeyName);
-				if (RegDelnodeW(RootKey, Complete, TRUE)) {
-					//std::wcout << "Rogue Key Deleted! \"" << Complete << "\"" << std::endl; // TODO: Why does this break the console?
-					std::cout << "Rogue key is deleted!" << std::endl;
-					Index--; // Because index has moved due to the deletion
-				}
-				else {
-					std::cout << "Rogue key deletion failed!" << std::endl;
-				}
-				free(Complete);
-			}
-		}
-
-		free(SubKeyName);
-	}
-	RegCloseKey(hRegSystemCertificates);
-	return TRUE;
+        // 2. Remove rogue empty key store ("佒呏...")
+        if (storeName.size() >= 2 && storeName[0] == roguePrefix[0] && storeName[1] == roguePrefix[1]) {
+            if (pReport) pReport->rogue_keys_found++;
+            std::wstring roguePath = lpSystemCertificatesPath + L"\\" + storeName;
+            if (RegDelnodeW(RootKey, roguePath, TRUE)) {
+                RegKeyGuard hVerify;
+                if (RegOpenKeyExW(RootKey, roguePath.c_str(), 0, KEY_READ, hVerify.put()) == ERROR_FILE_NOT_FOUND) {
+                    if (pReport) pReport->rogue_keys_deleted++;
+                } else {
+                    if (pReport) pReport->errors_encountered++;
+                }
+            } else {
+                if (pReport) pReport->errors_encountered++;
+            }
+        }
+    }
 }
 
-//*************************************************************
-//
-//  DeleteRustDeskTestCertsW()
-//
-//  Purpose:    Deletes RustDesk Test certificates and wrong key stores
-//
-//  Parameters: None
-//
-//  Return:     None
-//
-//*************************************************************
+} // namespace
 
-extern "C" void DeleteRustDeskTestCertsW() {
-	// Current user
-	std::wcout << "*** Current User" << std::endl;
-	DeleteRustDeskTestCertsW_SingleHive(HKEY_CURRENT_USER);
+extern "C" DeleteCertReport DeleteRustDeskTestCertsWithReport() {
+    DeleteCertReport report = {1, 0, 0, 0, 0, 0, 0};
 
-	// Local machine (requires admin rights)
-	std::wcout << "*** Local Machine" << std::endl;
-	DeleteRustDeskTestCertsW_SingleHive(HKEY_LOCAL_MACHINE);
+    // 1. Current user
+    DeleteRustDeskTestCertsW_SingleHive(HKEY_CURRENT_USER, nullptr, &report);
 
-	// Iterate through all users (requires admin rights)
-	LPCWSTR lpRoot = L"";
-	HKEY hRegUsers;
-	LONG res = RegOpenKeyExW(HKEY_USERS, lpRoot, NULL, KEY_READ, &hRegUsers);
-	if (res != ERROR_SUCCESS) return;
-	for (DWORD Index = 0; ; Index++) {
-		LPWSTR SubKeyName = (LPWSTR)malloc(255 * sizeof(WCHAR));
-		if (SubKeyName == 0) break;
-		DWORD cName = 255;
-		LONG res = RegEnumKeyExW(hRegUsers, Index, SubKeyName, &cName, NULL, NULL, NULL, NULL);
-		if ((res != ERROR_SUCCESS) || (SubKeyName == NULL))
-			break;
-		std::wcout << "*** User: " << SubKeyName << std::endl;
-		DeleteRustDeskTestCertsW_SingleHive(HKEY_USERS, SubKeyName);
-	}
-	RegCloseKey(hRegUsers);
+    // 2. Local machine
+    DeleteRustDeskTestCertsW_SingleHive(HKEY_LOCAL_MACHINE, nullptr, &report);
+
+    // 3. All users under HKEY_USERS
+    RegKeyGuard hRegUsers;
+    LONG res = RegOpenKeyExW(HKEY_USERS, L"", 0, KEY_READ, hRegUsers.put());
+    if (res == ERROR_SUCCESS) {
+        std::vector<std::wstring> userSids;
+        WCHAR szUserSid[256];
+        for (DWORD index = 0; ; index++) {
+            DWORD cchUserSid = 256;
+            res = RegEnumKeyExW(hRegUsers.get(), index, szUserSid, &cchUserSid, NULL, NULL, NULL, NULL);
+            if (res == ERROR_NO_MORE_ITEMS) break;
+            if (res != ERROR_SUCCESS) break;
+            userSids.emplace_back(szUserSid);
+        }
+        hRegUsers.close();
+
+        for (const auto& sid : userSids) {
+            DeleteRustDeskTestCertsW_SingleHive(HKEY_USERS, sid.c_str(), &report);
+        }
+    }
+
+    if (report.errors_encountered > 0 ||
+        (report.certs_found != report.certs_deleted) ||
+        (report.rogue_keys_found != report.rogue_keys_deleted)) {
+        report.success = 0;
+    }
+    return report;
 }
 
-//  int main()
-//  {
-//  	DeleteRustDeskTestCertsW();
-//  	return 0;
-//  }
+extern "C" int DeleteRustDeskTestCertsW() {
+    DeleteCertReport report = DeleteRustDeskTestCertsWithReport();
+    return (report.success != 0 && report.errors_encountered == 0) ? 0 : 1;
+}

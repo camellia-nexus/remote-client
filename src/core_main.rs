@@ -341,7 +341,10 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             } else if args[0] == "--uninstall-cert" {
                 #[cfg(windows)]
-                camellia_remote_protocol::allow_err!(crate::platform::windows::uninstall_cert());
+                if let Err(e) = crate::platform::windows::uninstall_cert() {
+                    log::error!("Failed to uninstall cert: {e:?}");
+                    std::process::exit(1);
+                }
                 return None;
             } else if args[0] == "--install-idd" {
                 #[cfg(windows)]

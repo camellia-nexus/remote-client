@@ -45,14 +45,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
-  // Remove possible trailing whitespace from command line arguments
-  for (auto& argument : command_line_arguments) {
-    argument.erase(argument.find_last_not_of(" \n\r\t"));
-  }
 
   int args_len = 0;
   char** c_args = camellia_remote_core_main(&args_len);
-  if (!c_args)
+  if (!c_args || args_len < 0)
   {
     std::string args_str = "";
     for (const auto& argument : command_line_arguments) {
@@ -130,12 +126,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   flutter::DartProject project(L"data");
   // connection manager hide icon from taskbar
   bool is_cm_page = false;
-  auto cmParam = std::string("--cm");
-  if (!command_line_arguments.empty() && command_line_arguments.front().compare(0, cmParam.size(), cmParam.c_str()) == 0) {
+  const auto cmParam = std::string("--cm");
+  if (!command_line_arguments.empty() && command_line_arguments.front() == cmParam) {
     is_cm_page = true;
   }
   bool is_install_page = false;
-  if (!command_line_arguments.empty() && command_line_arguments.front().compare(0, installParam.size(), installParam.c_str()) == 0) {
+  if (!command_line_arguments.empty() && command_line_arguments.front() == installParam) {
     is_install_page = true;
   }
 

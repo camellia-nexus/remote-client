@@ -2892,17 +2892,43 @@ pub fn uninstall_cert() -> ResultType<()> {
     cert::uninstall_cert()
 }
 
-mod cert {
-    use camellia_remote_protocol::ResultType;
+pub fn uninstall_cert_report() -> ResultType<cert::DeleteCertReport> {
+    cert::uninstall_cert_report()
+}
+
+pub mod cert {
+    use camellia_remote_protocol::{bail, ResultType};
+
+    #[repr(C)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+    pub struct DeleteCertReport {
+        pub success: i32,
+        pub hives_scanned: i32,
+        pub certs_found: i32,
+        pub certs_deleted: i32,
+        pub rogue_keys_found: i32,
+        pub rogue_keys_deleted: i32,
+        pub errors_encountered: i32,
+    }
 
     extern "C" {
-        fn DeleteRustDeskTestCertsW();
+        fn DeleteRustDeskTestCertsWithReport() -> DeleteCertReport;
+        fn DeleteRustDeskTestCertsW() -> std::os::raw::c_int;
     }
-    pub fn uninstall_cert() -> ResultType<()> {
-        unsafe {
-            DeleteRustDeskTestCertsW();
+
+    pub fn uninstall_cert_report() -> ResultType<DeleteCertReport> {
+        let report = unsafe { DeleteRustDeskTestCertsWithReport() };
+        if report.success == 0 || report.errors_encountered > 0 {
+            bail!(
+                "Windows test cert uninstallation failed or encountered errors: {:?}",
+                report
+            );
         }
-        Ok(())
+        Ok(report)
+    }
+
+    pub fn uninstall_cert() -> ResultType<()> {
+        uninstall_cert_report().map(|_| ())
     }
 }
 

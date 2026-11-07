@@ -121,75 +121,166 @@ pub extern "C" fn handle_applicationShouldOpenUntitledFile() {
     crate::platform::macos::handle_application_should_open_untitled_file();
 }
 
-#[cfg(windows)]
-#[no_mangle]
-pub extern "C" fn camellia_remote_core_main_args(args_len: *mut c_int) -> *mut *mut c_char {
-    unsafe { std::ptr::write(args_len, 0) };
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        if let Some(args) = crate::core_main::core_main() {
-            return rust_args_to_c_args(args, args_len);
-        }
-        return std::ptr::null_mut() as _;
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    return std::ptr::null_mut() as _;
+#[derive(Debug)]
+#[allow(dead_code)]
+struct RegisteredCoreArgs {
+    c_strings: Vec<*mut c_char>,
+    array_buffer: Vec<*mut c_char>,
 }
 
-#[cfg(windows)]
+unsafe impl Send for RegisteredCoreArgs {}
+
+// Global registry of active allocations created by rust_args_to_c_args.
+// Keyed by the raw pointer returned to C (as usize).
+static ACTIVE_CORE_ARGS: std::sync::Mutex<Option<HashMap<usize, RegisteredCoreArgs>>> =
+    std::sync::Mutex::new(None);
+
+fn with_active_core_args<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut HashMap<usize, RegisteredCoreArgs>) -> R,
+{
+    static INIT: std::sync::Once = std::sync::Once::new();
+    let mut lock = ACTIVE_CORE_ARGS.lock().unwrap_or_else(|p| p.into_inner());
+    INIT.call_once(|| {
+        if lock.is_none() {
+            *lock = Some(HashMap::new());
+        }
+    });
+    if lock.is_none() {
+        *lock = Some(HashMap::new());
+    }
+    f(lock.as_mut().unwrap())
+}
+
+#[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub extern "C" fn camellia_remote_core_main_args(args_len: *mut c_int) -> *mut *mut c_char {
+    if args_len.is_null() {
+        log::error!("camellia_remote_core_main_args called with NULL args_len pointer");
+        return std::ptr::null_mut();
+    }
+    unsafe { std::ptr::write(args_len, 0) };
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            if let Some(args) = crate::core_main::core_main() {
+                return rust_args_to_c_args(args, args_len);
+            }
+            std::ptr::null_mut()
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        std::ptr::null_mut()
+    }));
+    match res {
+        Ok(ptr) => ptr,
+        Err(err) => {
+            log::error!("Panic caught in camellia_remote_core_main_args: {:?}", err);
+            if !args_len.is_null() {
+                unsafe { std::ptr::write(args_len, 0) };
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn rustdesk_is_disable_installation() -> c_int {
     camellia_remote_protocol::config::is_disable_installation() as c_int
 }
 
-// https://gist.github.com/iskakaushik/1c5b8aa75c77479c33c4320913eebef6
-#[cfg(windows)]
-fn rust_args_to_c_args(args: Vec<String>, outlen: *mut c_int) -> *mut *mut c_char {
-    let mut v = vec![];
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn rust_args_to_c_args(args: Vec<String>, outlen: *mut c_int) -> *mut *mut c_char {
+    if outlen.is_null() {
+        log::error!("rust_args_to_c_args received NULL outlen pointer");
+        return std::ptr::null_mut();
+    }
+    unsafe { std::ptr::write(outlen, 0) };
 
-    // Let's fill a vector with null-terminated strings
+    // Validate and convert strings
+    let mut c_strings = Vec::with_capacity(args.len());
     for s in args {
         match CString::new(s) {
-            Ok(s) => v.push(s),
-            Err(_) => return std::ptr::null_mut() as _,
+            Ok(cs) => c_strings.push(cs.into_raw()),
+            Err(err) => {
+                log::error!("rust_args_to_c_args encountered string containing embedded NUL: {:?}", err);
+                for raw in c_strings {
+                    if !raw.is_null() {
+                        unsafe { drop(CString::from_raw(raw)) };
+                    }
+                }
+                return std::ptr::null_mut();
+            }
         }
     }
 
-    // Turning each null-terminated string into a pointer.
-    // `into_raw` takes ownershop, gives us the pointer and does NOT drop the data.
-    let mut out = v.into_iter().map(|s| s.into_raw()).collect::<Vec<_>>();
+    let len = c_strings.len();
+    // Ensure we allocate non-zero capacity so as_mut_ptr() yields a distinct, non-dangling heap pointer
+    let mut array_buffer: Vec<*mut c_char> = Vec::with_capacity(len.max(1));
+    for &raw in &c_strings {
+        array_buffer.push(raw);
+    }
+    let ptr = array_buffer.as_mut_ptr();
 
-    // Make sure we're not wasting space.
-    out.shrink_to_fit();
-    debug_assert!(out.len() == out.capacity());
+    with_active_core_args(|registry| {
+        registry.insert(
+            ptr as usize,
+            RegisteredCoreArgs {
+                c_strings,
+                array_buffer,
+            },
+        );
+    });
 
-    // Get the pointer to our vector.
-    let len = out.len();
-    let ptr = out.as_mut_ptr();
-    std::mem::forget(out);
-
-    // Let's write back the length the caller can expect
     unsafe { std::ptr::write(outlen, len as c_int) };
-
-    // Finally return the data
     ptr
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn free_c_args_impl(ptr: *mut *mut c_char, len: c_int) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    if len < 0 {
+        log::warn!("free_c_args called with negative length: {}", len);
+        return false;
+    }
+    let entry_opt = with_active_core_args(|registry| registry.remove(&(ptr as usize)));
+    let entry = match entry_opt {
+        Some(e) => e,
+        None => {
+            log::warn!("free_c_args called with untracked, forged, or double-freed pointer: {:p}", ptr);
+            return false;
+        }
+    };
+
+    if len as usize != entry.c_strings.len() {
+        log::error!(
+            "free_c_args length mismatch: caller specified {}, registered allocation has {}",
+            len,
+            entry.c_strings.len()
+        );
+        // Put back the entry to maintain tracking and avoid corruption
+        with_active_core_args(|registry| {
+            registry.insert(ptr as usize, entry);
+        });
+        return false;
+    }
+
+    // Drop all registered CStrings safely
+    for raw in entry.c_strings {
+        if !raw.is_null() {
+            unsafe { drop(CString::from_raw(raw)) };
+        }
+    }
+    // entry.array_buffer is dropped here with its exact original capacity and allocator layout.
+    true
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn free_c_args(ptr: *mut *mut c_char, len: c_int) {
-    let len = len as usize;
-
-    // Get back our vector.
-    // Previously we shrank to fit, so capacity == length.
-    let v = Vec::from_raw_parts(ptr, len, len);
-
-    // Now drop one string at a time.
-    for elem in v {
-        let s = CString::from_raw(elem);
-        std::mem::drop(s);
-    }
-
-    // Afterwards the vector will be dropped and thus freed.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        free_c_args_impl(ptr, len);
+    }));
 }
 
 #[cfg(windows)]
