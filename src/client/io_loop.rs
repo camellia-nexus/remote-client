@@ -8,7 +8,7 @@ use crate::{
         VideoQueue, VideoQueuePushResult, MAX_DISPLAY_DECODERS, MILLI1, SEC30,
     },
     common::get_default_sound_input,
-    ui_session_interface::{InvokeUiSession, Session},
+    ui_session_interface::{InvokeUiSession, OutboundDispatcher, OutboundReceiver, Session},
 };
 
 // Empirical no-data window before exposing the restart reconnect state to the UI.
@@ -136,8 +136,8 @@ impl Drop for VoiceCallWorker {
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
     audio_worker: Option<AudioWorker>,
-    receiver: mpsc::UnboundedReceiver<Data>,
-    sender: mpsc::UnboundedSender<Data>,
+    receiver: OutboundReceiver,
+    sender: Arc<OutboundDispatcher>,
     voice_call_worker: Option<VoiceCallWorker>,
     voice_call_request_timestamp: Option<NonZeroI64>,
     read_jobs: Vec<fs::TransferJob>,
@@ -180,8 +180,8 @@ impl ParsedPeerInfo {
 impl<T: InvokeUiSession> Remote<T> {
     pub fn new(
         handler: Session<T>,
-        receiver: mpsc::UnboundedReceiver<Data>,
-        sender: mpsc::UnboundedSender<Data>,
+        receiver: OutboundReceiver,
+        sender: Arc<OutboundDispatcher>,
     ) -> Self {
         Self {
             handler,
@@ -245,16 +245,33 @@ impl<T: InvokeUiSession> Remote<T> {
             ConnType::default()
         };
 
-        match Client::start(
-            &self.handler.get_id(),
-            key,
-            token,
-            conn_type,
-            self.handler.clone(),
-        )
-        .await
-        {
+        let cancel_token = self
+            .handler
+            .connection_round_state
+            .lock()
+            .unwrap()
+            .cancel_token();
+
+        let id = self.handler.get_id();
+        let start_res = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                log::info!("Connection round {} cancelled before start completed", round);
+                self.handle_disconnected(round);
+                return;
+            }
+            res = Client::start(
+                &id,
+                key,
+                token,
+                conn_type,
+                self.handler.clone(),
+            ) => res,
+        };
+
+        match start_res {
             Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+                // RES-034: Set 10-second send timeout on peer stream
+                peer.set_send_timeout(10_000);
                 self.handler
                     .connection_round_state
                     .lock()
@@ -319,6 +336,10 @@ impl<T: InvokeUiSession> Remote<T> {
 
                 loop {
                     tokio::select! {
+                        _ = cancel_token.cancelled() => {
+                            log::info!("Connection round {} cancelled; breaking io_loop immediately", round);
+                            break;
+                        }
                         res = peer.next() => {
                             if let Some(res) = res {
                                 match res {
@@ -351,6 +372,10 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         d = self.receiver.recv() => {
                             if let Some(d) = d {
+                                if self.handler.connection_round_state.lock().unwrap().is_round_gt(round) {
+                                    log::warn!("Dropping UI message for stale round {}", round);
+                                    break;
+                                }
                                 if !self.handle_msg_from_ui(d, &mut peer).await {
                                     break;
                                 }

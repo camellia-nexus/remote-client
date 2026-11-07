@@ -8,6 +8,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use camellia_remote_protocol::protobuf::Message as _;
+use camellia_remote_protocol::tokio_util::sync::CancellationToken;
 use camellia_remote_protocol::{
     bail,
     config::{Config, LocalConfig, PeerConfig},
@@ -25,7 +27,7 @@ use rdev::{Event, EventType::*, KeyCode};
 #[cfg(all(feature = "vram", feature = "flutter"))]
 use std::ffi::c_void;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::{Deref, DerefMut},
     str::FromStr,
     sync::{
@@ -37,6 +39,7 @@ use std::{
 use uuid::Uuid;
 
 use crate::client::io_loop::Remote;
+use crate::client::DataReceiver;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
     input_os_password, send_mouse, send_pointer_device_event, FileManager, Key, LoginConfigHandler,
@@ -50,12 +53,255 @@ use crate::{client::Data, client::Interface};
 const CHANGE_RESOLUTION_VALID_TIMEOUT_SECS: u64 = 15;
 const AUDIT_PROTOCOL_VERSION: u64 = 3;
 
+// RES-034: Controller Outbound Dispatcher limits
+pub const MAX_OUTBOUND_QUEUE_MESSAGES: usize = 256;
+pub const MAX_OUTBOUND_QUEUE_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
+
+#[inline]
+pub fn is_coalesceable_mouse(data: &Data) -> bool {
+    if let Data::Message(ref msg) = data {
+        if msg.has_mouse_event() {
+            let mask = msg.mouse_event().mask;
+            return (mask & crate::common::input::MOUSE_TYPE_MASK)
+                == crate::common::input::MOUSE_TYPE_MOVE;
+        }
+    }
+    false
+}
+
+#[inline]
+pub fn is_coalesceable_touch(data: &Data) -> bool {
+    if let Data::Message(ref msg) = data {
+        if msg.has_pointer_device_event() {
+            let pde = msg.pointer_device_event();
+            if pde.has_touch_event() {
+                return pde.touch_event().has_pan_update();
+            }
+        }
+    }
+    false
+}
+
+#[inline]
+pub fn is_urgent(data: &Data) -> bool {
+    matches!(
+        data,
+        Data::Close
+            | Data::Login(_)
+            | Data::NewRDP
+            | Data::ContinueInsecureConnection
+            | Data::RejectInsecureConnection
+    )
+}
+
+#[inline]
+pub fn data_size(data: &Data) -> usize {
+    let base = std::mem::size_of::<Data>();
+    match data {
+        Data::Message(msg) => base + msg.compute_size() as usize,
+        Data::Login((u, p, pw, _)) => base + u.len() + p.len() + pw.len(),
+        Data::SendFiles((_, _, s1, s2, _, _, _)) => base + s1.len() + s2.len(),
+        Data::RemoveDirAll((_, s, _, _))
+        | Data::RemoveDir((_, s, _))
+        | Data::RemoveFile((_, s, _, _))
+        | Data::CreateDir((_, s, _)) => base + s.len(),
+        Data::RemoveDirResult((_, err)) => base + err.as_ref().map(|s| s.len()).unwrap_or(0),
+        Data::AddPortForward((_, s, _)) => base + s.len(),
+        Data::ElevateWithLogon(s1, s2) => base + s1.len() + s2.len(),
+        Data::RenameFile((_, s1, s2, _)) => base + s1.len() + s2.len(),
+        Data::TakeScreenshot((_, s)) => base + s.len(),
+        _ => base,
+    }
+}
+
+pub struct OutboundDispatcherInner {
+    pub urgent_queue: VecDeque<Data>,
+    pub normal_queue: VecDeque<Data>,
+    pub current_bytes: usize,
+    pub closed: bool,
+}
+
+pub struct OutboundDispatcher {
+    inner: Mutex<OutboundDispatcherInner>,
+    notify: tokio::sync::Notify,
+}
+
+impl OutboundDispatcher {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(OutboundDispatcherInner {
+                urgent_queue: VecDeque::new(),
+                normal_queue: VecDeque::new(),
+                current_bytes: 0,
+                closed: false,
+            }),
+            notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    pub fn send(&self, data: Data) -> Result<(), ()> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return Err(());
+        }
+
+        if is_urgent(&data) {
+            inner.urgent_queue.push_back(data);
+            self.notify.notify_one();
+            return Ok(());
+        }
+
+        let is_mouse = is_coalesceable_mouse(&data);
+        let is_touch = is_coalesceable_touch(&data);
+        let is_coalesceable = is_mouse || is_touch;
+        let incoming_size = data_size(&data);
+
+        // If tail of queue is same coalesceable type, replace in-place
+        if is_coalesceable {
+            let should_coalesce = if let Some(last) = inner.normal_queue.back() {
+                (is_mouse && is_coalesceable_mouse(last))
+                    || (is_touch && is_coalesceable_touch(last))
+            } else {
+                false
+            };
+            if should_coalesce {
+                if let Some(old) = inner.normal_queue.pop_back() {
+                    let prev_size = data_size(&old);
+                    inner.current_bytes =
+                        inner.current_bytes.saturating_sub(prev_size) + incoming_size;
+                    inner.normal_queue.push_back(data);
+                    self.notify.notify_one();
+                    return Ok(());
+                }
+            }
+        }
+
+        // Check capacity bounds
+        while inner.normal_queue.len() >= MAX_OUTBOUND_QUEUE_MESSAGES
+            || inner.current_bytes + incoming_size > MAX_OUTBOUND_QUEUE_BYTES
+        {
+            // First try to head-drop any stale coalesceable event
+            if let Some(pos) = inner
+                .normal_queue
+                .iter()
+                .position(|item| is_coalesceable_mouse(item) || is_coalesceable_touch(item))
+            {
+                let dropped = inner.normal_queue.remove(pos).unwrap();
+                let sz = data_size(&dropped);
+                inner.current_bytes = inner.current_bytes.saturating_sub(sz);
+                continue;
+            }
+
+            // If incoming is coalesceable and queue is still saturated, reject it
+            if is_coalesceable {
+                log::debug!("Outbound queue saturated, dropping incoming coalesceable event");
+                return Ok(());
+            }
+
+            // Head-drop oldest normal message
+            if let Some(dropped) = inner.normal_queue.pop_front() {
+                let sz = data_size(&dropped);
+                inner.current_bytes = inner.current_bytes.saturating_sub(sz);
+            } else {
+                break;
+            }
+        }
+
+        inner.current_bytes += incoming_size;
+        inner.normal_queue.push_back(data);
+        self.notify.notify_one();
+        Ok(())
+    }
+
+    pub fn clear_stale(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        let dropped = inner.urgent_queue.len() + inner.normal_queue.len();
+        if dropped > 0 {
+            log::info!(
+                "Clearing {} stale outbound messages on session reconnect",
+                dropped
+            );
+        }
+        inner.urgent_queue.clear();
+        inner.normal_queue.clear();
+        inner.current_bytes = 0;
+    }
+
+    pub fn close(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.closed = true;
+        self.notify.notify_waiters();
+    }
+
+    pub async fn recv(&self) -> Option<Data> {
+        loop {
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(urgent) = inner.urgent_queue.pop_front() {
+                    return Some(urgent);
+                }
+                if let Some(normal) = inner.normal_queue.pop_front() {
+                    let sz = data_size(&normal);
+                    inner.current_bytes = inner.current_bytes.saturating_sub(sz);
+                    return Some(normal);
+                }
+                if inner.closed {
+                    return None;
+                }
+            }
+            self.notify.notified().await;
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        let inner = self.inner.lock().unwrap();
+        inner.urgent_queue.len() + inner.normal_queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn current_bytes(&self) -> usize {
+        self.inner.lock().unwrap().current_bytes
+    }
+}
+
+impl Default for OutboundDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct OutboundReceiver {
+    dispatcher: Arc<OutboundDispatcher>,
+}
+
+impl OutboundReceiver {
+    pub fn new(dispatcher: Arc<OutboundDispatcher>) -> Self {
+        Self { dispatcher }
+    }
+
+    pub async fn recv(&mut self) -> Option<Data> {
+        self.dispatcher.recv().await
+    }
+}
+
+#[async_trait]
+impl DataReceiver for OutboundReceiver {
+    async fn recv(&mut self) -> Option<Data> {
+        self.dispatcher.recv().await
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Session<T: InvokeUiSession> {
     pub password: String,
     pub args: Vec<String>,
     pub lc: Arc<RwLock<LoginConfigHandler>>,
     pub sender: Arc<RwLock<Option<mpsc::UnboundedSender<Data>>>>,
+    pub outbound_dispatcher: Arc<RwLock<Arc<OutboundDispatcher>>>,
     pub thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
     pub ui_handler: T,
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
@@ -96,13 +342,20 @@ enum ConnectionState {
 pub struct ConnectionRoundState {
     round: u32,
     state: ConnectionState,
+    pub cancel_token: CancellationToken,
 }
 
 impl ConnectionRoundState {
     pub fn new_round(&mut self) -> u32 {
+        self.cancel_token.cancel();
+        self.cancel_token = CancellationToken::new();
         self.round += 1;
         self.state = ConnectionState::Connecting;
         self.round
+    }
+
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
     }
 
     pub fn set_connected(&mut self) {
@@ -136,6 +389,7 @@ impl Default for ConnectionRoundState {
         Self {
             round: 0,
             state: ConnectionState::Connecting,
+            cancel_token: CancellationToken::new(),
         }
     }
 }
@@ -1247,7 +1501,45 @@ impl<T: InvokeUiSession> Session<T> {
         let round = connection_round_state_lock.new_round();
         drop(connection_round_state_lock);
 
+        // RES-034: Create a fresh dispatcher for the new round and close the old one so stale round receivers cannot steal messages
+        let old_dispatcher = {
+            let mut lock = self.outbound_dispatcher.write().unwrap();
+            let old = lock.clone();
+            *lock = Arc::new(OutboundDispatcher::new());
+            old
+        };
+        old_dispatcher.close();
+
         let cloned = self.clone();
+
+        // RES-034: Join the previous thread with a 1.5s deadline to prevent leaking OS threads/sockets
+        let prev_thread = self.thread.lock().unwrap().take();
+        if let Some(handle) = prev_thread {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let joiner = std::thread::spawn(move || {
+                let res = handle.join();
+                let _ = tx.send(res);
+            });
+            const THREAD_JOIN_DEADLINE: std::time::Duration =
+                std::time::Duration::from_millis(1500);
+            match rx.recv_timeout(THREAD_JOIN_DEADLINE) {
+                Ok(Ok(())) => {
+                    let _ = joiner.join();
+                    log::debug!("Previous session thread joined cleanly");
+                }
+                Ok(Err(_panic)) => {
+                    let _ = joiner.join();
+                    log::warn!("Previous session thread panicked on join");
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    log::warn!(
+                        "Previous session thread join exceeded deadline of {:?}; detached",
+                        THREAD_JOIN_DEADLINE
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+            }
+        }
 
         // override only if true
         if true == force_relay {
@@ -1256,8 +1548,6 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.write().unwrap().peer_info = None;
         self.reconnect_count.fetch_add(1, Ordering::SeqCst);
         let mut lock = self.thread.lock().unwrap();
-        // No need to join the previous thread, because it will exit automatically.
-        // And the previous thread will not change important states.
         *lock = Some(std::thread::spawn(move || {
             io_loop(cloned, round);
         }));
@@ -1660,8 +1950,12 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     }
 
     fn send(&self, data: Data) {
-        if let Some(sender) = self.sender.read().unwrap().as_ref() {
-            sender.send(data).ok();
+        if self.is_port_forward() {
+            if let Some(sender) = self.sender.read().unwrap().as_ref() {
+                sender.send(data).ok();
+            }
+        } else {
+            self.outbound_dispatcher.read().unwrap().send(data).ok();
         }
     }
 
@@ -1925,6 +2219,9 @@ pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
         }
         return;
     }
+    let dispatcher = handler.outbound_dispatcher.read().unwrap().clone();
+    let receiver = OutboundReceiver::new(dispatcher.clone());
+    let sender = dispatcher;
     let mut remote = Remote::new(handler, receiver, sender);
     remote.io_loop(&key, &token, round).await;
     let _ = remote.sync_jobs_status_to_local().await;

@@ -831,6 +831,10 @@ pub fn create_shortcut(_id: String) {
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn discover() {
+    if crate::lan::is_discovering() {
+        log::debug!("LAN discovery already in progress, skipping duplicate thread spawn");
+        return;
+    }
     std::thread::spawn(move || {
         allow_err!(crate::lan::discover());
     });

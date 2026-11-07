@@ -10,18 +10,51 @@ use camellia_remote_protocol::{
     rendezvous_proto::*,
     tokio::{
         self,
-        sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        sync::mpsc::{channel, Receiver, Sender},
     },
     ResultType,
 };
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket},
+    sync::Arc,
     time::Instant,
 };
 
 type Message = RendezvousMessage;
+
+// RES-035: LAN Discovery Lifecycle and Resource Bounds
+pub const DISCOVERY_DEADLINE: std::time::Duration = std::time::Duration::from_millis(3000);
+pub const MAX_DISCOVERY_PACKETS: usize = 512;
+pub const MAX_DISCOVERED_PEERS: usize = 128;
+pub const DISCOVERY_CHANNEL_CAPACITY: usize = 64;
+pub const MAX_PEER_ID_LEN: usize = 32;
+pub const MAX_MAC_LEN: usize = 64;
+pub const MAX_HOSTNAME_LEN: usize = 64;
+pub const MAX_USERNAME_LEN: usize = 64;
+pub const MAX_PLATFORM_LEN: usize = 32;
+
+lazy_static::lazy_static! {
+    static ref DISCOVERY_MANAGER: std::sync::Mutex<Option<Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>>> =
+        std::sync::Mutex::new(None);
+}
+
+pub fn is_discovering() -> bool {
+    DISCOVERY_MANAGER.lock().unwrap().is_some()
+}
+
+/// Clamps a string to at most `max_bytes` without panicking on multi-byte UTF-8 char boundaries.
+#[inline]
+pub fn clamp_utf8(s: &mut String, max_bytes: usize) {
+    if s.len() > max_bytes {
+        let mut idx = max_bytes;
+        while idx > 0 && !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        s.truncate(idx);
+    }
+}
 
 #[cfg(not(target_os = "ios"))]
 pub(super) fn start_listening() -> ResultType<()> {
@@ -73,11 +106,60 @@ pub(super) fn start_listening() -> ResultType<()> {
     }
 }
 
+pub fn discover() -> ResultType<()> {
+    let (waiter, is_leader) = {
+        let mut mgr = DISCOVERY_MANAGER.lock().unwrap();
+        if let Some(ref coordinator) = *mgr {
+            (coordinator.clone(), false)
+        } else {
+            let coordinator = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+            *mgr = Some(coordinator.clone());
+            (coordinator, true)
+        }
+    };
+
+    if !is_leader {
+        log::info!("LAN discovery already in progress, awaiting existing execution");
+        let (lock, cvar) = &*waiter;
+        let mut completed = lock.lock().unwrap();
+        while !*completed {
+            completed = cvar.wait(completed).unwrap();
+        }
+        return Ok(());
+    }
+
+    struct DiscoveryGuard;
+    impl Drop for DiscoveryGuard {
+        fn drop(&mut self) {
+            let coordinator = {
+                let mut mgr = DISCOVERY_MANAGER.lock().unwrap();
+                mgr.take()
+            };
+            if let Some(coord) = coordinator {
+                let (lock, cvar) = &*coord;
+                let mut completed = lock.lock().unwrap();
+                *completed = true;
+                cvar.notify_all();
+            }
+        }
+    }
+    let _guard = DiscoveryGuard;
+
+    discover_impl()
+}
+
 #[tokio::main(flavor = "current_thread")]
-pub async fn discover() -> ResultType<()> {
+async fn discover_impl() -> ResultType<()> {
     let sockets = send_query()?;
-    let rx = spawn_wait_responses(sockets);
+    let deadline = Instant::now() + DISCOVERY_DEADLINE;
+    let (rx, worker_handles) = spawn_wait_responses(sockets, deadline);
+
+    // Drain and process responses directly on current thread to prevent bounded channel deadlock
     handle_received_peers(rx).await?;
+
+    for handle in worker_handles {
+        let _ = handle.join();
+    }
 
     log::info!("discover ping done");
     Ok(())
@@ -220,34 +302,59 @@ fn send_query() -> ResultType<Vec<UdpSocket>> {
 
 fn wait_response(
     socket: UdpSocket,
-    timeout: Option<std::time::Duration>,
-    tx: UnboundedSender<config::DiscoveryPeer>,
+    deadline: Instant,
+    tx: Sender<config::DiscoveryPeer>,
 ) -> ResultType<()> {
-    let mut last_recv_time = Instant::now();
-
     let local_addr = socket.local_addr();
     let try_get_ip_by_peer = match local_addr.as_ref() {
         Err(..) => true,
         Ok(addr) => addr.ip().is_unspecified(),
     };
     let mut mac: Option<String> = None;
+    let mut packet_count: usize = 0;
 
-    socket.set_read_timeout(timeout)?;
     loop {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let read_timeout = std::cmp::min(remaining, std::time::Duration::from_millis(10));
+        socket.set_read_timeout(Some(read_timeout))?;
+
         let mut buf = [0; 2048];
         if let Ok((len, addr)) = socket.recv_from(&mut buf) {
+            packet_count += 1;
+            if packet_count > MAX_DISCOVERY_PACKETS {
+                log::warn!(
+                    "Reached MAX_DISCOVERY_PACKETS ({}), stopping wait_response for socket",
+                    MAX_DISCOVERY_PACKETS
+                );
+                break;
+            }
+
             if let Ok(msg_in) = Message::parse_from_bytes(&buf[0..len]) {
                 match msg_in.union {
                     Some(rendezvous_message::Union::PeerDiscovery(p)) => {
-                        last_recv_time = Instant::now();
                         if p.cmd == "pong" {
-                            if !crate::common::is_valid_untrusted_peer_id(&p.id) {
+                            if !crate::common::is_valid_untrusted_peer_id(&p.id)
+                                || p.id.len() > MAX_PEER_ID_LEN
+                            {
                                 log::warn!(
-                                    "Ignoring LAN discovery response from {} with invalid peer id",
+                                    "Ignoring LAN discovery response from {} with invalid or oversized peer id",
                                     addr
                                 );
                                 continue;
                             }
+
+                            let mut peer_mac = p.mac;
+                            clamp_utf8(&mut peer_mac, MAX_MAC_LEN);
+                            let mut hostname = p.hostname;
+                            clamp_utf8(&mut hostname, MAX_HOSTNAME_LEN);
+                            let mut username = p.username;
+                            clamp_utf8(&mut username, MAX_USERNAME_LEN);
+                            let mut platform = p.platform;
+                            clamp_utf8(&mut platform, MAX_PLATFORM_LEN);
 
                             let local_mac = if try_get_ip_by_peer {
                                 if let Some(self_addr) = get_ipaddr_by_peer(&addr) {
@@ -270,17 +377,18 @@ fn wait_response(
                                 }
                             };
 
-                            if local_mac.is_empty() && p.mac.is_empty() || local_mac != p.mac {
-                                allow_err!(tx.send(config::DiscoveryPeer {
-                                    id: p.id.clone(),
-                                    ip_mac: HashMap::from([
-                                        (addr.ip().to_string(), p.mac.clone(),)
-                                    ]),
-                                    username: p.username.clone(),
-                                    hostname: p.hostname.clone(),
-                                    platform: p.platform.clone(),
+                            if (local_mac.is_empty() && peer_mac.is_empty())
+                                || local_mac != peer_mac
+                            {
+                                let discovery_peer = config::DiscoveryPeer {
+                                    id: p.id,
+                                    ip_mac: HashMap::from([(addr.ip().to_string(), peer_mac)]),
+                                    username,
+                                    hostname,
+                                    platform,
                                     online: true,
-                                }));
+                                };
+                                let _ = tx.blocking_send(discovery_peer);
                             }
                         }
                     }
@@ -288,63 +396,80 @@ fn wait_response(
                 }
             }
         }
-        if last_recv_time.elapsed().as_millis() > 3_000 {
-            break;
-        }
     }
     Ok(())
 }
 
-fn spawn_wait_responses(sockets: Vec<UdpSocket>) -> UnboundedReceiver<config::DiscoveryPeer> {
-    let (tx, rx) = unbounded_channel::<_>();
+fn spawn_wait_responses(
+    sockets: Vec<UdpSocket>,
+    deadline: Instant,
+) -> (
+    Receiver<config::DiscoveryPeer>,
+    Vec<std::thread::JoinHandle<()>>,
+) {
+    let (tx, rx) = channel::<config::DiscoveryPeer>(DISCOVERY_CHANNEL_CAPACITY);
+    let mut handles = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let tx_clone = tx.clone();
-        std::thread::spawn(move || {
-            allow_err!(wait_response(
-                socket,
-                Some(std::time::Duration::from_millis(10)),
-                tx_clone
-            ));
+        let handle = std::thread::spawn(move || {
+            allow_err!(wait_response(socket, deadline, tx_clone));
         });
+        handles.push(handle);
     }
-    rx
+    drop(tx);
+    (rx, handles)
 }
 
-async fn handle_received_peers(mut rx: UnboundedReceiver<config::DiscoveryPeer>) -> ResultType<()> {
-    let mut peers = config::LanPeers::load().peers;
-    peers.iter_mut().for_each(|peer| {
-        peer.online = false;
-    });
+async fn handle_received_peers(mut rx: Receiver<config::DiscoveryPeer>) -> ResultType<()> {
+    let mut peer_map: HashMap<String, config::DiscoveryPeer> =
+        HashMap::with_capacity(MAX_DISCOVERED_PEERS);
 
-    let mut response_set = HashSet::new();
-    let mut last_write_time: Option<Instant> = None;
-    loop {
-        tokio::select! {
-            data = rx.recv() => match data {
-                Some(mut peer) => {
-                    let in_response_set = !response_set.insert(peer.id.clone());
-                    if let Some(pos) = peers.iter().position(|x| x.is_same_peer(&peer) ) {
-                        let peer1 = peers.remove(pos);
-                        if in_response_set {
-                            peer.ip_mac.extend(peer1.ip_mac);
-                            peer.online = true;
-                        }
-                    }
-                    peers.insert(0, peer);
-                    if last_write_time.map(|t| t.elapsed().as_millis() > 300).unwrap_or(true)  {
-                        config::LanPeers::store(&peers);
-                        #[cfg(feature = "flutter")]
-                        crate::flutter_ffi::main_load_lan_peers();
-                        last_write_time = Some(Instant::now());
-                    }
+    for mut peer in config::LanPeers::load().peers {
+        peer.online = false;
+        peer_map.insert(peer.id.clone(), peer);
+    }
+
+    while let Some(peer) = rx.recv().await {
+        if peer_map.len() >= MAX_DISCOVERED_PEERS && !peer_map.contains_key(&peer.id) {
+            // Evict an offline peer first to allow newly discovered online peers
+            if let Some(offline_id) =
+                peer_map
+                    .iter()
+                    .find_map(|(id, p)| if !p.online { Some(id.clone()) } else { None })
+            {
+                peer_map.remove(&offline_id);
+            } else {
+                log::warn!(
+                    "Reached MAX_DISCOVERED_PEERS ({}) with all peers online, dropping extra peer {}",
+                    MAX_DISCOVERED_PEERS,
+                    peer.id
+                );
+                continue;
+            }
+        }
+
+        match peer_map.get_mut(&peer.id) {
+            Some(existing) => {
+                existing.ip_mac.extend(peer.ip_mac);
+                existing.online = true;
+                if !peer.username.is_empty() {
+                    existing.username = peer.username;
                 }
-                None => {
-                    break
+                if !peer.hostname.is_empty() {
+                    existing.hostname = peer.hostname;
                 }
+                if !peer.platform.is_empty() {
+                    existing.platform = peer.platform;
+                }
+            }
+            None => {
+                peer_map.insert(peer.id.clone(), peer);
             }
         }
     }
 
+    let mut peers: Vec<config::DiscoveryPeer> = peer_map.into_values().collect();
+    peers.sort_by(|a, b| b.online.cmp(&a.online));
     config::LanPeers::store(&peers);
     #[cfg(feature = "flutter")]
     crate::flutter_ffi::main_load_lan_peers();

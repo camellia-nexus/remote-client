@@ -303,6 +303,7 @@ struct Session {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct StartCmIpcPara {
     rx_to_cm: mpsc::UnboundedReceiver<ipc::Data>,
+    rx_to_cm_data: mpsc::Receiver<ipc::Data>,
     tx_from_cm: mpsc::UnboundedSender<ipc::Data>,
     rx_desktop_ready: mpsc::Receiver<()>,
     tx_cm_stream_ready: mpsc::Sender<()>,
@@ -407,6 +408,9 @@ pub struct Connection {
     port_forward_socket: Option<Framed<TcpStream, BytesCodec>>,
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    tx_to_cm_data: mpsc::Sender<ipc::Data>,
+    pub inflight_write_blocks: HashMap<i32, usize>,
     authorized: bool,
     require_2fa: Option<totp_rs::TOTP>,
     keyboard: bool,
@@ -596,6 +600,9 @@ impl Connection {
         // holding tx_from_cm_holder to avoid cpu burning of rx_from_cm.recv when all sender closed
         let tx_from_cm = tx_from_cm_holder.clone();
         let (tx_to_cm, rx_to_cm) = mpsc::unbounded_channel::<ipc::Data>();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let (tx_to_cm_data, rx_to_cm_data) =
+            mpsc::channel::<ipc::Data>(ipc::MAX_INFLIGHT_FILE_BLOCKS_PER_JOB * 16);
         let (tx, mut rx) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_input, _rx_input) = std_mpsc::sync_channel(INPUT_CHANNEL_CAPACITY);
@@ -638,6 +645,9 @@ impl Connection {
             port_forward_socket: None,
             port_forward_address: "".to_owned(),
             tx_to_cm,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            tx_to_cm_data,
+            inflight_write_blocks: HashMap::new(),
             authorized: false,
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
@@ -691,6 +701,7 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             start_cm_ipc_para: Some(StartCmIpcPara {
                 rx_to_cm,
+                rx_to_cm_data,
                 tx_from_cm,
                 rx_desktop_ready,
                 tx_cm_stream_ready,
@@ -1028,6 +1039,11 @@ impl Connection {
                                 conn.handle_file_block_from_cm(id, file_num, blk_id, data, compressed).await;
                             }
                         }
+                        ipc::Data::FileBlockAck { id, file_num: _, blk_id: _, conn_id } => {
+                            if conn_id == conn.inner.id() || conn_id == 0 {
+                                conn.handle_file_block_ack(id);
+                            }
+                        }
                         ipc::Data::FileTransferAudit {
                             id,
                             total_size,
@@ -1091,7 +1107,7 @@ impl Connection {
                         _ => {}
                     }
                 },
-                res = conn.stream.next() => {
+                res = conn.stream.next(), if conn.can_receive_from_peer() => {
                     if let Some(res) = res {
                         match res {
                             Err(err) => {
@@ -3272,7 +3288,32 @@ impl Connection {
 
     #[inline]
     fn send_to_cm(&mut self, data: ipc::Data) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let ipc::Data::FS(ipc::FS::WriteBlock { .. }) = data {
+            if let Err(mpsc::error::TrySendError::Full(data)) = self.tx_to_cm_data.try_send(data) {
+                // If bounded data channel is full, fall back to tx_to_cm so block is NEVER dropped
+                self.tx_to_cm.send(data).ok();
+            }
+            return;
+        }
         self.tx_to_cm.send(data).ok();
+    }
+
+    #[inline]
+    pub fn can_receive_from_peer(&self) -> bool {
+        !self
+            .inflight_write_blocks
+            .values()
+            .any(|&count| count >= ipc::MAX_INFLIGHT_FILE_BLOCKS_PER_JOB)
+    }
+
+    pub fn handle_file_block_ack(&mut self, job_id: i32) {
+        if let Some(count) = self.inflight_write_blocks.get_mut(&job_id) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                self.inflight_write_blocks.remove(&job_id);
+            }
+        }
     }
 
     #[inline]
@@ -3634,6 +3675,7 @@ impl Connection {
                 let tx_from_cm_clone = p.tx_from_cm.clone();
                 if let Err(err) = start_ipc(
                     p.rx_to_cm,
+                    p.rx_to_cm_data,
                     p.tx_from_cm,
                     p.rx_desktop_ready,
                     p.tx_cm_stream_ready,
@@ -4717,6 +4759,7 @@ impl Connection {
                                 )));
                             }
                             Some(file_action::Union::Cancel(c)) => {
+                                self.inflight_write_blocks.remove(&c.id);
                                 self.send_fs(ipc::FS::CancelWrite { id: c.id });
                                 let _ = self.cm_read_job_ids.remove(&c.id);
                                 self.send_fs(ipc::FS::CancelRead {
@@ -4800,6 +4843,9 @@ impl Connection {
                     }
                     match fr.union {
                         Some(file_response::Union::Block(block)) => {
+                            let job_id = block.id;
+                            let count = self.inflight_write_blocks.entry(job_id).or_insert(0);
+                            *count += 1;
                             self.send_fs(ipc::FS::WriteBlock {
                                 id: block.id,
                                 file_num: block.file_num,
@@ -4809,6 +4855,7 @@ impl Connection {
                             });
                         }
                         Some(file_response::Union::Done(d)) => {
+                            self.inflight_write_blocks.remove(&d.id);
                             self.send_fs(ipc::FS::WriteDone {
                                 id: d.id,
                                 file_num: d.file_num,
@@ -4825,6 +4872,7 @@ impl Connection {
                             })
                         }
                         Some(file_response::Union::Error(e)) => {
+                            self.inflight_write_blocks.remove(&e.id);
                             self.send_fs(ipc::FS::WriteError {
                                 id: e.id,
                                 file_num: e.file_num,
@@ -6373,6 +6421,7 @@ impl Connection {
         let data = ipc::Data::Close;
         self.tx_to_cm.send(data).ok();
         self.port_forward_socket.take();
+        self.inflight_write_blocks.clear();
     }
 
     // The `reason` should be consistent with `check_if_retry` if not empty
@@ -6453,6 +6502,7 @@ impl Connection {
         data: bytes::Bytes,
         compressed: bool,
     ) {
+        let conn_id = self.inner.id();
         // Check if the job is still valid (not cancelled)
         if !self.cm_read_job_ids.contains(&id) {
             log::debug!(
@@ -6460,6 +6510,12 @@ impl Connection {
                 id,
                 file_num
             );
+            self.send_to_cm(ipc::Data::FileBlockAck {
+                id,
+                file_num,
+                blk_id,
+                conn_id,
+            });
             return;
         }
 
@@ -6468,7 +6524,7 @@ impl Connection {
         block.id = id;
         block.file_num = file_num;
         block.blk_id = blk_id;
-        block.data = data.to_vec().into();
+        block.data = data; // RES-033: Zero-copy Bytes move, eliminates wasteful data.to_vec().into()
         block.compressed = compressed;
 
         let mut msg = Message::new();
@@ -6476,6 +6532,13 @@ impl Connection {
         fr.set_block(block);
         msg.set_file_response(fr);
         self.send(msg).await;
+
+        self.send_to_cm(ipc::Data::FileBlockAck {
+            id,
+            file_num,
+            blk_id,
+            conn_id,
+        });
     }
 
     async fn handle_file_read_done(&mut self, id: i32, file_num: i32) {
@@ -7552,6 +7615,7 @@ pub fn remove_pending_switch_sides_uuid(id: &str, uuid: &uuid::Uuid) -> bool {
 // - Start CM when missing, then bridge bidirectional messages between this task and CM IPC.
 async fn start_ipc(
     mut rx_to_cm: mpsc::UnboundedReceiver<ipc::Data>,
+    mut rx_to_cm_data: mpsc::Receiver<ipc::Data>,
     tx_from_cm: mpsc::UnboundedSender<ipc::Data>,
     mut _rx_desktop_ready: mpsc::Receiver<()>,
     tx_stream_ready: mpsc::Sender<()>,
@@ -7717,6 +7781,55 @@ async fn start_ipc(
     let mut stream = stream.ok_or(anyhow!("none stream"))?;
     loop {
         tokio::select! {
+            biased;
+            // RES-033: Control messages to CM (highest priority: Close, Cancel, Login, Ack)
+            res = rx_to_cm.recv() => {
+                match res {
+                    Some(data) => {
+                        if let Data::FS(ipc::FS::WriteBlock {
+                            id,
+                            file_num,
+                            blk_id,
+                            data,
+                            compressed,
+                        }) = data {
+                            stream
+                                .send(&Data::FS(ipc::FS::WriteBlock {
+                                    id,
+                                    file_num,
+                                    blk_id,
+                                    data: Bytes::new(),
+                                    compressed,
+                                }))
+                                .await?;
+                            stream.send_raw(data).await?;
+                        } else {
+                            stream.send(&data).await?;
+                        }
+                    }
+                    None => {
+                        bail!("expected");
+                    }
+                }
+            }
+            // RES-033: Bounded data blocks to CM (prevents control message starvation)
+            res = rx_to_cm_data.recv() => {
+                match res {
+                    Some(data) => {
+                        if let Data::FS(ipc::FS::WriteBlock{id,
+                            file_num,
+                            blk_id,
+                            data,
+                            compressed}) = data {
+                                stream.send(&Data::FS(ipc::FS::WriteBlock{id, file_num, blk_id, data: Bytes::new(), compressed})).await?;
+                                stream.send_raw(data).await?;
+                        } else {
+                            stream.send(&data).await?;
+                        }
+                    }
+                    None => {}
+                }
+            }
             res = stream.next() => {
                 match res {
                     Err(err) => {
@@ -7753,25 +7866,6 @@ async fn start_ipc(
                         }
                     }
                     _ => {}
-                }
-            }
-            res = rx_to_cm.recv() => {
-                match res {
-                    Some(data) => {
-                        if let Data::FS(ipc::FS::WriteBlock{id,
-                            file_num,
-                            blk_id,
-                            data,
-                            compressed}) = data {
-                                stream.send(&Data::FS(ipc::FS::WriteBlock{id, file_num, blk_id, data: Bytes::new(), compressed})).await?;
-                                stream.send_raw(data).await?;
-                        } else {
-                            stream.send(&data).await?;
-                        }
-                    }
-                    None => {
-                        bail!("expected");
-                    }
                 }
             }
         }
@@ -8010,6 +8104,7 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        self.inflight_write_blocks.clear();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::child_process::terminate_session_children(
             self.inner.id,

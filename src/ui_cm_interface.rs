@@ -153,6 +153,87 @@ pub struct Client {
     tx: UnboundedSender<Data>,
 }
 
+/// RES-033: In-flight block and byte credit tracker for CM-side file reading.
+#[derive(Default, Debug, Clone)]
+pub struct InflightReadTracker {
+    jobs: HashMap<i32, JobInflight>,
+    total_bytes: usize,
+}
+
+#[derive(Default, Debug, Clone)]
+struct JobInflight {
+    blocks: HashMap<u32, usize>, // blk_id -> bytes
+    total_bytes: usize,
+}
+
+impl InflightReadTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if reading a new block for `job_id` is permitted under byte & block credits.
+    pub fn can_read_block(&self, job_id: i32) -> bool {
+        if self.total_bytes >= ipc::MAX_INFLIGHT_FILE_BYTES_TOTAL {
+            return false;
+        }
+        if let Some(job) = self.jobs.get(&job_id) {
+            if job.blocks.len() >= ipc::MAX_INFLIGHT_FILE_BLOCKS_PER_JOB {
+                return false;
+            }
+            if job.total_bytes >= ipc::MAX_INFLIGHT_FILE_BYTES_PER_JOB {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Record that a block was read and queued for transmission.
+    pub fn record_block_sent(&mut self, job_id: i32, blk_id: u32, bytes: usize) {
+        let job = self.jobs.entry(job_id).or_default();
+        job.blocks.insert(blk_id, bytes);
+        job.total_bytes = job.total_bytes.saturating_add(bytes);
+        self.total_bytes = self.total_bytes.saturating_add(bytes);
+    }
+
+    /// Decrement in-flight count for a job when FileBlockAck is received from Connection.
+    pub fn record_ack(&mut self, job_id: i32, blk_id: u32) {
+        if let Some(job) = self.jobs.get_mut(&job_id) {
+            if let Some(bytes) = job.blocks.remove(&blk_id) {
+                job.total_bytes = job.total_bytes.saturating_sub(bytes);
+                self.total_bytes = self.total_bytes.saturating_sub(bytes);
+            }
+            if job.blocks.is_empty() && job.total_bytes == 0 {
+                self.jobs.remove(&job_id);
+            }
+        }
+    }
+
+    /// Clear in-flight tracking immediately when a job completes, errors, or is cancelled.
+    pub fn remove_job(&mut self, job_id: i32) {
+        if let Some(job) = self.jobs.remove(&job_id) {
+            self.total_bytes = self.total_bytes.saturating_sub(job.total_bytes);
+        }
+    }
+
+    /// Reset all permits and in-flight counters.
+    pub fn clear(&mut self) {
+        self.jobs.clear();
+        self.total_bytes = 0;
+    }
+
+    pub fn inflight_blocks_for_job(&self, job_id: i32) -> usize {
+        self.jobs.get(&job_id).map(|j| j.blocks.len()).unwrap_or(0)
+    }
+
+    pub fn inflight_bytes_for_job(&self, job_id: i32) -> usize {
+        self.jobs.get(&job_id).map(|j| j.total_bytes).unwrap_or(0)
+    }
+
+    pub fn total_inflight_bytes(&self) -> usize {
+        self.total_bytes
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct IpcTaskRunner<T: InvokeUiCM> {
     stream: Connection,
@@ -168,6 +249,7 @@ struct IpcTaskRunner<T: InvokeUiCM> {
     file_transfer_enabled_peer: bool,
     /// Read jobs for CM-side file reading (server to client transfers)
     read_jobs: Vec<fs::TransferJob>,
+    inflight_read_tracker: InflightReadTracker,
 }
 
 lazy_static::lazy_static! {
@@ -618,11 +700,24 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                         }
                                     }
                                 }
+                                Data::FileBlockAck { id, file_num: _, blk_id, conn_id } => {
+                                    if conn_id == self.conn_id || self.conn_id == 0 {
+                                        self.inflight_read_tracker.record_ack(id, blk_id);
+                                        if !self.read_jobs.is_empty() {
+                                            file_timer = crate::rustdesk_interval(time::interval(MILLI5));
+                                        }
+                                    }
+                                }
                                 Data::FS(mut fs) => {
+                                    if let ipc::FS::CancelRead { id, .. } = fs {
+                                        self.inflight_read_tracker.remove_job(id);
+                                    }
                                     if let ipc::FS::WriteBlock { id, file_num, blk_id, data: _, compressed } = fs {
                                         if let Ok(bytes) = self.stream.next_raw().await {
                                             fs = ipc::FS::WriteBlock{id, file_num, blk_id, data:bytes.into(), compressed};
                                             handle_fs(fs, &mut write_jobs, &mut self.read_jobs, &self.tx, Some(&tx_log), self.conn_id).await;
+                                            // RES-033: Acknowledge write block completion back to Connection
+                                            allow_err!(self.tx.send(Data::FileBlockAck { id, file_num, blk_id, conn_id: self.conn_id }));
                                         }
                                     } else {
                                         handle_fs(fs, &mut write_jobs, &mut self.read_jobs, &self.tx, Some(&tx_log), self.conn_id).await;
@@ -814,7 +909,7 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                 _ = file_timer.tick() => {
                     if !self.read_jobs.is_empty() {
                         let conn_id = self.conn_id;
-                        if let Err(e) = handle_read_jobs_tick(&mut self.read_jobs, &self.tx, conn_id).await {
+                        if let Err(e) = handle_read_jobs_tick(&mut self.read_jobs, &self.tx, conn_id, &mut self.inflight_read_tracker).await {
                             log::error!("Error processing read jobs: {}", e);
                         }
                         let log = fs::serialize_transfer_jobs(&self.read_jobs);
@@ -843,11 +938,13 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
             #[cfg(target_os = "windows")]
             file_transfer_enabled_peer: false,
             read_jobs: Vec::new(),
+            inflight_read_tracker: InflightReadTracker::default(),
         };
 
         while task_runner.running {
             task_runner.run().await;
         }
+        task_runner.inflight_read_tracker.clear();
         if task_runner.conn_id > 0 {
             task_runner
                 .cm
@@ -1557,15 +1654,21 @@ async fn start_read_job(
 /// but communicates via IPC instead of direct network stream.
 /// When modifying job processing logic, ensure both implementations stay in sync.
 #[cfg(not(any(target_os = "ios")))]
-async fn handle_read_jobs_tick(
+pub(crate) async fn handle_read_jobs_tick(
     jobs: &mut Vec<fs::TransferJob>,
     tx: &UnboundedSender<Data>,
     conn_id: i32,
+    tracker: &mut InflightReadTracker,
 ) -> ResultType<()> {
     let mut finished = Vec::new();
 
     for job in jobs.iter_mut() {
         if job.is_last_job {
+            continue;
+        }
+
+        // RES-033: Bounded backpressure check: only read if within limits
+        if !tracker.can_read_block(job.id()) {
             continue;
         }
 
@@ -1580,6 +1683,7 @@ async fn handle_read_jobs_tick(
             }) {
                 log::error!("error sending FileReadError via IPC: {}", e);
             }
+            tracker.remove_job(job.id);
             finished.push(job.id);
             continue;
         }
@@ -1597,12 +1701,15 @@ async fn handle_read_jobs_tick(
                 }) {
                     log::error!("error sending FileReadError via IPC: {}", e);
                 }
+                tracker.remove_job(job.id);
                 // Mark job as finished to prevent infinite retries.
                 // Connection side will have already removed cm_read_job_ids
                 // after receiving FileReadError, so continuing would be pointless.
                 finished.push(job.id);
             }
             Ok(Some(block)) => {
+                let data_len = block.data.len();
+                tracker.record_block_sent(block.id, block.blk_id, data_len);
                 maybe_send_file_transfer_progress(tx, job, before_transferred, conn_id);
                 if let Err(e) = tx.send(Data::FileBlockFromCM {
                     id: block.id,
@@ -1613,10 +1720,12 @@ async fn handle_read_jobs_tick(
                     conn_id,
                 }) {
                     log::error!("error sending FileBlockFromCM via IPC: {}", e);
+                    tracker.remove_job(block.id);
                 }
             }
             Ok(None) => {
                 if job.job_completed() {
+                    tracker.remove_job(job.id);
                     finished.push(job.id);
                     match job.job_error() {
                         Some(err) => {
@@ -1657,6 +1766,7 @@ async fn handle_read_jobs_tick(
 
     for id in finished {
         let _ = fs::remove_job(id, jobs);
+        tracker.remove_job(id);
     }
 
     Ok(())

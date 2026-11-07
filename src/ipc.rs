@@ -82,6 +82,11 @@ const IPC_TOKEN_RANDOM_BYTES: usize = IPC_TOKEN_LEN / 2;
 const _: () = assert!(IPC_TOKEN_LEN % 2 == 0);
 pub static EXIT_RECV_CLOSE: AtomicBool = AtomicBool::new(true);
 
+// RES-033: Bounded file transfer backpressure limits between Host and CM
+pub const MAX_INFLIGHT_FILE_BLOCKS_PER_JOB: usize = 4;
+pub const MAX_INFLIGHT_FILE_BYTES_PER_JOB: usize = 512 * 1024;
+pub const MAX_INFLIGHT_FILE_BYTES_TOTAL: usize = 2 * 1024 * 1024;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 thread_local! {
     static USE_USER_MAIN_IPC: Cell<bool> = Cell::new(false);
@@ -432,6 +437,13 @@ pub enum Data {
         #[serde(skip)]
         data: bytes::Bytes,
         compressed: bool,
+        conn_id: i32,
+    },
+    /// Acknowledgement for a file data block in CM <-> Connection protocol (RES-033).
+    FileBlockAck {
+        id: i32,
+        file_num: i32,
+        blk_id: u32,
         conn_id: i32,
     },
     /// File read completed successfully

@@ -16,7 +16,7 @@ pub mod server;
 #[cfg(not(any(target_os = "ios")))]
 pub use self::server::*;
 pub mod client;
-mod lan;
+pub mod lan;
 #[cfg(not(any(target_os = "ios")))]
 mod rendezvous_mediator;
 #[cfg(not(any(target_os = "ios")))]
@@ -56,7 +56,7 @@ mod tray;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod whiteboard;
 
-mod ui_cm_interface;
+pub mod ui_cm_interface;
 pub mod ui_interface;
 pub mod ui_session_interface;
 

@@ -4246,9 +4246,21 @@ pub enum Data {
     TakeScreenshot((i32, String)),
 }
 
-pub async fn confirm_insecure_connection(
+#[async_trait]
+pub trait DataReceiver {
+    async fn recv(&mut self) -> Option<Data>;
+}
+
+#[async_trait]
+impl DataReceiver for UnboundedReceiver<Data> {
+    async fn recv(&mut self) -> Option<Data> {
+        self.recv().await
+    }
+}
+
+pub async fn confirm_insecure_connection<R: DataReceiver + Send>(
     interface: &impl Interface,
-    receiver: &mut UnboundedReceiver<Data>,
+    receiver: &mut R,
 ) -> bool {
     interface.msgbox(
         "insecure-connection-nocancel-hasclose",
