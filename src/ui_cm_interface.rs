@@ -153,6 +153,12 @@ pub struct Client {
     tx: UnboundedSender<Data>,
 }
 
+// RES-033: Bounded file transfer backpressure limits between Host and CM
+pub const MAX_INFLIGHT_FILE_BLOCKS_PER_JOB: usize = 4;
+pub const MAX_INFLIGHT_FILE_BYTES_PER_JOB: usize = 512 * 1024;
+pub const MAX_INFLIGHT_FILE_BYTES_TOTAL: usize = 2 * 1024 * 1024;
+
+#[cfg(not(any(target_os = "ios")))]
 /// RES-033: In-flight block and byte credit tracker for CM-side file reading.
 #[derive(Default, Debug, Clone)]
 pub struct InflightReadTracker {
@@ -160,12 +166,14 @@ pub struct InflightReadTracker {
     total_bytes: usize,
 }
 
+#[cfg(not(any(target_os = "ios")))]
 #[derive(Default, Debug, Clone)]
 struct JobInflight {
     blocks: HashMap<u32, usize>, // blk_id -> bytes
     total_bytes: usize,
 }
 
+#[cfg(not(any(target_os = "ios")))]
 impl InflightReadTracker {
     pub fn new() -> Self {
         Self::default()
@@ -173,14 +181,14 @@ impl InflightReadTracker {
 
     /// Check if reading a new block for `job_id` is permitted under byte & block credits.
     pub fn can_read_block(&self, job_id: i32) -> bool {
-        if self.total_bytes >= ipc::MAX_INFLIGHT_FILE_BYTES_TOTAL {
+        if self.total_bytes >= MAX_INFLIGHT_FILE_BYTES_TOTAL {
             return false;
         }
         if let Some(job) = self.jobs.get(&job_id) {
-            if job.blocks.len() >= ipc::MAX_INFLIGHT_FILE_BLOCKS_PER_JOB {
+            if job.blocks.len() >= MAX_INFLIGHT_FILE_BLOCKS_PER_JOB {
                 return false;
             }
-            if job.total_bytes >= ipc::MAX_INFLIGHT_FILE_BYTES_PER_JOB {
+            if job.total_bytes >= MAX_INFLIGHT_FILE_BYTES_PER_JOB {
                 return false;
             }
         }

@@ -83,9 +83,10 @@ const _: () = assert!(IPC_TOKEN_LEN % 2 == 0);
 pub static EXIT_RECV_CLOSE: AtomicBool = AtomicBool::new(true);
 
 // RES-033: Bounded file transfer backpressure limits between Host and CM
-pub const MAX_INFLIGHT_FILE_BLOCKS_PER_JOB: usize = 4;
-pub const MAX_INFLIGHT_FILE_BYTES_PER_JOB: usize = 512 * 1024;
-pub const MAX_INFLIGHT_FILE_BYTES_TOTAL: usize = 2 * 1024 * 1024;
+pub use crate::ui_cm_interface::{
+    MAX_INFLIGHT_FILE_BLOCKS_PER_JOB, MAX_INFLIGHT_FILE_BYTES_PER_JOB,
+    MAX_INFLIGHT_FILE_BYTES_TOTAL,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 thread_local! {
