@@ -394,6 +394,72 @@ class AbModel {
 
   WeakReference<FFI> parent;
 
+  Timer? _pollerTimer;
+  bool _disposed = false;
+  bool _isStopped = false;
+  bool _inFlight = false;
+  int _generation = 0;
+
+  bool get isPolling => _pollerTimer != null && _pollerTimer!.isActive && !_isStopped && !_disposed;
+  bool get isDisposed => _disposed;
+
+  void startPoller() {
+    if (_disposed) return;
+    _isStopped = false;
+    if (desktopType != null && desktopType != DesktopType.main) return;
+    _scheduleNextTick(Duration.zero);
+  }
+
+  void _scheduleNextTick([Duration delay = const Duration(milliseconds: 500)]) {
+    if (_disposed || _isStopped) return;
+    _pollerTimer?.cancel();
+    _pollerTimer = Timer(delay, () async {
+      if (_disposed || _isStopped) return;
+      if (_inFlight) return;
+      _inFlight = true;
+      final currentGen = _generation;
+      try {
+        if (_timerCounter++ % 6 == 0) {
+          if (gFFI.userModel.isLogin &&
+              listInitialized &&
+              current.initialized &&
+              current.canWrite()) {
+            if (!_disposed && !_isStopped && _generation == currentGen) {
+              await _syncFromRecent();
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint("AbModel poller error: $e");
+      } finally {
+        _inFlight = false;
+        if (!_disposed && !_isStopped && _generation == currentGen) {
+          _scheduleNextTick();
+        }
+      }
+    });
+  }
+
+  Future<void> stopPoller() async {
+    _isStopped = true;
+    _generation++;
+    _pollerTimer?.cancel();
+    _pollerTimer = null;
+    int waitMs = 0;
+    while (_inFlight && waitMs < 1000) {
+      await Future.delayed(const Duration(milliseconds: 25));
+      waitMs += 25;
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _isStopped = true;
+    _generation++;
+    _pollerTimer?.cancel();
+    _pollerTimer = null;
+  }
+
   AbModel(this.parent) {
     addressbooks.clear();
     peersModel = Peers(
@@ -402,14 +468,7 @@ class AbModel {
       loadEvent: LoadEvent.addressBook,
     );
     if (desktopType == DesktopType.main) {
-      Timer.periodic(Duration(milliseconds: 500), (timer) async {
-        if (_timerCounter++ % 6 == 0) {
-          if (!gFFI.userModel.isLogin) return;
-          if (!listInitialized) return;
-          if (!current.initialized || !current.canWrite()) return;
-          _syncFromRecent();
-        }
-      });
+      startPoller();
     }
   }
 

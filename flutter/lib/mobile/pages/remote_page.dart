@@ -59,6 +59,8 @@ class RemotePage extends StatefulWidget {
 }
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
+  late final int _generation;
+  bool _teardownCalled = false;
   Timer? _timer;
   bool _showGestureHelp = false;
   String _value = '';
@@ -87,7 +89,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    initSharedStates(widget.id);
+    gFFI.mobileReset();
+    _generation = gFFI.sessionGeneration;
+    initSharedStates(widget.id, generation: _generation);
     gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
     gFFI.dialogManager.loadMobileActionsOverlayVisible();
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
@@ -96,6 +100,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       password: widget.password,
       isSharedPassword: widget.isSharedPassword,
       forceRelay: widget.forceRelay,
+      skipMobileReset: true,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
@@ -143,44 +148,54 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  @override
-  Future<void> dispose() async {
-    WidgetsBinding.instance.removeObserver(this);
-    // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
-    // after several awaits (canvas save, image update, the `enable_soft_keyboard`
-    // platform call), so if the app is backgrounded while this page is disposing,
-    // dispose can be suspended before reaching it and the connection is never torn
-    // down. The reconnect then re-attaches to the leaked session and is stuck on
-    // "Connecting...". Dispatching it here makes teardown happen synchronously on
-    // pop; the `sessionClose` in `gFFI.close()` becomes a no-op once removed.
-    unawaited(bind.sessionClose(sessionId: sessionId));
-    // https://github.com/flutter/flutter/issues/64935
-    super.dispose();
+  Future<void> teardown() async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    final myGen = _generation;
+    final mySessionId = sessionId;
+
+    unawaited(bind.sessionClose(sessionId: mySessionId));
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
     gFFI.inputModel.listenToMouse(false);
     gFFI.imageModel.disposeImage();
     gFFI.cursorModel.disposeImages();
     await gFFI.invokeMethod("enable_soft_keyboard", true);
-    _mobileFocusNode.dispose();
-    _physicalFocusNode.dispose();
-    clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
-    _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
+
     await gFFI.close();
-    _timer?.cancel();
-    _iosKeyboardWorkaroundTimer?.cancel();
-    gFFI.dialogManager.dismissAll();
+    if (gFFI.sessionGeneration != myGen) return;
+
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
       overlays: SystemUiOverlay.values,
     );
+    if (gFFI.sessionGeneration != myGen) return;
+
     WakelockManager.disable(_uniqueKey);
-    await keyboardSubscription.cancel();
-    removeSharedStates(widget.id);
-    // `on_voice_call_closed` should be called when the connection is ended.
-    // The inner logic of `on_voice_call_closed` will check if the voice call is active.
-    // Only one client is considered here for now.
+    removeSharedStates(widget.id, expectedGeneration: myGen);
     gFFI.chatModel.onVoiceCallClosed("End connetion");
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _waylandKeyboardGateWorker?.dispose();
+    _mobileFocusNode.dispose();
+    _physicalFocusNode.dispose();
+    _textController.dispose();
+    _timer?.cancel();
+    _timer = null;
+    _iosKeyboardWorkaroundTimer?.cancel();
+    _iosKeyboardWorkaroundTimer = null;
+    keyboardSubscription.cancel();
+    gFFI.dialogManager.dismissAll();
+    clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
+
+    if (!_teardownCalled) {
+      unawaited(teardown());
+    }
+
+    super.dispose();
   }
 
   @override

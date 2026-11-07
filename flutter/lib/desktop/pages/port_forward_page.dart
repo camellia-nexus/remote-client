@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common.dart';
+import 'package:camellia_remote_app/common/shared_state.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
@@ -88,7 +89,7 @@ class _PortForwardPageState extends State<PortForwardPage>
   void dispose() {
     _ffi.close();
     _ffi.dialogManager.dismissAll();
-    Get.delete<FFI>(tag: 'pf_${widget.id}');
+    deleteIfMatching<FFI>('pf_${widget.id}', _ffi);
     super.dispose();
   }
 

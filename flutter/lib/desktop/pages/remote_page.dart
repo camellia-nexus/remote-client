@@ -47,9 +47,8 @@ class RemotePage extends StatefulWidget {
     this.switchUuid,
     this.forceRelay,
     this.isSharedPassword,
-  }) : super(key: key) {
-    initSharedStates(id);
-  }
+  })  : generation = initSharedStates(id),
+        super(key: key);
 
   final String id;
   final SessionID? sessionId;
@@ -61,6 +60,7 @@ class RemotePage extends StatefulWidget {
   final String? switchUuid;
   final bool? forceRelay;
   final bool? isSharedPassword;
+  final int generation;
   final SimpleWrapper<State<RemotePage>?> _lastState = SimpleWrapper(null);
   final DesktopTabController? tabController;
 
@@ -73,9 +73,16 @@ class RemotePage extends StatefulWidget {
     (_lastState.value! as _RemotePageState)._releaseMacOSRemoteInput();
   }
 
+  Future<void> teardown({bool? closeSession}) async {
+    final state = _lastState.value as _RemotePageState?;
+    if (state != null) {
+      await state.teardown(closeSession: closeSession);
+    }
+  }
+
   @override
   State<RemotePage> createState() {
-    final state = _RemotePageState(id);
+    final state = _RemotePageState(id, generation);
     _lastState.value = state;
     return state;
   }
@@ -134,7 +141,10 @@ class _RemotePageState extends State<RemotePage>
 
   SessionID get sessionId => _ffi.sessionId;
 
-  _RemotePageState(String id) {
+  final int generation;
+  bool _teardownCalled = false;
+
+  _RemotePageState(String id, this.generation) {
     _initStates(id);
   }
 
@@ -623,56 +633,67 @@ class _RemotePageState extends State<RemotePage>
     }
   }
 
-  @override
-  Future<void> dispose() async {
-    WidgetsBinding.instance.removeObserver(this);
-    final closeSession = closeSessionOnDispose.remove(widget.id) ?? true;
+  Future<void> teardown({bool? closeSession}) async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    final close = closeSession ?? (closeSessionOnDispose.remove(widget.id) ?? true);
+    final myGen = generation;
 
-    // https://github.com/flutter/flutter/issues/64935
     if (isMacOS) {
-      // Tab moves release before transfer to avoid a late retained-session leave.
-      if (closeSession) {
+      if (close) {
         _releaseMacOSRemoteInput();
       }
       _tabStateSubscription?.cancel();
     }
-    super.dispose();
-    debugPrint("REMOTE PAGE dispose session $sessionId ${widget.id}");
 
-    // Defensive cleanup: ensure host system-key propagation is reset even if
-    // MouseRegion.onExit never fired (e.g., tab closed while cursor inside).
     if (!isWeb) bind.hostStopSystemKeyPropagate(stopped: true);
 
+    _ffi.inputModel.onRelativeMouseModeDisabled = null;
+    _ffi.textureModel.onRemotePageDispose(close);
+    if (close && !isMacOS) {
+      _ffi.inputModel.enterOrLeave(false);
+    }
+    _ffi.imageModel.disposeImage();
+    _ffi.cursorModel.disposeImages();
+    if (close) {
+      clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
+    }
+
+    await _ffi.close(closeSession: close);
+    if (generation != myGen) return;
+
+    if (close) {
+      await SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
+    if (generation != myGen) return;
+
+    WakelockManager.disable(_uniqueKey);
+    await deleteIfMatching<FFI>(widget.id, _ffi);
+    removeSharedStates(widget.id, expectedGeneration: myGen);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    DesktopMultiWindow.removeListener(this);
     _pointerLockCenterDebounceTimer?.cancel();
     _pointerLockCenterDebounceTimer = null;
     _waylandKeyboardModeWorker?.dispose();
-    // Clear callback reference to prevent memory leaks and stale references
-    _ffi.inputModel.onRelativeMouseModeDisabled = null;
-    // Relative mouse mode cleanup is centralized in FFI.close(closeSession: ...).
-    _ffi.textureModel.onRemotePageDispose(closeSession);
-    if (closeSession && !isMacOS) {
-      // ensure we leave this session, this is a double check
-      // enterOrLeave() is already called previously in _releaseMacOSRemoteInput() for macOS.
-      _ffi.inputModel.enterOrLeave(false);
-    }
-    DesktopMultiWindow.removeListener(this);
-    _ffi.dialogManager.hideMobileActionsOverlay();
-    _ffi.imageModel.disposeImage();
-    _ffi.cursorModel.disposeImages();
-    _rawKeyFocusNode.dispose();
-    if (closeSession) {
-      clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
-    }
-    await _ffi.close(closeSession: closeSession);
     _timer?.cancel();
+    _timer = null;
+    _ffi.dialogManager.hideMobileActionsOverlay();
     _ffi.dialogManager.dismissAll();
-    if (closeSession) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-          overlays: SystemUiOverlay.values);
+    _rawKeyFocusNode.dispose();
+
+    final closeSession = closeSessionOnDispose.remove(widget.id) ?? true;
+    if (!_teardownCalled) {
+      unawaited(teardown(closeSession: closeSession));
     }
-    WakelockManager.disable(_uniqueKey);
-    await Get.delete<FFI>(tag: widget.id);
-    removeSharedStates(widget.id);
+
+    super.dispose();
   }
 
   Widget emptyOverlay() => BlockableOverlay(

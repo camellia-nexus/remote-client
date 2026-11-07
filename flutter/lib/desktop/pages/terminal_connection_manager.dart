@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
+import '../../common/shared_state.dart';
 import '../../models/model.dart';
 
 /// Manages terminal connections to ensure one FFI instance per peer and privilege mode
@@ -86,7 +87,7 @@ class TerminalConnectionManager {
         _connections.remove(key);
         _connectionRefCount.remove(key);
         _connectionAdminMode.remove(key);
-        Get.delete<FFI>(tag: 'terminal_$key');
+        deleteIfMatching<FFI>('terminal_$key', ffi);
       }
     } else {
       // Decrement reference count

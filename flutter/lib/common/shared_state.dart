@@ -20,8 +20,6 @@ class PrivacyModeState {
     final key = tag(id);
     if (Get.isRegistered<RxString>(tag: key)) {
       Get.delete<RxString>(tag: key);
-    } else {
-      Get.find<RxString>(tag: key).value = '';
     }
   }
 
@@ -339,7 +337,27 @@ class UnreadChatCountState {
   static RxInt find(String id) => Get.find<RxInt>(tag: tag(id));
 }
 
-initSharedStates(String id) {
+final Map<String, int> _sharedStateGenerations = {};
+
+/// Returns current generation for a peer's shared state, or null if unregistered.
+int? getSharedStateGeneration(String id) => _sharedStateGenerations[id];
+
+/// Deletes an instance from Get registry only if the registered instance matches [expectedInstance].
+Future<bool> deleteIfMatching<T>(String tag, T expectedInstance) async {
+  if (Get.isRegistered<T>(tag: tag)) {
+    try {
+      final registered = Get.find<T>(tag: tag);
+      if (identical(registered, expectedInstance)) {
+        return await Get.delete<T>(tag: tag);
+      }
+    } catch (_) {}
+  }
+  return false;
+}
+
+int initSharedStates(String id, {int? generation}) {
+  final gen = generation ?? ((_sharedStateGenerations[id] ?? 0) + 1);
+  _sharedStateGenerations[id] = gen;
   PrivacyModeState.init(id);
   BlockInputState.init(id);
   CurrentDisplayState.init(id);
@@ -351,9 +369,18 @@ initSharedStates(String id) {
   PeerBoolOption.init(id, kOptionZoomCursor, () => false);
   UnreadChatCountState.init(id);
   if (isMobile) ConnectionTypeState.init(id); // desktop in other places
+  return gen;
 }
 
-removeSharedStates(String id) {
+void removeSharedStates(String id, {int? expectedGeneration}) {
+  if (expectedGeneration != null) {
+    final currentGen = _sharedStateGenerations[id];
+    if (currentGen != null && currentGen != expectedGeneration) {
+      // Obsolete generation teardown must never tear down newer active session's states!
+      return;
+    }
+  }
+  _sharedStateGenerations.remove(id);
   PrivacyModeState.delete(id);
   BlockInputState.delete(id);
   CurrentDisplayState.delete(id);

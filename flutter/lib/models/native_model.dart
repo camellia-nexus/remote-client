@@ -35,7 +35,7 @@ class PlatformFFI {
   // _homeDir is only needed for Android and IOS.
   String _homeDir = '';
   final _eventHandlers = <String, Map<String, HandleEvent>>{};
-  late RustdeskImpl _ffiBind;
+  RustdeskImpl _ffiBind = const RustdeskImpl();
   late String _appType;
   StreamEventHandler? _eventCallback;
 
@@ -45,6 +45,7 @@ class PlatformFFI {
   final _toAndroidChannel = const MethodChannel('mChannel');
 
   RustdeskImpl get ffiBind => _ffiBind;
+  set ffiBind(RustdeskImpl value) => _ffiBind = value;
   F3? _session_get_rgba;
   FCopyRgba? _session_copy_rgba;
 
@@ -147,8 +148,12 @@ class PlatformFFI {
         ptr: ptr,
       );
 
+  bool _initialized = false;
+
   /// Init the FFI class, loads the native Rust core library.
   Future<void> init(String appType) async {
+    if (_initialized) return;
+    _initialized = true;
     _appType = appType;
     final externalLibrary = isAndroid
         ? ExternalLibrary.open('camellia_remote.so')

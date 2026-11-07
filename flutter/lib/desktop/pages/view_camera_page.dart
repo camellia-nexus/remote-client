@@ -40,9 +40,8 @@ class ViewCameraPage extends StatefulWidget {
     this.connToken,
     this.forceRelay,
     this.isSharedPassword,
-  }) : super(key: key) {
-    initSharedStates(id);
-  }
+  })  : generation = initSharedStates(id),
+        super(key: key);
 
   final String id;
   final SessionID? sessionId;
@@ -54,14 +53,22 @@ class ViewCameraPage extends StatefulWidget {
   final bool? forceRelay;
   final bool? isSharedPassword;
   final String? connToken;
+  final int generation;
   final SimpleWrapper<State<ViewCameraPage>?> _lastState = SimpleWrapper(null);
   final DesktopTabController? tabController;
 
   FFI get ffi => (_lastState.value! as _ViewCameraPageState)._ffi;
 
+  Future<void> teardown({bool? closeSession}) async {
+    final state = _lastState.value as _ViewCameraPageState?;
+    if (state != null) {
+      await state.teardown(closeSession: closeSession);
+    }
+  }
+
   @override
   State<ViewCameraPage> createState() {
-    final state = _ViewCameraPageState(id);
+    final state = _ViewCameraPageState(id, generation);
     _lastState.value = state;
     return state;
   }
@@ -69,6 +76,8 @@ class ViewCameraPage extends StatefulWidget {
 
 class _ViewCameraPageState extends State<ViewCameraPage>
     with AutomaticKeepAliveClientMixin, MultiWindowListener {
+  final int generation;
+  bool _teardownCalled = false;
   Timer? _timer;
   String keyboardMode = "legacy";
   bool _isWindowBlur = false;
@@ -88,7 +97,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
   SessionID get sessionId => _ffi.sessionId;
 
-  _ViewCameraPageState(String id) {
+  _ViewCameraPageState(String id, this.generation) {
     _initStates(id);
   }
 
@@ -212,33 +221,53 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     }
   }
 
-  @override
-  Future<void> dispose() async {
-    final closeSession = closeSessionOnDispose.remove(widget.id) ?? true;
+  Future<void> teardown({bool? closeSession}) async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    final close =
+        closeSession ?? (closeSessionOnDispose.remove(widget.id) ?? true);
+    final myGen = generation;
 
-    // https://github.com/flutter/flutter/issues/64935
-    super.dispose();
-    debugPrint("VIEW CAMERA PAGE dispose session $sessionId ${widget.id}");
-    _ffi.textureModel.onViewCameraPageDispose(closeSession);
-    if (closeSession) {
+    debugPrint("VIEW CAMERA PAGE teardown session $sessionId ${widget.id}");
+    _ffi.textureModel.onViewCameraPageDispose(close);
+    if (close) {
       // ensure we leave this session, this is a double check
       _ffi.inputModel.enterOrLeave(false);
     }
-    DesktopMultiWindow.removeListener(this);
-    _ffi.dialogManager.hideMobileActionsOverlay();
     _ffi.imageModel.disposeImage();
     _ffi.cursorModel.disposeImages();
-    _rawKeyFocusNode.dispose();
-    await _ffi.close(closeSession: closeSession);
-    _timer?.cancel();
-    _ffi.dialogManager.dismissAll();
-    if (closeSession) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-          overlays: SystemUiOverlay.values);
+
+    await _ffi.close(closeSession: close);
+    if (generation != myGen) return;
+
+    if (close) {
+      await SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
     }
+    if (generation != myGen) return;
+
     WakelockManager.disable(_uniqueKey);
-    await Get.delete<FFI>(tag: widget.id);
-    removeSharedStates(widget.id);
+    await deleteIfMatching<FFI>(widget.id, _ffi);
+    removeSharedStates(widget.id, expectedGeneration: myGen);
+  }
+
+  @override
+  void dispose() {
+    DesktopMultiWindow.removeListener(this);
+    _ffi.dialogManager.hideMobileActionsOverlay();
+    _ffi.dialogManager.dismissAll();
+    _rawKeyFocusNode.dispose();
+    _timer?.cancel();
+    _timer = null;
+
+    final closeSession = closeSessionOnDispose.remove(widget.id) ?? true;
+    if (!_teardownCalled) {
+      unawaited(teardown(closeSession: closeSession));
+    }
+
+    super.dispose();
   }
 
   Widget emptyOverlay() => BlockableOverlay(

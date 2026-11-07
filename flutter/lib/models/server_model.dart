@@ -134,63 +134,114 @@ class ServerModel with ChangeNotifier {
   bool get _shouldShowAndroidRequestDialog =>
       HomePage.homeKey.currentState?.isServerPageCurrentTab != true;
 
+  Timer? _pollerTimer;
+  bool _disposed = false;
+  bool _isStopped = false;
+  bool _inFlight = false;
+  int _generation = 0;
+
+  bool get isPolling => _pollerTimer != null && _pollerTimer!.isActive && !_isStopped && !_disposed;
+  bool get isDisposed => _disposed;
+
+  void startPoller() {
+    if (_disposed) return;
+    _isStopped = false;
+    _scheduleNextTick(Duration.zero);
+  }
+
+  void _scheduleNextTick([Duration delay = const Duration(milliseconds: 500)]) {
+    if (_disposed || _isStopped) return;
+    _pollerTimer?.cancel();
+    _pollerTimer = Timer(delay, () async {
+      if (_disposed || _isStopped) return;
+      if (_inFlight) return;
+      _inFlight = true;
+      final currentGen = _generation;
+      try {
+        if (await bind.optionSynced()) {
+          await _timerCallback(currentGen);
+        }
+      } catch (e) {
+        debugPrint("ServerModel poller error: $e");
+      } finally {
+        _inFlight = false;
+        if (!_disposed && !_isStopped && _generation == currentGen) {
+          _scheduleNextTick();
+        }
+      }
+    });
+  }
+
+  Future<void> _timerCallback(int currentGen) async {
+    if (_disposed || _isStopped || _generation != currentGen) return;
+
+    final connectionStatus =
+        jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
+    if (_disposed || _isStopped || _generation != currentGen) return;
+
+    final statusNum = connectionStatus['status_num'] as int;
+    if (statusNum != _connectStatus) {
+      _connectStatus = statusNum;
+      notifyListeners();
+    }
+
+    if (desktopType == DesktopType.cm) {
+      final res = await bind.cmCheckClientsLength(length: _clients.length);
+      if (_disposed || _isStopped || _generation != currentGen) return;
+
+      if (res != null) {
+        debugPrint("clients not match!");
+        updateClientState(res);
+      } else {
+        if (_clients.isEmpty) {
+          hideCmWindow();
+          if (_zeroClientLengthCounter++ == 12) {
+            // 6 second
+            windowManager.close();
+          }
+        } else {
+          _zeroClientLengthCounter = 0;
+          if (!hideCm) showCmWindow();
+        }
+      }
+    }
+
+    if (_disposed || _isStopped || _generation != currentGen) return;
+    updatePasswordModel();
+  }
+
+  Future<void> stopPoller() async {
+    _isStopped = true;
+    _generation++;
+    _pollerTimer?.cancel();
+    _pollerTimer = null;
+    cmHiddenTimer?.cancel();
+    cmHiddenTimer = null;
+    int waitMs = 0;
+    while (_inFlight && waitMs < 1000) {
+      await Future.delayed(const Duration(milliseconds: 25));
+      waitMs += 25;
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _isStopped = true;
+    _generation++;
+    _pollerTimer?.cancel();
+    _pollerTimer = null;
+    cmHiddenTimer?.cancel();
+    cmHiddenTimer = null;
+    super.dispose();
+  }
+
   ServerModel(this.parent) {
     _emptyIdShow = translate("Generating ...");
     _serverId = IDTextEditingController(text: _emptyIdShow);
 
-    /*
-    // initital _hideCm at startup
-    final verificationMethod =
-        bind.mainGetOptionSync(key: kOptionVerificationMethod);
-    final approveMode = bind.mainGetOptionSync(key: kOptionApproveMode);
-    _hideCm = option2bool(
-        'allow-hide-cm', bind.mainGetOptionSync(key: 'allow-hide-cm'));
-    if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      _hideCm = false;
-    }
-    */
-
-    timerCallback() async {
-      final connectionStatus =
-          jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
-      final statusNum = connectionStatus['status_num'] as int;
-      if (statusNum != _connectStatus) {
-        _connectStatus = statusNum;
-        notifyListeners();
-      }
-
-      if (desktopType == DesktopType.cm) {
-        final res = await bind.cmCheckClientsLength(length: _clients.length);
-        if (res != null) {
-          debugPrint("clients not match!");
-          updateClientState(res);
-        } else {
-          if (_clients.isEmpty) {
-            hideCmWindow();
-            if (_zeroClientLengthCounter++ == 12) {
-              // 6 second
-              windowManager.close();
-            }
-          } else {
-            _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
-          }
-        }
-      }
-
-      updatePasswordModel();
-    }
-
     if (!isTest) {
-      Future.delayed(Duration.zero, () async {
-        if (await bind.optionSynced()) {
-          await timerCallback();
-        }
-      });
-      Timer.periodic(Duration(milliseconds: 500), (timer) async {
-        await timerCallback();
-      });
+      startPoller();
     }
 
     // Initial keyboard status is off on mobile
