@@ -6,8 +6,6 @@ import 'package:camellia_remote_app/common/shared_state.dart';
 import 'package:camellia_remote_app/generated_bridge.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
-import 'package:camellia_remote_app/models/server_model.dart';
-import 'package:camellia_remote_app/models/ab_model.dart';
 
 class _FakeRustdeskImpl extends RustdeskImpl {
   @override
