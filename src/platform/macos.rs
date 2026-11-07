@@ -1159,14 +1159,16 @@ pub fn handle_application_should_open_untitled_file() {
     camellia_remote_protocol::log::debug!("icon clicked on finder");
     let x = std::env::args().nth(1).unwrap_or_default();
     if x == "--server" || x == "--cm" || x == "--tray" {
-        std::thread::spawn(move || crate::handle_url_scheme("".to_lowercase()));
+        // RES-044: Enqueue reopen event through bounded dispatcher without spawning OS thread
+        crate::url_dispatcher::enqueue_reopen();
     }
 }
 
 #[no_mangle]
 pub extern "C" fn handle_open_urls(_obj: *mut Object, _sel: Sel, _sender: id, urls: id) {
+    // RES-044: Enqueue URLs through bounded dispatcher without spawning OS thread per URL
     for url in ns_url_array_to_strings(urls) {
-        std::thread::spawn(move || crate::handle_url_scheme(url));
+        crate::url_dispatcher::enqueue_url(url);
     }
 }
 
@@ -1187,9 +1189,12 @@ fn ns_url_array_to_strings(urls: id) -> Vec<String> {
     }
 
     unsafe {
-        (0..NSArray::count(urls))
+        // RES-044: Bound array count to prevent batch flood
+        let count =
+            (NSArray::count(urls) as usize).min(crate::url_dispatcher::MAX_URL_QUEUE_CAPACITY / 2);
+        (0..count)
             .filter_map(|i| {
-                let url = urls.objectAtIndex(i);
+                let url = urls.objectAtIndex(i as _);
                 if url.is_null() {
                     return None;
                 }
@@ -1204,7 +1209,12 @@ fn ns_url_array_to_strings(urls: id) -> Vec<String> {
                     return None;
                 }
 
-                Some(CStr::from_ptr(value).to_string_lossy().into_owned())
+                let s = CStr::from_ptr(value).to_string_lossy();
+                if s.len() > crate::url_dispatcher::MAX_URL_LEN {
+                    return None;
+                }
+
+                Some(s.into_owned())
             })
             .collect()
     }

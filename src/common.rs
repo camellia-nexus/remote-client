@@ -1001,6 +1001,17 @@ pub fn run_me<T: AsRef<std::ffi::OsStr>>(args: Vec<T>) -> std::io::Result<std::p
     result
 }
 
+/// Spawn a child process and register it under the process supervisor (RES-045).
+/// Prevents zombie processes on Unix and unmanaged orphan processes on Windows.
+pub fn run_me_supervised<T: AsRef<std::ffi::OsStr>>(
+    args: Vec<T>,
+    label: &str,
+    session_id: Option<i32>,
+) -> std::io::Result<u32> {
+    let child = run_me(args)?;
+    crate::child_process::register(child, label, session_id)
+}
+
 #[inline]
 pub fn username() -> String {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1769,14 +1780,12 @@ pub fn make_empty_dirs_response_to_json(res: &ReadEmptyDirsResponse) -> String {
 }
 
 /// The function to handle the url scheme sent by the system.
-///
-/// 1. Try to send the url scheme from ipc.
-/// 2. If failed to send the url scheme, we open a new main window to handle this url scheme.
+/// Routes through the bounded URL dispatcher (RES-044) to prevent thread/runtime floods
+/// and ensure single-flight fallback GUI execution.
 pub fn handle_url_scheme(url: String) {
     #[cfg(not(target_os = "ios"))]
-    if let Err(err) = crate::ipc::send_url_scheme(url.clone()) {
-        log::debug!("Send the url to the existing flutter process failed, {}. Let's open a new program to handle this.", err);
-        let _ = crate::run_me(vec![url]);
+    {
+        crate::url_dispatcher::enqueue_url(url);
     }
 }
 

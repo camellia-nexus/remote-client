@@ -2005,10 +2005,14 @@ pub async fn notify_deployed() -> ResultType<()> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn send_url_scheme(url: String) -> ResultType<()> {
-    connect(1_000, "_url")
-        .await?
-        .send(&Data::UrlLink(url))
-        .await?;
+    timeout(1500, async {
+        connect(1_000, "_url")
+            .await?
+            .send(&Data::UrlLink(url))
+            .await?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
     Ok(())
 }
 

@@ -3628,6 +3628,7 @@ impl Connection {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_start_cm_ipc(&mut self) {
         if let Some(p) = self.start_cm_ipc_para.take() {
+            let conn_id = self.inner.id;
             tokio::spawn(async move {
                 #[cfg(windows)]
                 let tx_from_cm_clone = p.tx_from_cm.clone();
@@ -3636,6 +3637,7 @@ impl Connection {
                     p.tx_from_cm,
                     p.rx_desktop_ready,
                     p.tx_cm_stream_ready,
+                    conn_id,
                 )
                 .await
                 {
@@ -4956,12 +4958,16 @@ impl Connection {
                                 self.lr.my_id.clone(),
                                 uuid.clone(),
                             );
-                            crate::run_me(vec![
-                                "--connect",
-                                &self.lr.my_id,
-                                "--switch_uuid",
-                                uuid.to_string().as_ref(),
-                            ])
+                            crate::common::run_me_supervised(
+                                vec![
+                                    "--connect",
+                                    &self.lr.my_id,
+                                    "--switch_uuid",
+                                    uuid.to_string().as_ref(),
+                                ],
+                                "switch_sides",
+                                Some(self.inner.id),
+                            )
                             .ok();
                             self.on_close("switch sides", false).await;
                             return false;
@@ -7549,6 +7555,7 @@ async fn start_ipc(
     tx_from_cm: mpsc::UnboundedSender<ipc::Data>,
     mut _rx_desktop_ready: mpsc::Receiver<()>,
     tx_stream_ready: mpsc::Sender<()>,
+    conn_id: i32,
 ) -> ResultType<()> {
     use camellia_remote_protocol::anyhow::anyhow;
 
@@ -7668,7 +7675,9 @@ async fn start_ipc(
                     sleep(1.).await;
                 }
                 if let Some(task) = res? {
-                    super::CHILD_PROCESS.lock().unwrap().push(task);
+                    if let Err(e) = crate::child_process::register(task, "cm", Some(conn_id)) {
+                        log::warn!("Failed to register cm child process: {e}");
+                    }
                 }
                 run_done = true;
             } else {
@@ -7676,10 +7685,10 @@ async fn start_ipc(
             }
             if !run_done {
                 log::debug!("Start cm");
-                super::CHILD_PROCESS
-                    .lock()
-                    .unwrap()
-                    .push(crate::run_me(args)?);
+                let task = crate::run_me(args)?;
+                if let Err(e) = crate::child_process::register(task, "cm", Some(conn_id)) {
+                    log::warn!("Failed to register cm child process: {e}");
+                }
             }
             for _ in 0..20 {
                 sleep(0.3).await;
@@ -8001,6 +8010,12 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        crate::child_process::terminate_session_children(
+            self.inner.id,
+            std::time::Duration::from_millis(2000),
+        );
+
         if let Some(mut worker) = self.audio_worker.take() {
             worker.stop();
         }

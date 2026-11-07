@@ -68,7 +68,9 @@ mod management_operation_journal;
 pub mod clipboard_file;
 
 pub mod capability;
+pub mod child_process;
 pub mod privacy_mode;
+pub mod url_dispatcher;
 
 #[cfg(windows)]
 pub mod virtual_display_manager;

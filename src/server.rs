@@ -263,7 +263,7 @@ pub async fn create_tcp_connection(
             .arg("-t 5")
             .spawn()
         {
-            super::CHILD_PROCESS.lock().unwrap().push(task);
+            let _ = crate::child_process::register(task, "caffeinate", Some(id));
         }
         log::info!("wake up macos");
     }
@@ -548,6 +548,8 @@ pub fn check_zombie() {
             }
         }
         drop(lock);
+        // RES-045: Proactively reap all supervised subprocesses to eliminate Unix zombies
+        crate::child_process::reap_exited_children();
         std::thread::sleep(Duration::from_millis(100));
     });
 }

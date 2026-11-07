@@ -751,8 +751,8 @@ mod windows {
             cfgmgr32::{CM_Get_DevNode_Status, CR_SUCCESS},
             cguid::GUID_NULL,
             setupapi::{
-                SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW,
-                SP_DEVINFO_DATA,
+                SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+                SetupDiGetDeviceRegistryPropertyW, HDEVINFO, SP_DEVINFO_DATA,
             },
             wingdi::{
                 DEVMODEW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICE_MIRRORING_DRIVER,
@@ -829,7 +829,60 @@ mod windows {
         device_names
     }
 
+    camellia_remote_protocol::lazy_static::lazy_static! {
+        static ref DRIVERS_CACHE: std::sync::Mutex<Option<(std::time::Instant, u64, Vec<(String, u32)>)>> = std::sync::Mutex::new(None);
+        static ref DRIVERS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    }
+
+    pub const DRIVERS_CACHE_TTL_SECS: u64 = 5;
+
+    pub fn invalidate_display_drivers_cache() {
+        DRIVERS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut lock) = DRIVERS_CACHE.lock() {
+            *lock = None;
+        }
+    }
+
+    /// RAII guard for SetupAPI device information set (RES-046).
+    /// Ensures `SetupDiDestroyDeviceInfoList` is called deterministically on all exit paths.
+    #[derive(Debug)]
+    pub struct DeviceInfoSetGuard(pub HDEVINFO);
+
+    impl DeviceInfoSetGuard {
+        #[inline]
+        pub fn is_valid(&self) -> bool {
+            !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE
+        }
+
+        #[inline]
+        pub fn raw(&self) -> HDEVINFO {
+            self.0
+        }
+    }
+
+    impl Drop for DeviceInfoSetGuard {
+        fn drop(&mut self) {
+            if self.is_valid() {
+                unsafe {
+                    SetupDiDestroyDeviceInfoList(self.0);
+                }
+                self.0 = INVALID_HANDLE_VALUE;
+            }
+        }
+    }
+
     pub(super) fn get_display_drivers() -> Vec<(String, u32)> {
+        let current_gen = DRIVERS_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+        if let Ok(lock) = DRIVERS_CACHE.lock() {
+            if let Some((ts, gen, ref cached)) = *lock {
+                if gen == current_gen
+                    && ts.elapsed() < std::time::Duration::from_secs(DRIVERS_CACHE_TTL_SECS)
+                {
+                    return cached.clone();
+                }
+            }
+        }
+
         let mut display_drivers: Vec<(String, u32)> = Vec::new();
 
         let device_info_set = unsafe {
@@ -841,8 +894,9 @@ mod windows {
             )
         };
 
-        if device_info_set == INVALID_HANDLE_VALUE {
-            println!(
+        let guard = DeviceInfoSetGuard(device_info_set);
+        if !guard.is_valid() {
+            camellia_remote_protocol::log::warn!(
                 "Failed to get device information set. Error: {}",
                 std::io::Error::last_os_error()
             );
@@ -858,9 +912,8 @@ mod windows {
 
         let mut device_index = 0;
         loop {
-            let result = unsafe {
-                SetupDiEnumDeviceInfo(device_info_set, device_index, &mut device_info_data)
-            };
+            let result =
+                unsafe { SetupDiEnumDeviceInfo(guard.raw(), device_index, &mut device_info_data) };
             if result == 0 {
                 break;
             }
@@ -872,7 +925,7 @@ mod windows {
             let mut buffer;
             unsafe {
                 SetupDiGetDeviceRegistryPropertyW(
-                    device_info_set,
+                    guard.raw(),
                     &mut device_info_data,
                     SPDRP_DEVICEDESC,
                     &mut data_type,
@@ -881,9 +934,14 @@ mod windows {
                     &mut required_size,
                 );
 
-                buffer = vec![0; required_size as usize / 2];
+                if required_size < 2 {
+                    device_index += 1;
+                    continue;
+                }
+
+                buffer = vec![0; (required_size as usize) / 2];
                 SetupDiGetDeviceRegistryPropertyW(
-                    device_info_set,
+                    guard.raw(),
                     &mut device_info_data,
                     SPDRP_DEVICEDESC,
                     &mut data_type,
@@ -894,10 +952,13 @@ mod windows {
             }
 
             let Ok(driver_description) = String::from_utf16(&buffer) else {
-                println!("Failed to convert driver description to string");
+                camellia_remote_protocol::log::warn!(
+                    "Failed to convert driver description to string"
+                );
                 device_index += 1;
                 continue;
             };
+            let driver_description = driver_description.trim_matches('\0').to_string();
 
             let mut status: ULONG = 0;
             let mut problem_number: ULONG = 0;
@@ -911,7 +972,7 @@ mod windows {
                 )
             };
             if config_ret != CR_SUCCESS {
-                println!(
+                camellia_remote_protocol::log::warn!(
                     "Failed to get device status. Error: {}",
                     std::io::Error::last_os_error()
                 );
@@ -922,6 +983,16 @@ mod windows {
             device_index += 1;
         }
 
+        if let Ok(mut lock) = DRIVERS_CACHE.lock() {
+            *lock = Some((
+                std::time::Instant::now(),
+                current_gen,
+                display_drivers.clone(),
+            ));
+        }
+
         display_drivers
     }
 }
+
+pub use windows::{invalidate_display_drivers_cache, DeviceInfoSetGuard};
