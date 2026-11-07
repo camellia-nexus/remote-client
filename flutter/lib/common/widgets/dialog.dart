@@ -1650,13 +1650,13 @@ showSetOSPassword(
   Function()? closeCallback,
 ) async {
   final controller = TextEditingController();
-  osPassword ??=
-      await bind.sessionGetOption(sessionId: sessionId, arg: 'os-password') ??
-      '';
+  final hasSavedPassword = bind.sessionHasOsPassword(sessionId: sessionId);
   var autoLogin =
       await bind.sessionGetOption(sessionId: sessionId, arg: 'auto-login') !=
       '';
-  controller.text = osPassword;
+  if (osPassword != null && osPassword.isNotEmpty) {
+    controller.text = osPassword;
+  }
   dialogManager.show((setState, close, context) {
     closeWithCallback([dynamic]) {
       close();
@@ -1665,18 +1665,22 @@ showSetOSPassword(
 
     submit() {
       var text = controller.text.trim();
-      bind.sessionPeerOption(
-        sessionId: sessionId,
-        name: 'os-password',
-        value: text,
-      );
+      if (text.isNotEmpty || !hasSavedPassword) {
+        bind.sessionPeerOption(
+          sessionId: sessionId,
+          name: 'os-password',
+          value: text,
+        );
+      }
       bind.sessionPeerOption(
         sessionId: sessionId,
         name: 'auto-login',
         value: autoLogin ? 'Y' : '',
       );
-      if (text != '' && login) {
+      if (text.isNotEmpty && login) {
         bind.sessionInputOsPassword(sessionId: sessionId, value: text);
+      } else if (text.isEmpty && hasSavedPassword && login) {
+        bind.sessionInputStoredOsPassword(sessionId: sessionId);
       }
       closeWithCallback();
     }
@@ -1692,7 +1696,10 @@ showSetOSPassword(
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          PasswordWidget(controller: controller),
+          PasswordWidget(
+            controller: controller,
+            hintText: hasSavedPassword ? translate('Unchanged') : null,
+          ),
           CheckboxListTile(
             contentPadding: const EdgeInsets.all(0),
             dense: true,
@@ -1730,11 +1737,8 @@ showSetOSAccount(
   var username =
       await bind.sessionGetOption(sessionId: sessionId, arg: 'os-username') ??
       '';
-  var password =
-      await bind.sessionGetOption(sessionId: sessionId, arg: 'os-password') ??
-      '';
+  final hasSavedPassword = bind.sessionHasOsPassword(sessionId: sessionId);
   usernameController.text = username;
-  passwdController.text = password;
   dialogManager.show((setState, close, context) {
     submit() {
       final username = usernameController.text.trim();
@@ -1744,11 +1748,13 @@ showSetOSAccount(
         name: 'os-username',
         value: username,
       );
-      bind.sessionPeerOption(
-        sessionId: sessionId,
-        name: 'os-password',
-        value: password,
-      );
+      if (password.isNotEmpty || !hasSavedPassword) {
+        bind.sessionPeerOption(
+          sessionId: sessionId,
+          name: 'os-password',
+          value: password,
+        );
+      }
       close();
     }
 
@@ -1788,7 +1794,10 @@ showSetOSAccount(
             prefixIcon: DialogTextField.kUsernameIcon,
             errorText: null,
           ),
-          PasswordWidget(controller: passwdController),
+          PasswordWidget(
+            controller: passwdController,
+            hintText: hasSavedPassword ? translate('Unchanged') : null,
+          ),
         ],
       ),
       actions: [
@@ -1951,7 +1960,9 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
   ffi.dialogManager.dismissAll();
 
   Future<void> updateAuditNoteByGuid(String auditGuid, String note) async {
-    debugPrint('Updating audit note for GUID: $auditGuid, note length: ${note.length}');
+    debugPrint(
+      'Updating audit note for GUID: $auditGuid, note length: ${note.length}',
+    );
     try {
       final apiServer = await bind.mainGetApiServer();
       if (apiServer.isEmpty) {

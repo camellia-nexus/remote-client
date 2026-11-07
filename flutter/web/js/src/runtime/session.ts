@@ -2869,6 +2869,8 @@ export class WebSession {
       job.cancelled = true;
     }
     this.downloadJobs.clear();
+    this.pendingLogin = undefined;
+    this.hash = undefined;
   }
 
   private isVideoSession(): boolean {

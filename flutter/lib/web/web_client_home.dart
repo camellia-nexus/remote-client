@@ -291,39 +291,52 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
     bool isFileTransfer = false;
     bool isViewCamera = false;
     bool isTerminal = false;
+    bool isTerminalRunAsAdmin = false;
     String? id;
     String? password;
     for (int i = 0; i < args.length; i++) {
       switch (args[i]) {
         case '--connect':
         case '--play':
-          id = args[i + 1];
-          i++;
+          if (i + 1 < args.length) {
+            id = args[i + 1];
+            i++;
+          }
           break;
         case '--file-transfer':
           isFileTransfer = true;
-          id = args[i + 1];
-          i++;
+          if (i + 1 < args.length) {
+            id = args[i + 1];
+            i++;
+          }
           break;
         case '--view-camera':
           isViewCamera = true;
-          id = args[i + 1];
-          i++;
+          if (i + 1 < args.length) {
+            id = args[i + 1];
+            i++;
+          }
           break;
         case '--terminal':
           isTerminal = true;
-          id = args[i + 1];
-          i++;
+          if (i + 1 < args.length) {
+            id = args[i + 1];
+            i++;
+          }
           break;
         case '--terminal-admin':
-          setEnvTerminalAdmin();
           isTerminal = true;
-          id = args[i + 1];
-          i++;
+          isTerminalRunAsAdmin = true;
+          if (i + 1 < args.length) {
+            id = args[i + 1];
+            i++;
+          }
           break;
         case '--password':
-          password = args[i + 1];
-          i++;
+          if (i + 1 < args.length) {
+            password = args[i + 1];
+            i++;
+          }
           break;
         default:
           break;
@@ -337,6 +350,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
         isViewCamera: isViewCamera,
         isTerminal: isTerminal,
         password: password,
+        isTerminalRunAsAdmin: isTerminalRunAsAdmin,
       );
     }
   }

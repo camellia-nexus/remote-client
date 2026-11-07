@@ -161,7 +161,9 @@ class _PeerCardState extends State<_PeerCard>
         : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final greyStyle = TextStyle(
       fontSize: 12,
-      color: Theme.of(context).textTheme.titleLarge?.color?.withValues(alpha: 0.62),
+      color: Theme.of(
+        context,
+      ).textTheme.titleLarge?.color?.withValues(alpha: 0.62),
     );
     final showNote = _showNote(peer);
 
@@ -207,80 +209,83 @@ class _PeerCardState extends State<_PeerCard>
                 bottomRight: Radius.circular(_tileRadius),
               ),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    children: [
-                      Row(
+            child:
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
                         children: [
-                          getOnline(isPortrait ? 4 : 8, peer.online),
-                          Expanded(
-                            child: Text(
-                              peer.alias.isEmpty
-                                  ? formatID(peer.id)
-                                  : peer.alias,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                          ),
-                        ],
-                      ).marginOnly(top: isPortrait ? 0 : 1),
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Tooltip(
-                              message: name,
-                              waitDuration: const Duration(seconds: 1),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
+                          Row(
+                            children: [
+                              getOnline(isPortrait ? 4 : 8, peer.online),
+                              Expanded(
                                 child: Text(
-                                  name,
-                                  style: isPortrait ? null : greyStyle,
-                                  textAlign: TextAlign.start,
+                                  peer.alias.isEmpty
+                                      ? formatID(peer.id)
+                                      : peer.alias,
                                   overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleSmall,
                                 ),
                               ),
-                            ),
+                            ],
+                          ).marginOnly(top: isPortrait ? 0 : 1),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Tooltip(
+                                  message: name,
+                                  waitDuration: const Duration(seconds: 1),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      name,
+                                      style: isPortrait ? null : greyStyle,
+                                      textAlign: TextAlign.start,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (showNote)
+                                Expanded(
+                                  child: Tooltip(
+                                    message: peer.note,
+                                    waitDuration: const Duration(seconds: 1),
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child:
+                                          Text(
+                                            peer.note,
+                                            style: isPortrait
+                                                ? null
+                                                : greyStyle,
+                                            textAlign: TextAlign.start,
+                                            overflow: TextOverflow.ellipsis,
+                                          ).marginOnly(
+                                            left:
+                                                peerCardUiType.value ==
+                                                    PeerUiType.list
+                                                ? 32
+                                                : 4,
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                          if (showNote)
-                            Expanded(
-                              child: Tooltip(
-                                message: peer.note,
-                                waitDuration: const Duration(seconds: 1),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child:
-                                      Text(
-                                        peer.note,
-                                        style: isPortrait ? null : greyStyle,
-                                        textAlign: TextAlign.start,
-                                        overflow: TextOverflow.ellipsis,
-                                      ).marginOnly(
-                                        left:
-                                            peerCardUiType.value ==
-                                                PeerUiType.list
-                                            ? 32
-                                            : 4,
-                                      ),
-                                ),
-                              ),
-                            ),
                         ],
-                      ),
-                    ],
-                  ).marginOnly(top: 2),
+                      ).marginOnly(top: 2),
+                    ),
+                    isPortrait
+                        ? checkBoxOrActionMorePortrait(peer)
+                        : checkBoxOrActionMoreLandscape(peer, isTile: true),
+                  ],
+                ).paddingOnly(
+                  left: isPortrait ? 10 : 12,
+                  right: 4,
+                  top: isPortrait ? 3 : 4,
+                  bottom: isPortrait ? 0 : 4,
                 ),
-                isPortrait
-                    ? checkBoxOrActionMorePortrait(peer)
-                    : checkBoxOrActionMoreLandscape(peer, isTile: true),
-              ],
-            ).paddingOnly(
-              left: isPortrait ? 10 : 12,
-              right: 4,
-              top: isPortrait ? 3 : 4,
-              bottom: isPortrait ? 0 : 4,
-            ),
           ),
         ),
       ],
@@ -628,9 +633,6 @@ abstract class BasePeerCard extends StatelessWidget {
     return MenuEntryButton<String>(
       childBuilder: (TextStyle? style) => Text(title, style: style),
       proc: () {
-        if (isTerminalRunAsAdmin) {
-          setEnvTerminalAdmin();
-        }
         connectInPeerTab(
           context,
           peer,
@@ -640,6 +642,7 @@ abstract class BasePeerCard extends StatelessWidget {
           isTcpTunneling: isTcpTunneling,
           isRDP: isRDP,
           isTerminal: isTerminal || isTerminalRunAsAdmin,
+          isTerminalRunAsAdmin: isTerminalRunAsAdmin,
         );
       },
       padding: menuPadding,
@@ -1463,11 +1466,7 @@ void _rdpDialog(String id) async {
       );
       if (hasStoredPassword) {
         if (clearPassword.value) {
-          await bind.mainSetPeerOption(
-            id: id,
-            key: 'rdp_password',
-            value: '',
-          );
+          await bind.mainSetPeerOption(id: id, key: 'rdp_password', value: '');
         } else if (password.isNotEmpty) {
           await bind.mainSetPeerOption(
             id: id,
@@ -1570,8 +1569,8 @@ void _rdpDialog(String id) async {
                           labelText: isDesktop ? null : translate('Password'),
                           hintText: hasStoredPassword
                               ? (clearPassword.value
-                                  ? translate('Password cleared')
-                                  : '●●●●●● (${translate("Saved")})')
+                                    ? translate('Password cleared')
+                                    : '●●●●●● (${translate("Saved")})')
                               : null,
                           suffixIcon: hasStoredPassword
                               ? IconButton(
@@ -1652,7 +1651,9 @@ Widget build_more(BuildContext context, {bool invert = false}) {
           size: 18,
           color: hover.value
               ? Theme.of(context).textTheme.titleLarge?.color
-              : Theme.of(context).textTheme.titleLarge?.color?.withValues(alpha: 0.5),
+              : Theme.of(
+                  context,
+                ).textTheme.titleLarge?.color?.withValues(alpha: 0.5),
         ),
       ),
     ),
@@ -1710,6 +1711,7 @@ void connectInPeerTab(
   bool isTcpTunneling = false,
   bool isRDP = false,
   bool isTerminal = false,
+  bool isTerminalRunAsAdmin = false,
 }) async {
   var password = '';
   bool isSharedPassword = false;
@@ -1744,5 +1746,6 @@ void connectInPeerTab(
     isViewCamera: isViewCamera,
     isTcpTunneling: isTcpTunneling,
     isRDP: isRDP,
+    isTerminalRunAsAdmin: isTerminalRunAsAdmin,
   );
 }

@@ -463,6 +463,28 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
 }
 
 #[inline]
+pub fn is_client_valid(conn_id: i32) -> bool {
+    let clients = match CLIENTS.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    match clients.get(&conn_id) {
+        Some(client) => !client.disconnected,
+        None => false,
+    }
+}
+
+#[inline]
+pub fn cm_authorize_action(
+    conn_id: i32,
+    action: String,
+    action_id: i64,
+    page_generation: i64,
+) -> bool {
+    crate::action_gate::authorize_cm_action(conn_id, &action, action_id, page_generation)
+}
+
+#[inline]
 #[cfg(not(any(target_os = "ios")))]
 pub fn check_click_time(id: i32) {
     if let Some(client) = CLIENTS.read().unwrap().get(&id) {

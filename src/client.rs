@@ -55,6 +55,8 @@ use camellia_remote_protocol::{
     protobuf::{Message as _, MessageField},
     rand,
     rendezvous_proto::*,
+};
+use camellia_remote_protocol::{
     sha2::{Digest, Sha256},
     socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6, new_direct_udp_for},
     tcp::CipherRole,
@@ -1827,6 +1829,7 @@ impl LoginConfigHandler {
         adapter_luid: Option<i64>,
         shared_password: Option<String>,
         conn_token: Option<String>,
+        is_terminal_admin: bool,
     ) {
         let mut id = id;
         if id.contains("@") {
@@ -1922,10 +1925,7 @@ impl LoginConfigHandler {
         self.record_state = false;
         self.record_permission = true;
 
-        // `std::env::remove_var("IS_TERMINAL_ADMIN");` is called in `session_add_sync()` - `flutter_ffi.rs`.
-        let is_terminal_admin = conn_type == ConnType::TERMINAL
-            && std::env::var("IS_TERMINAL_ADMIN").map_or(false, |v| v == "Y");
-        self.is_terminal_admin = is_terminal_admin;
+        self.is_terminal_admin = conn_type == ConnType::TERMINAL && is_terminal_admin;
     }
 
     #[cfg(feature = "flutter")]

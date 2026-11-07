@@ -79,6 +79,7 @@ class RustdeskImpl {
     required String password,
     required bool isSharedPassword,
     String? connToken,
+    required bool isTerminalAdmin,
     dynamic hint,
   }) {
     return js.context.callMethod('setByName', [
@@ -91,8 +92,23 @@ class RustdeskImpl {
         'isViewCamera': isViewCamera,
         'isTerminal': isTerminal,
         'forceRelay': forceRelay,
+        'isTerminalAdmin': isTerminalAdmin,
       }),
     ]);
+  }
+
+  bool sessionHasOsPassword({required UuidValue sessionId, dynamic hint}) {
+    return 'true' == js.context.callMethod('getByName', ['has_os_password']);
+  }
+
+  Future<bool> sessionInputStoredOsPassword({
+    required UuidValue sessionId,
+    dynamic hint,
+  }) {
+    return Future.value(
+      'true' ==
+          js.context.callMethod('setByName', ['input_stored_os_password']),
+    );
   }
 
   Stream<EventToUI> sessionStart({
@@ -152,6 +168,9 @@ class RustdeskImpl {
     required String arg,
     dynamic hint,
   }) {
+    if (arg == 'os-password' || arg == 'rdp_password') {
+      return Future.value('');
+    }
     return Future(
       () => js.context.callMethod('getByName', ['option:session', arg]),
     );
@@ -1202,7 +1221,10 @@ class RustdeskImpl {
     throw UnimplementedError("mainGetHttpStatus");
   }
 
-  Future<void> mainCancelHttpRequest({required String requestId, dynamic hint}) {
+  Future<void> mainCancelHttpRequest({
+    required String requestId,
+    dynamic hint,
+  }) {
     throw UnimplementedError("mainCancelHttpRequest");
   }
 
@@ -1751,6 +1773,13 @@ class RustdeskImpl {
     throw UnimplementedError("mainGetMouseTime");
   }
 
+  Future<bool> mainCheckPointerSourceAuthoritative({
+    required int actionId,
+    dynamic hint,
+  }) {
+    return Future.value(false);
+  }
+
   Future<void> mainWol({required String id, dynamic hint}) {
     throw UnimplementedError("mainWol");
   }
@@ -1792,6 +1821,16 @@ class RustdeskImpl {
 
   Future<double> cmGetClickTime({dynamic hint}) {
     throw UnimplementedError("cmGetClickTime");
+  }
+
+  Future<bool> cmAuthorizeAction({
+    required int connId,
+    required String action,
+    required int actionId,
+    required int pageGeneration,
+    dynamic hint,
+  }) {
+    return Future.value(false);
   }
 
   Future<void> cmSwitchPermission({

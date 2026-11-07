@@ -1483,6 +1483,7 @@ pub fn session_add(
     password: String,
     is_shared_password: bool,
     conn_token: Option<String>,
+    is_terminal_admin: bool,
 ) -> ResultType<FlutterSession> {
     let conn_type = if is_file_transfer {
         ConnType::FILE_TRANSFER
@@ -1543,6 +1544,7 @@ pub fn session_add(
         get_adapter_luid(),
         shared_password,
         conn_token,
+        is_terminal_admin,
     );
 
     let session = Arc::new(session.clone());

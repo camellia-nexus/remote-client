@@ -165,19 +165,17 @@ handleOsPasswordAction(
     isEditOsPassword = false;
     return;
   }
-  final password =
-      await bind.sessionGetOption(sessionId: sessionId, arg: 'os-password') ??
-      '';
-  if (password.isEmpty) {
+  final hasPassword = bind.sessionHasOsPassword(sessionId: sessionId);
+  if (!hasPassword) {
     showSetOSPassword(
       sessionId,
       true,
       dialogManager,
-      password,
+      '',
       () => isEditOsPassword = false,
     );
   } else {
-    bind.sessionInputOsPassword(sessionId: sessionId, value: password);
+    await bind.sessionInputStoredOsPassword(sessionId: sessionId);
   }
 }
 

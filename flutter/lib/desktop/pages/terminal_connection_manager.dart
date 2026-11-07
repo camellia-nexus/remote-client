@@ -9,6 +9,8 @@ class TerminalConnectionManager {
 
   // Track service IDs per peer
   static final Map<String, String> _serviceIds = {};
+  // Track privilege modes per peer
+  static final Map<String, bool> _connectionAdminMode = {};
 
   /// Get or create an FFI instance for a peer
   static FFI getConnection({
@@ -17,17 +19,25 @@ class TerminalConnectionManager {
     required bool? isSharedPassword,
     required bool? forceRelay,
     required String? connToken,
+    bool isTerminalRunAsAdmin = false,
   }) {
     final existingFfi = _connections[peerId];
-    if (existingFfi != null && !existingFfi.closed) {
+    final existingAdminMode = _connectionAdminMode[peerId] ?? false;
+    if (existingFfi != null &&
+        !existingFfi.closed &&
+        existingAdminMode == isTerminalRunAsAdmin) {
       // Increment reference count
       _connectionRefCount[peerId] = (_connectionRefCount[peerId] ?? 0) + 1;
-      debugPrint('[TerminalConnectionManager] Reusing existing connection for peer $peerId. Reference count: ${_connectionRefCount[peerId]}');
+      debugPrint(
+        '[TerminalConnectionManager] Reusing existing connection for peer $peerId (admin=$isTerminalRunAsAdmin). Reference count: ${_connectionRefCount[peerId]}',
+      );
       return existingFfi;
     }
 
-    // Create new FFI instance for first terminal
-    debugPrint('[TerminalConnectionManager] Creating new terminal connection for peer $peerId');
+    // Create new FFI instance for terminal
+    debugPrint(
+      '[TerminalConnectionManager] Creating new terminal connection for peer $peerId (admin=$isTerminalRunAsAdmin)',
+    );
     final ffi = FFI(null);
     ffi.start(
       peerId,
@@ -36,37 +46,48 @@ class TerminalConnectionManager {
       forceRelay: forceRelay,
       connToken: connToken,
       isTerminal: true,
+      isTerminalRunAsAdmin: isTerminalRunAsAdmin,
     );
 
     _connections[peerId] = ffi;
+    _connectionAdminMode[peerId] = isTerminalRunAsAdmin;
     _connectionRefCount[peerId] = 1;
 
     // Register the FFI instance with Get for dependency injection
     Get.put<FFI>(ffi, tag: 'terminal_$peerId');
 
-    debugPrint('[TerminalConnectionManager] New connection created. Total connections: ${_connections.length}');
+    debugPrint(
+      '[TerminalConnectionManager] New connection created. Total connections: ${_connections.length}',
+    );
     return ffi;
   }
 
   /// Release a connection reference
   static void releaseConnection(String peerId) {
     final refCount = _connectionRefCount[peerId] ?? 0;
-    debugPrint('[TerminalConnectionManager] Releasing connection for peer $peerId. Current ref count: $refCount');
+    debugPrint(
+      '[TerminalConnectionManager] Releasing connection for peer $peerId. Current ref count: $refCount',
+    );
 
     if (refCount <= 1) {
       // Last reference, close the connection
       final ffi = _connections[peerId];
       if (ffi != null) {
-        debugPrint('[TerminalConnectionManager] Closing connection for peer $peerId (last reference)');
+        debugPrint(
+          '[TerminalConnectionManager] Closing connection for peer $peerId (last reference)',
+        );
         ffi.close();
         _connections.remove(peerId);
         _connectionRefCount.remove(peerId);
+        _connectionAdminMode.remove(peerId);
         Get.delete<FFI>(tag: 'terminal_$peerId');
       }
     } else {
       // Decrement reference count
       _connectionRefCount[peerId] = refCount - 1;
-      debugPrint('[TerminalConnectionManager] Connection still in use. New ref count: ${_connectionRefCount[peerId]}');
+      debugPrint(
+        '[TerminalConnectionManager] Connection still in use. New ref count: ${_connectionRefCount[peerId]}',
+      );
     }
   }
 
@@ -85,7 +106,8 @@ class TerminalConnectionManager {
   static int getConnectionCount() => _connections.length;
 
   /// Get terminal count for a peer
-  static int getTerminalCount(String peerId) => _connectionRefCount[peerId] ?? 0;
+  static int getTerminalCount(String peerId) =>
+      _connectionRefCount[peerId] ?? 0;
 
   /// Get service ID for a peer
   static String? getServiceId(String peerId) => _serviceIds[peerId];
@@ -93,6 +115,8 @@ class TerminalConnectionManager {
   /// Set service ID for a peer
   static void setServiceId(String peerId, String serviceId) {
     _serviceIds[peerId] = serviceId;
-    debugPrint('[TerminalConnectionManager] Service ID for $peerId: $serviceId');
+    debugPrint(
+      '[TerminalConnectionManager] Service ID for $peerId: $serviceId',
+    );
   }
 }

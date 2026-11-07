@@ -147,6 +147,7 @@ pub fn session_add_sync(
     password: String,
     is_shared_password: bool,
     conn_token: Option<String>,
+    is_terminal_admin: bool,
 ) -> String {
     let add_res = session_add(
         &session_id,
@@ -161,12 +162,8 @@ pub fn session_add_sync(
         password,
         is_shared_password,
         conn_token,
+        is_terminal_admin,
     );
-    // We can't put the remove call together with `std::env::var("IS_TERMINAL_ADMIN")`.
-    // Because there are some `bail!` in `session_add()`, we must make sure `IS_TERMINAL_ADMIN` is removed at last.
-    if is_terminal {
-        std::env::remove_var("IS_TERMINAL_ADMIN");
-    }
 
     if let Err(e) = add_res {
         format!("Failed to add session with id {}, {}", &id, e)
@@ -223,10 +220,31 @@ pub fn session_get_toggle_option_sync(session_id: SessionID, arg: String) -> boo
 }
 
 pub fn session_get_option(session_id: SessionID, arg: String) -> Option<String> {
+    if crate::ui_interface::is_secret_peer_option(&arg) {
+        log::warn!("session_get_option: rejected query for secret key {}", arg);
+        return None;
+    }
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         Some(session.get_option(arg))
     } else {
         None
+    }
+}
+
+#[frb(sync)]
+pub fn session_has_os_password(session_id: SessionID) -> bool {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.has_os_password()
+    } else {
+        false
+    }
+}
+
+pub fn session_input_stored_os_password(session_id: SessionID) -> bool {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.input_stored_os_password()
+    } else {
+        false
     }
 }
 
@@ -2327,6 +2345,10 @@ pub fn main_get_mouse_time() -> f64 {
     }
 }
 
+pub fn main_check_pointer_source_authoritative(action_id: i64) -> bool {
+    crate::action_gate::check_pointer_source_authoritative(action_id)
+}
+
 pub fn main_wol(id: String) {
     // TODO: move send_wol outside.
     #[cfg(not(any(target_os = "ios")))]
@@ -2372,6 +2394,15 @@ pub fn cm_get_click_time() -> f64 {
     return crate::ui_cm_interface::get_click_time() as _;
     #[cfg(any(target_os = "ios"))]
     return 0 as _;
+}
+
+pub fn cm_authorize_action(
+    conn_id: i32,
+    action: String,
+    action_id: i64,
+    page_generation: i64,
+) -> bool {
+    crate::ui_cm_interface::cm_authorize_action(conn_id, action, action_id, page_generation)
 }
 
 pub fn cm_switch_permission(conn_id: i32, name: String, enabled: bool) {

@@ -2707,7 +2707,9 @@ StreamSubscription? listenUniLinks({handleByFlutter = true}) {
 
   final sub = uriLinkStream.listen(
     (Uri? uri) {
-      debugPrint("A uri was received: ${LogSanitizer.sanitize(uri?.toString() ?? '')}. handleByFlutter $handleByFlutter");
+      debugPrint(
+        "A uri was received: ${LogSanitizer.sanitize(uri?.toString() ?? '')}. handleByFlutter $handleByFlutter",
+      );
       if (uri != null) {
         if (handleByFlutter) {
           handleUriLink(uri: uri);
@@ -2732,10 +2734,6 @@ enum UriLinkType {
   portForward,
   rdp,
   terminal,
-}
-
-setEnvTerminalAdmin() {
-  bind.mainSetEnv(key: 'IS_TERMINAL_ADMIN', value: 'Y');
 }
 
 // uri link handler
@@ -2772,52 +2770,71 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   String? password;
   String? switchUuid;
   bool? forceRelay;
+  bool isTerminalRunAsAdmin = false;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--connect':
       case '--play':
         type = UriLinkType.remoteDesktop;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--file-transfer':
         type = UriLinkType.fileTransfer;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--view-camera':
         type = UriLinkType.viewCamera;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--port-forward':
         type = UriLinkType.portForward;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--rdp':
         type = UriLinkType.rdp;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--terminal':
         type = UriLinkType.terminal;
-        id = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--terminal-admin':
-        setEnvTerminalAdmin();
         type = UriLinkType.terminal;
-        id = args[i + 1];
-        i++;
+        isTerminalRunAsAdmin = true;
+        if (i + 1 < args.length) {
+          id = args[i + 1];
+          i++;
+        }
         break;
       case '--password':
-        password = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          password = args[i + 1];
+          i++;
+        }
         break;
       case '--switch_uuid':
-        switchUuid = args[i + 1];
-        i++;
+        if (i + 1 < args.length) {
+          switchUuid = args[i + 1];
+          i++;
+        }
         break;
       case '--relay':
         forceRelay = true;
@@ -2882,6 +2899,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
             id!,
             password: password,
             forceRelay: forceRelay,
+            isTerminalRunAsAdmin: isTerminalRunAsAdmin,
           );
         });
         break;
@@ -2937,9 +2955,7 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     }
     return null;
   } else if (uri.authority == "password") {
-    debugPrint(
-      "[CRED-001] Insecure deep link authority 'password' rejected.",
-    );
+    debugPrint("[CRED-001] Insecure deep link authority 'password' rejected.");
     Timer(Duration(seconds: 1), () {
       showToast(translate('Direct password in links is disabled for security'));
     });
@@ -2966,10 +2982,17 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     (k, v) => MapEntry(k.toLowerCase(), v),
   );
 
-  if (queryParameters.containsKey("password") || queryParameters.containsKey("token")) {
-    debugPrint("[CRED-001] Insecure cleartext password/token query parameter in URI rejected.");
+  if (queryParameters.containsKey("password") ||
+      queryParameters.containsKey("token")) {
+    debugPrint(
+      "[CRED-001] Insecure cleartext password/token query parameter in URI rejected.",
+    );
     Timer(Duration(seconds: 1), () {
-      showToast(translate('Direct credential parameters in links are disabled for security'));
+      showToast(
+        translate(
+          'Direct credential parameters in links are disabled for security',
+        ),
+      );
     });
   }
 
@@ -2985,33 +3008,18 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
 
     // Determine connection type based on command
     if (command == '--file-transfer') {
-      connect(
-        Get.context!,
-        id,
-        isFileTransfer: true,
-        forceRelay: forceRelay,
-      );
+      connect(Get.context!, id, isFileTransfer: true, forceRelay: forceRelay);
     } else if (command == '--view-camera') {
-      connect(
-        Get.context!,
-        id,
-        isViewCamera: true,
-        forceRelay: forceRelay,
-      );
+      connect(Get.context!, id, isViewCamera: true, forceRelay: forceRelay);
     } else if (command == '--terminal') {
-      connect(
-        Get.context!,
-        id,
-        isTerminal: true,
-        forceRelay: forceRelay,
-      );
+      connect(Get.context!, id, isTerminal: true, forceRelay: forceRelay);
     } else if (command == 'terminal-admin') {
-      setEnvTerminalAdmin();
       connect(
         Get.context!,
         id,
         isTerminal: true,
         forceRelay: forceRelay,
+        isTerminalRunAsAdmin: true,
       );
     } else {
       // Default to remote desktop for '--connect', '--play', or direct connection
@@ -3045,6 +3053,7 @@ connectMainDesktop(
   String? password,
   String? connToken,
   bool? isSharedPassword,
+  bool isTerminalRunAsAdmin = false,
 }) async {
   if (isFileTransfer) {
     await rustDeskWinManager.newFileTransfer(
@@ -3078,6 +3087,7 @@ connectMainDesktop(
       isSharedPassword: isSharedPassword,
       connToken: connToken,
       forceRelay: forceRelay,
+      isTerminalRunAsAdmin: isTerminalRunAsAdmin,
     );
   } else {
     await rustDeskWinManager.newRemoteDesktop(
@@ -3106,6 +3116,7 @@ connect(
   String? password,
   String? connToken,
   bool? isSharedPassword,
+  bool isTerminalRunAsAdmin = false,
 }) async {
   if (id == '') return;
   if (!isDesktop || desktopType == DesktopType.main) {
@@ -3141,6 +3152,8 @@ connect(
         password: password,
         isSharedPassword: isSharedPassword,
         forceRelay: forceRelay,
+        connToken: connToken,
+        isTerminalRunAsAdmin: isTerminalRunAsAdmin,
       );
     } else {
       await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
@@ -3154,6 +3167,7 @@ connect(
         'isSharedPassword': isSharedPassword,
         'forceRelay': forceRelay,
         'connToken': connToken,
+        'isTerminalRunAsAdmin': isTerminalRunAsAdmin,
       });
     }
   } else {
@@ -3227,6 +3241,7 @@ connect(
             password: password,
             isSharedPassword: isSharedPassword,
             forceRelay: forceRelay,
+            isTerminalRunAsAdmin: isTerminalRunAsAdmin,
           ),
         ),
       );
@@ -3664,22 +3679,27 @@ Future<bool> canBeBlocked() async {
   return accessMode == 'view' || (isCustomAccessMode && !option);
 }
 
-// to-do: web not implemented
+int _blockActionCounter = 0;
+
 Future<void> shouldBeBlocked(RxBool block, WhetherUseRemoteBlock? use) async {
   if (use != null && !await use()) {
     block.value = false;
     return;
   }
-  var time0 = DateTime.now().millisecondsSinceEpoch;
-  await bind.mainCheckMouseTime();
-  Timer(const Duration(milliseconds: 120), () async {
-    var d = time0 - await bind.mainGetMouseTime();
-    if (d < 120) {
-      block.value = true;
-    } else {
-      block.value = false;
+  // FAIL-CLOSED: immediately block before verifying authoritative input gate
+  block.value = true;
+  final currentActionId = ++_blockActionCounter;
+  try {
+    final shouldBlock = await bind.mainCheckPointerSourceAuthoritative(
+      actionId: currentActionId,
+    );
+    if (currentActionId == _blockActionCounter) {
+      block.value = shouldBlock;
     }
-  });
+  } catch (e) {
+    // Fail-closed on error or timeout
+    block.value = true;
+  }
 }
 
 typedef WhetherUseRemoteBlock = Future<bool> Function();
@@ -3694,7 +3714,10 @@ Widget buildRemoteBlock({
       onEnter: (_) async {
         await shouldBeBlocked(block, use);
       },
-      onExit: (event) => block.value = false,
+      onExit: (event) {
+        _blockActionCounter++;
+        block.value = false;
+      },
       child: Stack(
         children: [
           // scope block tab

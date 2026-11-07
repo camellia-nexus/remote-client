@@ -22,12 +22,14 @@ class TerminalPage extends StatefulWidget {
     required this.isSharedPassword,
     this.forceRelay,
     this.connToken,
+    this.isTerminalRunAsAdmin = false,
   }) : super(key: key);
   final String id;
   final String? password;
   final bool? forceRelay;
   final bool? isSharedPassword;
   final String? connToken;
+  final bool isTerminalRunAsAdmin;
   final terminalId = 0;
 
   @override
@@ -76,7 +78,8 @@ class _TerminalPageState extends State<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
 
     debugPrint(
-        '[TerminalPage] Initializing terminal ${widget.terminalId} for peer ${widget.id}');
+      '[TerminalPage] Initializing terminal ${widget.terminalId} for peer ${widget.id}',
+    );
 
     // Use shared FFI instance from connection manager
     _ffi = TerminalConnectionManager.getConnection(
@@ -85,12 +88,14 @@ class _TerminalPageState extends State<TerminalPage>
       isSharedPassword: widget.isSharedPassword,
       forceRelay: widget.forceRelay,
       connToken: widget.connToken,
+      isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
     );
 
     // Create terminal model with specific terminal ID
     _terminalModel = TerminalModel(_ffi, widget.terminalId);
     debugPrint(
-        '[TerminalPage] Terminal model created for terminal ${widget.terminalId}');
+      '[TerminalPage] Terminal model created for terminal ${widget.terminalId}',
+    );
 
     _terminalModel.onResizeExternal = (w, h, pw, ph) {
       _cellHeight = ph * 1.0;
@@ -109,7 +114,8 @@ class _TerminalPageState extends State<TerminalPage>
 
     // Web desktop users have full hardware keyboard access, so the on-screen
     // terminal extra keys bar is unnecessary and disabled.
-    _showTerminalExtraKeys = !isWebDesktop &&
+    _showTerminalExtraKeys =
+        !isWebDesktop &&
         mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
     _terminalModel.isCtrlLocked = () => _ctrlLocked;
     _terminalModel.clearCtrlLock = () {
@@ -125,8 +131,10 @@ class _TerminalPageState extends State<TerminalPage>
         bind.mainGetLocalOption(key: kOptionShowTerminalCtrlKeys) == 'Y';
     // Initialize terminal connection
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _ffi.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      _ffi.dialogManager.showLoading(
+        translate('Connecting...'),
+        onCancel: closeConnection,
+      );
 
       if (_showTerminalExtraKeys) {
         _updateKeyboardHeight();
@@ -284,8 +292,9 @@ class _TerminalPageState extends State<TerminalPage>
                       final selection =
                           _terminalModel.terminalController.selection;
                       if (selection != null) {
-                        final text =
-                            _terminalModel.terminal.buffer.getText(selection);
+                        final text = _terminalModel.terminal.buffer.getText(
+                          selection,
+                        );
                         _terminalModel.terminalController.clearSelection();
                         await Clipboard.setData(ClipboardData(text: text));
                       } else {
@@ -319,36 +328,41 @@ class _TerminalPageState extends State<TerminalPage>
           return RawGestureDetector(
             behavior: HitTestBehavior.translucent,
             gestures: <Type, GestureRecognizerFactory>{
-              HorizontalDragGestureRecognizer: GestureRecognizerFactoryWithHandlers<HorizontalDragGestureRecognizer>(
-                () => HorizontalDragGestureRecognizer(
-                  debugOwner: this,
-                  // Only respond to touch input, exclude mouse/trackpad
-                  supportedDevices: kTouchBasedDeviceKinds,
-                ),
-                (HorizontalDragGestureRecognizer instance) {
-                  instance
-                    // Capture initial touch-down position (before touch slop)
-                    ..onDown = (details) {
-                      _swipeStartX = details.localPosition.dx;
-                      _swipeCurrentX = details.localPosition.dx;
-                    }
-                    ..onUpdate = (details) {
-                      _swipeCurrentX = details.localPosition.dx;
-                    }
-                    ..onEnd = (details) {
-                      // Check if swipe started from left edge and moved right
-                      if (_swipeStartX < edgeThreshold && (_swipeCurrentX - _swipeStartX) > swipeThreshold) {
-                        clientClose(sessionId, _ffi);
-                      }
-                      _swipeStartX = 0;
-                      _swipeCurrentX = 0;
-                    }
-                    ..onCancel = () {
-                      _swipeStartX = 0;
-                      _swipeCurrentX = 0;
-                    };
-                },
-              ),
+              HorizontalDragGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<
+                    HorizontalDragGestureRecognizer
+                  >(
+                    () => HorizontalDragGestureRecognizer(
+                      debugOwner: this,
+                      // Only respond to touch input, exclude mouse/trackpad
+                      supportedDevices: kTouchBasedDeviceKinds,
+                    ),
+                    (HorizontalDragGestureRecognizer instance) {
+                      instance
+                        // Capture initial touch-down position (before touch slop)
+                        ..onDown = (details) {
+                          _swipeStartX = details.localPosition.dx;
+                          _swipeCurrentX = details.localPosition.dx;
+                        }
+                        ..onUpdate = (details) {
+                          _swipeCurrentX = details.localPosition.dx;
+                        }
+                        ..onEnd = (details) {
+                          // Check if swipe started from left edge and moved right
+                          if (_swipeStartX < edgeThreshold &&
+                              (_swipeCurrentX - _swipeStartX) >
+                                  swipeThreshold) {
+                            clientClose(sessionId, _ffi);
+                          }
+                          _swipeStartX = 0;
+                          _swipeCurrentX = 0;
+                        }
+                        ..onCancel = () {
+                          _swipeStartX = 0;
+                          _swipeCurrentX = 0;
+                        };
+                    },
+                  ),
             },
             child: scaffold,
           );
@@ -460,9 +474,11 @@ class _TerminalPageState extends State<TerminalPage>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   ..._buildKeyboardKeyButtons(terminalKeyboardRow3Keys),
-                  for (var i = 0;
-                      i < terminalKeyboardRow3TrailingPlaceholderCount;
-                      i++) ...[
+                  for (
+                    var i = 0;
+                    i < terminalKeyboardRow3TrailingPlaceholderCount;
+                    i++
+                  ) ...[
                     const SizedBox(width: terminalKeyboardKeySpacing),
                     const SizedBox(width: terminalKeyboardKeyWidth),
                   ],
@@ -533,8 +549,9 @@ class _TerminalPageState extends State<TerminalPage>
           minimumSize: const Size(terminalKeyboardKeyWidth, 32),
           padding: EdgeInsets.zero,
           textStyle: const TextStyle(fontSize: 12),
-          backgroundColor:
-              Theme.of(context).colorScheme.surfaceContainerHighest,
+          backgroundColor: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest,
           foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
@@ -596,8 +613,7 @@ class _TerminalPageState extends State<TerminalPage>
         minimumSize: const Size(terminalKeyboardKeyWidth, 32),
         padding: EdgeInsets.zero,
         textStyle: const TextStyle(fontSize: 12),
-        backgroundColor:
-            Theme.of(context).colorScheme.surfaceContainerHighest,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
         foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     );

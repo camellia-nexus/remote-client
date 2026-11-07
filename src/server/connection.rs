@@ -4163,8 +4163,10 @@ impl Connection {
                     if self.peer_keyboard_enabled() {
                         if is_left_up(&me) {
                             CLICK_TIME.store(get_time(), Ordering::SeqCst);
+                            crate::action_gate::record_remote_input(self.inner.id(), true);
                         } else {
                             MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
+                            crate::action_gate::record_remote_input(self.inner.id(), false);
                         }
                         #[cfg(target_os = "macos")]
                         self.retina.on_mouse_event(&mut me, self.display_idx);
@@ -4242,6 +4244,7 @@ impl Connection {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if self.peer_keyboard_enabled() {
                         MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
+                        crate::action_gate::record_remote_input(self.inner.id(), false);
                         self.input_pointer(pde, self.inner.id());
                     }
                     self.update_auto_disconnect_timer();
@@ -4315,9 +4318,11 @@ impl Connection {
                     if self.peer_keyboard_enabled() {
                         if is_enter(&me) {
                             CLICK_TIME.store(get_time(), Ordering::SeqCst);
+                            crate::action_gate::record_remote_input(self.inner.id(), true);
                         }
                         // https://github.com/rustdesk/rustdesk/issues/8633
                         MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
+                        crate::action_gate::record_remote_input(self.inner.id(), false);
 
                         let key = match me.mode.enum_value() {
                             Ok(KeyboardMode::Map) => {
@@ -8110,6 +8115,7 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        crate::action_gate::clean_connection(self.inner.id);
         self.inflight_write_blocks.clear();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         crate::child_process::terminate_session_children(

@@ -24,7 +24,7 @@ export class StorageStore {
   set(key: string, value: unknown, persist = true): void {
     const raw = value === undefined || value === null ? '' : String(value);
     this.memory.set(key, raw);
-    if (!persist) {
+    if (!persist || this.isSecretKey(key)) {
       return;
     }
     try {
@@ -32,6 +32,15 @@ export class StorageStore {
     } catch {
       // Ignore storage errors.
     }
+  }
+
+  private isSecretKey(key: string): boolean {
+    return (
+      key === 'os-password' ||
+      key === 'rdp_password' ||
+      key.endsWith(':os-password') ||
+      key.endsWith(':rdp_password')
+    );
   }
 
   remove(key: string, persist = true): void {

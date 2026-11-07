@@ -844,10 +844,33 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn get_option(&self, k: String) -> String {
+        if crate::ui_interface::is_secret_peer_option(&k) {
+            log::warn!(
+                "Rejected session get_option query for protected secret key: {}",
+                k
+            );
+            return "".to_string();
+        }
         if k.eq("remote_dir") {
             return self.lc.read().unwrap().get_remote_dir();
         }
         self.lc.read().unwrap().get_option(&k)
+    }
+
+    pub fn has_os_password(&self) -> bool {
+        !self.lc.read().unwrap().get_option("os-password").is_empty()
+    }
+
+    pub fn input_stored_os_password(&self) -> bool {
+        if !self.can_control_remote() {
+            return false;
+        }
+        let pass = self.lc.read().unwrap().get_option("os-password");
+        if pass.is_empty() {
+            return false;
+        }
+        self.input_os_password(pass, true);
+        true
     }
 
     pub fn set_option(&self, k: String, mut v: String) {

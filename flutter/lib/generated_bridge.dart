@@ -46,6 +46,7 @@ class RustdeskImpl {
     required String password,
     required bool isSharedPassword,
     String? connToken,
+    required bool isTerminalAdmin,
   }) => ffi.sessionAddSync(
     sessionId: sessionId,
     id: id,
@@ -59,6 +60,7 @@ class RustdeskImpl {
     password: password,
     isSharedPassword: isSharedPassword,
     connToken: connToken,
+    isTerminalAdmin: isTerminalAdmin,
   );
   Stream<EventToUI> sessionStart({
     required UuidValue sessionId,
@@ -87,6 +89,10 @@ class RustdeskImpl {
     required UuidValue sessionId,
     required String arg,
   }) => ffi.sessionGetOption(sessionId: sessionId, arg: arg);
+  bool sessionHasOsPassword({required UuidValue sessionId}) =>
+      ffi.sessionHasOsPassword(sessionId: sessionId);
+  Future<bool> sessionInputStoredOsPassword({required UuidValue sessionId}) =>
+      ffi.sessionInputStoredOsPassword(sessionId: sessionId);
   Future<void> sessionLogin({
     required UuidValue sessionId,
     required String osUsername,
@@ -903,6 +909,8 @@ class RustdeskImpl {
       ffi.mainSetUnlockPin(pin: pin);
   Future<void> mainCheckMouseTime() => ffi.mainCheckMouseTime();
   Future<double> mainGetMouseTime() => ffi.mainGetMouseTime();
+  Future<bool> mainCheckPointerSourceAuthoritative({required int actionId}) =>
+      ffi.mainCheckPointerSourceAuthoritative(actionId: actionId);
   Future<void> mainWol({required String id}) => ffi.mainWol(id: id);
   Future<void> mainCreateShortcut({required String id}) =>
       ffi.mainCreateShortcut(id: id);
@@ -917,6 +925,17 @@ class RustdeskImpl {
   Future<void> cmCheckClickTime({required int connId}) =>
       ffi.cmCheckClickTime(connId: connId);
   Future<double> cmGetClickTime() => ffi.cmGetClickTime();
+  Future<bool> cmAuthorizeAction({
+    required int connId,
+    required String action,
+    required int actionId,
+    required int pageGeneration,
+  }) => ffi.cmAuthorizeAction(
+    connId: connId,
+    action: action,
+    actionId: actionId,
+    pageGeneration: pageGeneration,
+  );
   Future<void> cmSwitchPermission({
     required int connId,
     required String name,

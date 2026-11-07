@@ -295,14 +295,14 @@ class FfiModel with ChangeNotifier {
   }
 
   EffectiveControlPolicy get effectiveControlPolicy => EffectiveControlPolicy(
-        generation: _controlGeneration,
-        keyboardPerm: keyboard,
-        viewOnly: _viewOnly,
-        isViewCamera: parent.target?.connType == ConnType.viewCamera,
-        connType: parent.target?.connType ?? ConnType.defaultConn,
-        permissions: _permissions,
-        pi: _pi,
-      );
+    generation: _controlGeneration,
+    keyboardPerm: keyboard,
+    viewOnly: _viewOnly,
+    isViewCamera: parent.target?.connType == ConnType.viewCamera,
+    connType: parent.target?.connType ?? ConnType.defaultConn,
+    permissions: _permissions,
+    pi: _pi,
+  );
 
   bool get keyboard => _permissions['keyboard'] != false;
 
@@ -4342,6 +4342,7 @@ class FFI {
     int? tabWindowId,
     int? display,
     List<int>? displays,
+    bool isTerminalRunAsAdmin = false,
   }) {
     closed = false;
     ffiModel.resetReconnectRetry();
@@ -4389,6 +4390,7 @@ class FFI {
         password: password ?? '',
         isSharedPassword: isSharedPassword ?? false,
         connToken: connToken,
+        isTerminalAdmin: isTerminalRunAsAdmin,
       );
     } else if (display != null) {
       if (displays == null) {

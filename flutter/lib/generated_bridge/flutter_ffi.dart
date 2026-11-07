@@ -56,6 +56,7 @@ String sessionAddSync({
   required String password,
   required bool isSharedPassword,
   String? connToken,
+  required bool isTerminalAdmin,
 }) => RustLib.instance.api.crateFlutterFfiSessionAddSync(
   sessionId: sessionId,
   id: id,
@@ -69,6 +70,7 @@ String sessionAddSync({
   password: password,
   isSharedPassword: isSharedPassword,
   connToken: connToken,
+  isTerminalAdmin: isTerminalAdmin,
 );
 
 Stream<EventToUI> sessionStart({
@@ -117,6 +119,16 @@ Future<String?> sessionGetOption({
   sessionId: sessionId,
   arg: arg,
 );
+
+bool sessionHasOsPassword({required UuidValue sessionId}) => RustLib
+    .instance
+    .api
+    .crateFlutterFfiSessionHasOsPassword(sessionId: sessionId);
+
+Future<bool> sessionInputStoredOsPassword({required UuidValue sessionId}) =>
+    RustLib.instance.api.crateFlutterFfiSessionInputStoredOsPassword(
+      sessionId: sessionId,
+    );
 
 Future<void> sessionLogin({
   required UuidValue sessionId,
@@ -1471,6 +1483,11 @@ Future<void> mainCheckMouseTime() =>
 Future<double> mainGetMouseTime() =>
     RustLib.instance.api.crateFlutterFfiMainGetMouseTime();
 
+Future<bool> mainCheckPointerSourceAuthoritative({required int actionId}) =>
+    RustLib.instance.api.crateFlutterFfiMainCheckPointerSourceAuthoritative(
+      actionId: actionId,
+    );
+
 Future<void> mainWol({required String id}) =>
     RustLib.instance.api.crateFlutterFfiMainWol(id: id);
 
@@ -1496,6 +1513,18 @@ Future<void> cmCheckClickTime({required int connId}) =>
 
 Future<double> cmGetClickTime() =>
     RustLib.instance.api.crateFlutterFfiCmGetClickTime();
+
+Future<bool> cmAuthorizeAction({
+  required int connId,
+  required String action,
+  required int actionId,
+  required int pageGeneration,
+}) => RustLib.instance.api.crateFlutterFfiCmAuthorizeAction(
+  connId: connId,
+  action: action,
+  actionId: actionId,
+  pageGeneration: pageGeneration,
+);
 
 Future<void> cmSwitchPermission({
   required int connId,

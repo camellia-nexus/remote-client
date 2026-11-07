@@ -119,6 +119,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private onlineQueryEndpoint = '';
   private onlineQueryCloseTimer?: number;
   private connectStatusProbeInFlight = false;
+  private readonly ephemeralSessionSecrets = new Map<string, string>();
 
   constructor() {
     this.config = loadConfig();
@@ -167,6 +168,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         this.currentSession?.close();
         this.policyGuard = null;
         this.closeOnlineQueryTransport();
+        this.ephemeralSessionSecrets.clear();
         return '';
       case 'attach_video_surface':
         if (typeof arg0 === 'string') {
@@ -388,6 +390,18 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           });
         }
         return '';
+      case 'input_stored_os_password':
+        if (this.currentSession) {
+          const stored = this.ephemeralSessionSecrets.get('os-password');
+          if (stored) {
+            this.currentSession.login({
+              password: '',
+              osPassword: stored
+            });
+            return 'true';
+          }
+        }
+        return 'false';
       case 'send_chat':
         if (this.currentSession && typeof arg0 === 'string') {
           this.currentSession.sendChat(arg0);
@@ -818,7 +832,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         if (typeof arg0 === 'string') {
           return this.config.env[arg0] ?? this.store.get(`envvar:${arg0}`, '');
         }
-        return '';
+      case 'has_os_password':
+        return Boolean(this.ephemeralSessionSecrets.get('os-password')) ? 'true' : 'false';
       case 'option:toggle':
         return this.getToggleOption(String(arg0 ?? '')) ? 'true' : 'false';
       case 'option:session':
@@ -1268,6 +1283,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       this.purgeAccountCredentials();
       return;
     }
+    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+      if (normalized) {
+        this.ephemeralSessionSecrets.set(key, normalized);
+      } else {
+        this.ephemeralSessionSecrets.delete(key);
+      }
+      return;
+    }
     if (prefix === 'option:session' && key === 'codec-preference') {
       normalized = this.normalizeCodecPreference(normalized);
     }
@@ -1350,6 +1373,9 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private getScopedOption(prefix: string, key: string): string {
+    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+      return '';
+    }
     const scopedKey = `${prefix}:${key}`;
     const stored = this.store.get(scopedKey, '');
     if (stored) {
@@ -4082,6 +4108,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       this.inputSource1PointerInside = false;
       this.releaseInputSource1PressedKeys();
       this.currentSession?.close();
+      this.ephemeralSessionSecrets.clear();
       this.currentSession = new WebSession(request, this.events);
       if (this.videoSurfaceElementId) {
         this.currentSession.attachVideoSurface(this.videoSurfaceElementId);

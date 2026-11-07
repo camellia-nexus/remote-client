@@ -19,6 +19,7 @@ class TerminalPage extends StatefulWidget {
     required this.tabKey,
     this.forceRelay,
     this.connToken,
+    this.isTerminalRunAsAdmin = false,
   }) : super(key: key);
   final String id;
   final String? password;
@@ -27,6 +28,7 @@ class TerminalPage extends StatefulWidget {
   final bool? isSharedPassword;
   final String? connToken;
   final int terminalId;
+  final bool isTerminalRunAsAdmin;
 
   /// Tab key for focus management, passed from parent to avoid duplicate construction
   final String tabKey;
@@ -71,6 +73,7 @@ class _TerminalPageState extends State<TerminalPage>
       isSharedPassword: widget.isSharedPassword,
       forceRelay: widget.forceRelay,
       connToken: widget.connToken,
+      isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
     );
 
     // Create terminal model with specific terminal ID
