@@ -145,6 +145,7 @@ class ServerModel with ChangeNotifier {
 
   void startPoller() {
     if (_disposed) return;
+    if (!_isStopped && _pollerTimer != null && _pollerTimer!.isActive) return;
     _isStopped = false;
     _scheduleNextTick(Duration.zero);
   }
@@ -154,7 +155,10 @@ class ServerModel with ChangeNotifier {
     _pollerTimer?.cancel();
     _pollerTimer = Timer(delay, () async {
       if (_disposed || _isStopped) return;
-      if (_inFlight) return;
+      if (_inFlight) {
+        _scheduleNextTick(const Duration(milliseconds: 50));
+        return;
+      }
       _inFlight = true;
       final currentGen = _generation;
       try {
@@ -165,7 +169,7 @@ class ServerModel with ChangeNotifier {
         debugPrint("ServerModel poller error: $e");
       } finally {
         _inFlight = false;
-        if (!_disposed && !_isStopped && _generation == currentGen) {
+        if (!_disposed && !_isStopped) {
           _scheduleNextTick();
         }
       }

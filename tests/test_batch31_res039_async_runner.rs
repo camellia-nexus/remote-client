@@ -162,3 +162,66 @@ fn test_res039_query_batching_and_deduplication() {
 
     stop_flutter_async_runner();
 }
+
+#[test]
+fn test_res039_engine_count_underflow_safety() {
+    let _lock = acquire_batch31_test_lock();
+
+    // Drain count to 0 if any left over
+    while get_active_engine_count() > 0 {
+        unregister_flutter_engine(0);
+    }
+    assert_eq!(get_active_engine_count(), 0);
+
+    // Repeated unregister invocations at 0 must safely saturate at 0 and NEVER underflow to usize::MAX
+    for _ in 0..10 {
+        unregister_flutter_engine(0);
+        assert_eq!(
+            get_active_engine_count(),
+            0,
+            "Active engine count must saturate at 0"
+        );
+    }
+
+    // Registering afterwards still increments correctly
+    let gen = register_flutter_engine();
+    assert_eq!(get_active_engine_count(), 1);
+    unregister_flutter_engine(gen);
+    assert_eq!(get_active_engine_count(), 0);
+}
+
+#[test]
+fn test_res039_runner_immediate_cancellation_and_restart() {
+    let _lock = acquire_batch31_test_lock();
+
+    start_flutter_async_runner();
+    assert!(is_runner_running());
+
+    // Queue in-flight queries
+    let _ = query_onlines(vec![
+        "query_target_1".to_string(),
+        "query_target_2".to_string(),
+    ]);
+
+    // Measure time taken to cleanly stop runner
+    let start = std::time::Instant::now();
+    stop_flutter_async_runner();
+    let elapsed = start.elapsed();
+
+    assert!(
+        !is_runner_running(),
+        "Runner must be stopped after stop call"
+    );
+    assert!(
+        elapsed < Duration::from_millis(1000),
+        "stop_flutter_async_runner must join within bounded deadline without waiting for full thread join timeout, took {:?}",
+        elapsed
+    );
+
+    // Immediate restart must work cleanly
+    start_flutter_async_runner();
+    assert!(is_runner_running());
+    let res = query_onlines(vec!["query_target_3".to_string()]);
+    assert!(res.is_ok());
+    stop_flutter_async_runner();
+}

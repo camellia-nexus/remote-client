@@ -171,6 +171,12 @@ void main() {
       // Stopping again is idempotent
       await serverModel.stopPoller();
       expect(serverModel.isPolling, isFalse);
+
+      // Poller restarts cleanly after being stopped
+      serverModel.startPoller();
+      expect(serverModel.isPolling, isTrue);
+      await serverModel.stopPoller();
+      expect(serverModel.isPolling, isFalse);
     });
 
     test('AbModel supervised poller starts, stops, and handles disposal idempotently', () async {
@@ -187,8 +193,39 @@ void main() {
       await abModel.stopPoller();
       expect(abModel.isPolling, isFalse);
 
+      // Stopping again is idempotent
       await abModel.stopPoller();
       expect(abModel.isPolling, isFalse);
+
+      // Poller restarts cleanly after being stopped
+      abModel.startPoller();
+      expect(abModel.isPolling, isTrue);
+      await abModel.stopPoller();
+      expect(abModel.isPolling, isFalse);
+    });
+
+    test('initGlobalFFI is idempotent and does not recreate active global FFI instance', () async {
+      final activeFFI = gFFI;
+      await initGlobalFFI();
+      expect(gFFI, same(activeFFI));
+    });
+
+    test('stale generation detection logic correctly identifies newer session replacement', () {
+      const peerId = 'stale_check_peer';
+      final gen1 = initSharedStates(peerId);
+      final gen2 = initSharedStates(peerId);
+      expect(gen2, greaterThan(gen1));
+
+      // Obsolete session teardown comparing against getSharedStateGeneration
+      final currentGen = getSharedStateGeneration(peerId);
+      final isStale = currentGen != gen1;
+      expect(isStale, isTrue, reason: 'Teardown for gen1 must recognize it is stale compared to gen2');
+
+      // Active session teardown matches current generation
+      final isCurrentActive = currentGen == gen2;
+      expect(isCurrentActive, isTrue);
+
+      removeSharedStates(peerId, expectedGeneration: gen2);
     });
   });
 }

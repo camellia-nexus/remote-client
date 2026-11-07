@@ -660,7 +660,7 @@ class _RemotePageState extends State<RemotePage>
     }
 
     await _ffi.close(closeSession: close);
-    if (generation != myGen) return;
+    if (getSharedStateGeneration(widget.id) != myGen) return;
 
     if (close) {
       await SystemChrome.setEnabledSystemUIMode(
@@ -668,7 +668,7 @@ class _RemotePageState extends State<RemotePage>
         overlays: SystemUiOverlay.values,
       );
     }
-    if (generation != myGen) return;
+    if (getSharedStateGeneration(widget.id) != myGen) return;
 
     WakelockManager.disable(_uniqueKey);
     await deleteIfMatching<FFI>(widget.id, _ffi);

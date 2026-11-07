@@ -405,6 +405,7 @@ class AbModel {
 
   void startPoller() {
     if (_disposed) return;
+    if (!_isStopped && _pollerTimer != null && _pollerTimer!.isActive) return;
     _isStopped = false;
     if (desktopType != null && desktopType != DesktopType.main) return;
     _scheduleNextTick(Duration.zero);
@@ -415,7 +416,10 @@ class AbModel {
     _pollerTimer?.cancel();
     _pollerTimer = Timer(delay, () async {
       if (_disposed || _isStopped) return;
-      if (_inFlight) return;
+      if (_inFlight) {
+        _scheduleNextTick(const Duration(milliseconds: 50));
+        return;
+      }
       _inFlight = true;
       final currentGen = _generation;
       try {
@@ -433,7 +437,7 @@ class AbModel {
         debugPrint("AbModel poller error: $e");
       } finally {
         _inFlight = false;
-        if (!_disposed && !_isStopped && _generation == currentGen) {
+        if (!_disposed && !_isStopped) {
           _scheduleNextTick();
         }
       }

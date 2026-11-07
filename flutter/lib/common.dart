@@ -2006,7 +2006,11 @@ late FFI _globalFFI;
 
 FFI get gFFI => _globalFFI;
 
+bool _globalFFIInitialized = false;
+
 Future<void> initGlobalFFI() async {
+  if (_globalFFIInitialized && !_globalFFI.closed) return;
+  _globalFFIInitialized = true;
   debugPrint("_globalFFI init");
   _globalFFI = FFI(null, isGlobal: true);
   debugPrint("_globalFFI init end");

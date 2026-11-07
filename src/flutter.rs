@@ -2530,11 +2530,12 @@ pub mod sessions {
 }
 
 pub mod async_tasks {
+    use camellia_remote_protocol::tokio_util::sync::CancellationToken;
     use camellia_remote_protocol::{bail, log, tokio, ResultType};
     use std::{
         collections::{HashMap, HashSet},
         sync::{
-            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            atomic::{AtomicU64, AtomicUsize, Ordering},
             mpsc::{sync_channel, Receiver, SyncSender},
             Arc, Mutex,
         },
@@ -2544,7 +2545,7 @@ pub mod async_tasks {
     #[allow(dead_code)]
     struct RunnerControl {
         tx: SyncSender<Vec<String>>,
-        cancel_token: Arc<AtomicBool>,
+        cancel_token: CancellationToken,
         join_handle: Option<std::thread::JoinHandle<()>>,
     }
 
@@ -2552,6 +2553,7 @@ pub mod async_tasks {
         static ref RUNNER_CONTROL: Mutex<Option<RunnerControl>> = Mutex::new(None);
         static ref CURRENT_ENGINE_GEN: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
         static ref ACTIVE_ENGINE_COUNT: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        static ref RUNNER_INSTANCE_GEN: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
     }
 
     pub fn register_flutter_engine() -> u64 {
@@ -2561,7 +2563,18 @@ pub mod async_tasks {
 
     #[allow(dead_code)]
     pub fn unregister_flutter_engine(_gen: u64) {
-        let _ = ACTIVE_ENGINE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        let mut current = ACTIVE_ENGINE_COUNT.load(Ordering::SeqCst);
+        while current > 0 {
+            match ACTIVE_ENGINE_COUNT.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -2579,7 +2592,7 @@ pub mod async_tasks {
         let control_guard = RUNNER_CONTROL.lock().unwrap();
         control_guard
             .as_ref()
-            .map_or(false, |c| !c.cancel_token.load(Ordering::SeqCst))
+            .map_or(false, |c| !c.cancel_token.is_cancelled())
     }
 
     #[inline]
@@ -2591,14 +2604,14 @@ pub mod async_tasks {
         }
 
         let (tx, rx) = sync_channel::<Vec<String>>(32);
-        let cancel_token = Arc::new(AtomicBool::new(false));
+        let cancel_token = CancellationToken::new();
         let cancel_clone = cancel_token.clone();
-        let gen_clone = CURRENT_ENGINE_GEN.clone();
+        let runner_gen = RUNNER_INSTANCE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
 
         let join_handle = std::thread::Builder::new()
             .name("flutter_async_runner".to_string())
             .spawn(move || {
-                run_online_query_loop(rx, cancel_clone, gen_clone);
+                run_online_query_loop(rx, cancel_clone, runner_gen);
             })
             .ok();
 
@@ -2615,14 +2628,14 @@ pub mod async_tasks {
         {
             let mut control_guard = RUNNER_CONTROL.lock().unwrap();
             if let Some(mut control) = control_guard.take() {
-                control.cancel_token.store(true, Ordering::SeqCst);
+                control.cancel_token.cancel();
                 handle_to_join = control.join_handle.take();
             }
         }
         if let Some(handle) = handle_to_join {
             let start = std::time::Instant::now();
             while !handle.is_finished() && start.elapsed() < Duration::from_millis(1500) {
-                std::thread::sleep(Duration::from_millis(20));
+                std::thread::sleep(Duration::from_millis(10));
             }
             if handle.is_finished() {
                 let _ = handle.join();
@@ -2633,11 +2646,11 @@ pub mod async_tasks {
     #[tokio::main(flavor = "current_thread")]
     async fn run_online_query_loop(
         rx: Receiver<Vec<String>>,
-        cancel_token: Arc<AtomicBool>,
-        engine_gen: Arc<AtomicU64>,
+        cancel_token: CancellationToken,
+        runner_gen: u64,
     ) {
         loop {
-            if cancel_token.load(Ordering::SeqCst) {
+            if cancel_token.is_cancelled() {
                 break;
             }
 
@@ -2647,7 +2660,7 @@ pub mod async_tasks {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
 
-            if cancel_token.load(Ordering::SeqCst) {
+            if cancel_token.is_cancelled() {
                 break;
             }
 
@@ -2672,21 +2685,19 @@ pub mod async_tasks {
             }
 
             let ids_to_query: Vec<String> = coalesced_set.into_iter().collect();
-            let query_gen = engine_gen.load(Ordering::SeqCst);
             let cancel_ref = cancel_token.clone();
-            let gen_ref = engine_gen.clone();
 
             let query_timeout = Duration::from_millis(3500);
             let query_future = crate::client::peer_online::query_online_states(
                 ids_to_query,
                 move |onlines, offlines| {
-                    if cancel_ref.load(Ordering::SeqCst) {
+                    if cancel_ref.is_cancelled() {
                         return;
                     }
-                    if gen_ref.load(Ordering::SeqCst) != query_gen {
+                    if RUNNER_INSTANCE_GEN.load(Ordering::SeqCst) != runner_gen {
                         log::info!(
-                            "Discarding online query results from stale engine generation {}",
-                            query_gen
+                            "Discarding online query results from stale runner generation {}",
+                            runner_gen
                         );
                         return;
                     }
@@ -2694,14 +2705,20 @@ pub mod async_tasks {
                 },
             );
 
-            let _ = tokio::time::timeout(query_timeout, query_future).await;
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    log::debug!("Online query aborted due to runner cancellation");
+                    break;
+                }
+                _ = tokio::time::timeout(query_timeout, query_future) => {}
+            }
         }
     }
 
     pub fn query_onlines(ids: Vec<String>) -> ResultType<()> {
         let control_guard = RUNNER_CONTROL.lock().unwrap();
         if let Some(control) = control_guard.as_ref() {
-            if control.cancel_token.load(Ordering::SeqCst) {
+            if control.cancel_token.is_cancelled() {
                 bail!("Online query runner is shutting down");
             }
             control.tx.try_send(ids)?;
