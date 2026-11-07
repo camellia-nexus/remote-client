@@ -475,6 +475,11 @@ pub fn is_client_valid(conn_id: i32) -> bool {
 }
 
 #[inline]
+pub fn cm_create_action_token(conn_id: i32, page_generation: i64) -> i64 {
+    crate::action_gate::create_action_token(conn_id, page_generation)
+}
+
+#[inline]
 pub fn cm_authorize_action(
     conn_id: i32,
     action: String,

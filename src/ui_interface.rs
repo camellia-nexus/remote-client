@@ -288,10 +288,12 @@ pub fn peer_has_password(id: String) -> bool {
     !PeerConfig::load(&id).password.is_empty()
 }
 
-pub const SECRET_PEER_OPTIONS: &[&str] = &["rdp_password", "os-password"];
+pub const SECRET_PEER_OPTIONS: &[&str] =
+    &["rdp_password", "rdp-password", "os-password", "os_password"];
 
 pub fn is_secret_peer_option(key: &str) -> bool {
-    SECRET_PEER_OPTIONS.contains(&key)
+    let normalized = key.trim().to_ascii_lowercase().replace('_', "-");
+    normalized == "os-password" || normalized == "rdp-password"
 }
 
 pub fn peer_has_rdp_password(id: &str) -> bool {

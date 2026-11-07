@@ -1283,11 +1283,12 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       this.purgeAccountCredentials();
       return;
     }
-    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+    const normalizedKey = key.trim().toLowerCase().replace(/_/g, '-');
+    if (prefix === 'option:session' && (normalizedKey === 'os-password' || normalizedKey === 'rdp-password')) {
       if (normalized) {
-        this.ephemeralSessionSecrets.set(key, normalized);
+        this.ephemeralSessionSecrets.set('os-password', normalized);
       } else {
-        this.ephemeralSessionSecrets.delete(key);
+        this.ephemeralSessionSecrets.delete('os-password');
       }
       return;
     }
@@ -1373,7 +1374,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private getScopedOption(prefix: string, key: string): string {
-    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+    const normalizedKey = key.trim().toLowerCase().replace(/_/g, '-');
+    if (prefix === 'option:session' && (normalizedKey === 'os-password' || normalizedKey === 'rdp-password')) {
       return '';
     }
     const scopedKey = `${prefix}:${key}`;

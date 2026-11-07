@@ -116,6 +116,7 @@ class ConnectionManagerState extends State<ConnectionManager>
 
   ConnectionManagerState() {
     gFFI.serverModel.tabController.onSelected = (client_id_str) {
+      _cmPageGeneration++;
       final client_id = int.tryParse(client_id_str);
       if (client_id != null) {
         final client = gFFI.serverModel.clients.firstWhereOrNull(
@@ -150,6 +151,7 @@ class ConnectionManagerState extends State<ConnectionManager>
 
   @override
   void initState() {
+    _cmPageGeneration++;
     gFFI.serverModel.updateClientState();
     WidgetsBinding.instance.addObserver(this);
     super.initState();
@@ -157,6 +159,7 @@ class ConnectionManagerState extends State<ConnectionManager>
 
   @override
   void dispose() {
+    _cmPageGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1222,7 +1225,6 @@ class _CmControlPanel extends StatelessWidget {
   }
 }
 
-int _cmActionIdCounter = 0;
 int _cmPageGeneration = 1;
 
 void checkClickTime(int id, Function() callback) async {
@@ -1230,9 +1232,12 @@ void checkClickTime(int id, Function() callback) async {
     callback();
     return;
   }
-  final actionId = ++_cmActionIdCounter;
   final currentGen = _cmPageGeneration;
   try {
+    final actionId = await bind.cmCreateActionToken(
+      connId: id,
+      pageGeneration: currentGen,
+    );
     final allowed = await bind.cmAuthorizeAction(
       connId: id,
       action: 'cm_sensitive_action',

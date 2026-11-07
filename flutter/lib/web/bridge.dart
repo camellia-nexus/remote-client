@@ -1823,6 +1823,14 @@ class RustdeskImpl {
     throw UnimplementedError("cmGetClickTime");
   }
 
+  Future<int> cmCreateActionToken({
+    required int connId,
+    required int pageGeneration,
+    dynamic hint,
+  }) {
+    return Future.value(1);
+  }
+
   Future<bool> cmAuthorizeAction({
     required int connId,
     required String action,

@@ -1514,6 +1514,14 @@ Future<void> cmCheckClickTime({required int connId}) =>
 Future<double> cmGetClickTime() =>
     RustLib.instance.api.crateFlutterFfiCmGetClickTime();
 
+Future<int> cmCreateActionToken({
+  required int connId,
+  required int pageGeneration,
+}) => RustLib.instance.api.crateFlutterFfiCmCreateActionToken(
+  connId: connId,
+  pageGeneration: pageGeneration,
+);
+
 Future<bool> cmAuthorizeAction({
   required int connId,
   required String action,

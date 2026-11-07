@@ -35,12 +35,12 @@ export class StorageStore {
   }
 
   private isSecretKey(key: string): boolean {
-    return (
-      key === 'os-password' ||
-      key === 'rdp_password' ||
-      key.endsWith(':os-password') ||
-      key.endsWith(':rdp_password')
-    );
+    const parts = key
+      .toLowerCase()
+      .split(':')
+      .map((p) => p.trim().replace(/_/g, '-'));
+    const lastPart = parts[parts.length - 1];
+    return lastPart === 'os-password' || lastPart === 'rdp-password';
   }
 
   remove(key: string, persist = true): void {

@@ -1763,11 +1763,33 @@ struct ConnToken {
     session_id: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TerminalPrivilegeMode {
+    #[default]
+    Standard,
+    Admin,
+}
+
+impl TerminalPrivilegeMode {
+    pub fn is_admin(&self) -> bool {
+        matches!(self, Self::Admin)
+    }
+
+    pub fn from_bool(is_admin: bool) -> Self {
+        if is_admin {
+            Self::Admin
+        } else {
+            Self::Standard
+        }
+    }
+}
+
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
     id: String,
     pub conn_type: ConnType,
+    pub privilege_mode: TerminalPrivilegeMode,
     pub is_terminal_admin: bool,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
@@ -1925,7 +1947,12 @@ impl LoginConfigHandler {
         self.record_state = false;
         self.record_permission = true;
 
-        self.is_terminal_admin = conn_type == ConnType::TERMINAL && is_terminal_admin;
+        self.privilege_mode = if conn_type == ConnType::TERMINAL {
+            TerminalPrivilegeMode::from_bool(is_terminal_admin)
+        } else {
+            TerminalPrivilegeMode::Standard
+        };
+        self.is_terminal_admin = self.privilege_mode.is_admin();
     }
 
     #[cfg(feature = "flutter")]

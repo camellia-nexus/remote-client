@@ -27,7 +27,7 @@ function createMockStorage(): Storage {
   };
 }
 
-test('CRED-008: StorageStore prevents persistent storage of secret keys', () => {
+test('CRED-008: StorageStore prevents persistent storage of secret keys and variants', () => {
   const mockStorage = createMockStorage();
   (globalThis as any).window = {
     localStorage: mockStorage
@@ -40,17 +40,32 @@ test('CRED-008: StorageStore prevents persistent storage of secret keys', () => 
   assert.equal(store.get('option:session:custom-fps'), '30');
   assert.equal(mockStorage.getItem('camellia.test.option:session:custom-fps'), '30');
 
-  // Secret keys must NEVER be persisted to localStorage:
-  store.set('option:session:os-password', 'SecretPass123!');
-  assert.equal(store.get('option:session:os-password'), 'SecretPass123!');
-  assert.equal(mockStorage.getItem('camellia.test.option:session:os-password'), null);
+  // Secret keys must NEVER be persisted to localStorage (including case, separator, and whitespace variants):
+  const secretVariants = [
+    'option:session:os-password',
+    'option:session:os_password',
+    'option:session:OS-PASSWORD',
+    'option:session:OS_PASSWORD',
+    'option:session: os-password ',
+    'option:session:rdp_password',
+    'option:session:rdp-password',
+    'option:session:RDP_PASSWORD',
+    'option:session: rdp-password ',
+    'os-password',
+    'os_password',
+    'OS-PASSWORD',
+    'rdp_password',
+    'rdp-password'
+  ];
 
-  store.set('option:session:rdp_password', 'RdpSecret456!');
-  assert.equal(store.get('option:session:rdp_password'), 'RdpSecret456!');
-  assert.equal(mockStorage.getItem('camellia.test.option:session:rdp_password'), null);
-
-  store.set('os-password', 'DirectSecret!');
-  assert.equal(mockStorage.getItem('camellia.test.os-password'), null);
+  for (const variant of secretVariants) {
+    store.set(variant, 'Secret123!');
+    assert.equal(
+      mockStorage.getItem(`camellia.test.${variant}`),
+      null,
+      `Secret key variant '${variant}' must NOT be written to localStorage`
+    );
+  }
 });
 
 test('CRED-008: Ephemeral session secrets lifecycle and generic getter denial', () => {
@@ -64,11 +79,12 @@ test('CRED-008: Ephemeral session secrets lifecycle and generic getter denial', 
 
   function setScopedOption(prefix: string, key: string, value: unknown): void {
     const normalized = String(value ?? '');
-    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+    const normKey = key.trim().toLowerCase().replace(/_/g, '-');
+    if (prefix === 'option:session' && (normKey === 'os-password' || normKey === 'rdp-password')) {
       if (normalized) {
-        ephemeralSessionSecrets.set(key, normalized);
+        ephemeralSessionSecrets.set('os-password', normalized);
       } else {
-        ephemeralSessionSecrets.delete(key);
+        ephemeralSessionSecrets.delete('os-password');
       }
       return;
     }
@@ -76,7 +92,8 @@ test('CRED-008: Ephemeral session secrets lifecycle and generic getter denial', 
   }
 
   function getScopedOption(prefix: string, key: string): string {
-    if (prefix === 'option:session' && (key === 'os-password' || key === 'rdp_password')) {
+    const normKey = key.trim().toLowerCase().replace(/_/g, '-');
+    if (prefix === 'option:session' && (normKey === 'os-password' || normKey === 'rdp-password')) {
       return '';
     }
     return store.get(`${prefix}:${key}`, '');
@@ -121,8 +138,12 @@ test('CRED-008: Ephemeral session secrets lifecycle and generic getter denial', 
     JSON.stringify({ name: 'os-password', value: 'MySecretPassword123' })
   );
 
-  // Generic getter must return empty string (reject export of secret)
+  // Generic getter must return empty string (reject export of secret across all variants)
   assert.equal(getByName('option:session', 'os-password'), '');
+  assert.equal(getByName('option:session', 'os_password'), '');
+  assert.equal(getByName('option:session', 'OS-PASSWORD'), '');
+  assert.equal(getByName('option:session', 'rdp_password'), '');
+  assert.equal(getByName('option:session', 'rdp-password'), '');
 
   // has_os_password must return true
   assert.equal(getByName('has_os_password'), 'true');

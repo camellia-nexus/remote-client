@@ -117,8 +117,15 @@ class _TerminalPageState extends State<TerminalPage>
       // Check if this is a new connection or additional terminal
       // Note: When a connection exists, the ref count will be > 1 after this terminal is added
       final isExistingConnection =
-          TerminalConnectionManager.hasConnection(widget.id) &&
-          TerminalConnectionManager.getTerminalCount(widget.id) > 1;
+          TerminalConnectionManager.hasConnection(
+            widget.id,
+            isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
+          ) &&
+          TerminalConnectionManager.getTerminalCount(
+                widget.id,
+                isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
+              ) >
+              1;
 
       if (!isExistingConnection) {
         // First terminal - show loading dialog, wait for onReady
@@ -143,7 +150,10 @@ class _TerminalPageState extends State<TerminalPage>
     _terminalModel.dispose();
     _terminalFocusNode.dispose();
     // Release connection reference instead of closing directly
-    TerminalConnectionManager.releaseConnection(widget.id);
+    TerminalConnectionManager.releaseConnection(
+      widget.id,
+      isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
+    );
     super.dispose();
   }
 

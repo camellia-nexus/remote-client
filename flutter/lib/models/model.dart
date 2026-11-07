@@ -58,6 +58,17 @@ import 'package:camellia_remote_app/native/custom_cursor.dart'
 
 typedef HandleMsgBox = Function(Map<String, dynamic> evt, String id);
 typedef ReconnectHandle = Function(OverlayDialogManager, SessionID, bool);
+
+enum TerminalPrivilegeMode {
+  standard,
+  admin;
+
+  bool get isAdmin => this == TerminalPrivilegeMode.admin;
+
+  static TerminalPrivilegeMode fromBool(bool isAdmin) =>
+      isAdmin ? TerminalPrivilegeMode.admin : TerminalPrivilegeMode.standard;
+}
+
 final _constSessionId = Uuid().v4obj();
 final _auditSessionCapabilityPattern = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',

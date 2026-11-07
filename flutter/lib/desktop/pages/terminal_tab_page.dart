@@ -210,7 +210,19 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     if (parsed == null) return;
     final (peerId, terminalId) = parsed;
 
-    final ffi = TerminalConnectionManager.getExistingConnection(peerId);
+    bool isTerminalRunAsAdmin = false;
+    final matchingTabs = tabController.state.value.tabs.where(
+      (t) => t.key == tabKey,
+    );
+    if (matchingTabs.isNotEmpty && matchingTabs.first.page is TerminalPage) {
+      isTerminalRunAsAdmin =
+          (matchingTabs.first.page as TerminalPage).isTerminalRunAsAdmin;
+    }
+
+    final ffi = TerminalConnectionManager.getExistingConnection(
+      peerId,
+      isTerminalRunAsAdmin: isTerminalRunAsAdmin,
+    );
     if (ffi == null) return;
 
     final isPersistent = bind.sessionGetToggleOptionSync(
@@ -341,6 +353,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         windowOnTop(windowId());
         // Allow multiple terminals for the same connection
         final terminalId = args['terminalId'] ?? _nextTerminalId++;
+        final isTerminalRunAsAdmin = args['isTerminalRunAsAdmin'] ?? false;
         tabController.add(
           _createTerminalTab(
             peerId: id,
@@ -349,6 +362,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
             isSharedPassword: args['isSharedPassword'],
             forceRelay: args['forceRelay'],
             connToken: args['connToken'],
+            isTerminalRunAsAdmin: isTerminalRunAsAdmin,
           ),
         );
       } else if (call.method == kWindowEventRestoreTerminalSessions) {
@@ -363,14 +377,25 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
           return false;
         }
         final currentTab = tabController.state.value.selectedTabInfo;
-        assert(
-          call.arguments is String,
-          "Expected String arguments for kWindowEventActiveSession, got ${call.arguments.runtimeType}",
-        );
+        String? targetPeerId;
+        bool targetIsAdmin = false;
+        if (call.arguments is String) {
+          targetPeerId = call.arguments as String;
+        } else if (call.arguments is Map) {
+          targetPeerId = call.arguments['id'];
+          targetIsAdmin = call.arguments['isTerminalRunAsAdmin'] ?? false;
+        }
+        if (targetPeerId == null) return false;
         // Use lastIndexOf to handle peerIds containing underscores
         final lastUnderscore = currentTab.key.lastIndexOf('_');
         if (lastUnderscore > 0 &&
-            currentTab.key.substring(0, lastUnderscore) == call.arguments) {
+            currentTab.key.substring(0, lastUnderscore) == targetPeerId) {
+          if (currentTab.page is TerminalPage) {
+            final page = currentTab.page as TerminalPage;
+            if (page.isTerminalRunAsAdmin != targetIsAdmin) {
+              return false; // Isolate privilege modes
+            }
+          }
           windowOnTop(windowId());
           return true;
         }

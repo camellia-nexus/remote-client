@@ -2,17 +2,21 @@ import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../../models/model.dart';
 
-/// Manages terminal connections to ensure one FFI instance per peer
+/// Manages terminal connections to ensure one FFI instance per peer and privilege mode
 class TerminalConnectionManager {
   static final Map<String, FFI> _connections = {};
   static final Map<String, int> _connectionRefCount = {};
 
-  // Track service IDs per peer
+  // Track service IDs per connection key
   static final Map<String, String> _serviceIds = {};
-  // Track privilege modes per peer
+  // Track privilege modes per connection key
   static final Map<String, bool> _connectionAdminMode = {};
 
-  /// Get or create an FFI instance for a peer
+  static String connectionKey(String peerId, bool isTerminalRunAsAdmin) {
+    return '$peerId:${isTerminalRunAsAdmin ? "admin" : "standard"}';
+  }
+
+  /// Get or create an FFI instance for a peer and privilege mode
   static FFI getConnection({
     required String peerId,
     required String? password,
@@ -21,22 +25,20 @@ class TerminalConnectionManager {
     required String? connToken,
     bool isTerminalRunAsAdmin = false,
   }) {
-    final existingFfi = _connections[peerId];
-    final existingAdminMode = _connectionAdminMode[peerId] ?? false;
-    if (existingFfi != null &&
-        !existingFfi.closed &&
-        existingAdminMode == isTerminalRunAsAdmin) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    final existingFfi = _connections[key];
+    if (existingFfi != null && !existingFfi.closed) {
       // Increment reference count
-      _connectionRefCount[peerId] = (_connectionRefCount[peerId] ?? 0) + 1;
+      _connectionRefCount[key] = (_connectionRefCount[key] ?? 0) + 1;
       debugPrint(
-        '[TerminalConnectionManager] Reusing existing connection for peer $peerId (admin=$isTerminalRunAsAdmin). Reference count: ${_connectionRefCount[peerId]}',
+        '[TerminalConnectionManager] Reusing existing connection for key $key. Reference count: ${_connectionRefCount[key]}',
       );
       return existingFfi;
     }
 
     // Create new FFI instance for terminal
     debugPrint(
-      '[TerminalConnectionManager] Creating new terminal connection for peer $peerId (admin=$isTerminalRunAsAdmin)',
+      '[TerminalConnectionManager] Creating new terminal connection for key $key (admin=$isTerminalRunAsAdmin)',
     );
     final ffi = FFI(null);
     ffi.start(
@@ -49,12 +51,12 @@ class TerminalConnectionManager {
       isTerminalRunAsAdmin: isTerminalRunAsAdmin,
     );
 
-    _connections[peerId] = ffi;
-    _connectionAdminMode[peerId] = isTerminalRunAsAdmin;
-    _connectionRefCount[peerId] = 1;
+    _connections[key] = ffi;
+    _connectionAdminMode[key] = isTerminalRunAsAdmin;
+    _connectionRefCount[key] = 1;
 
     // Register the FFI instance with Get for dependency injection
-    Get.put<FFI>(ffi, tag: 'terminal_$peerId');
+    Get.put<FFI>(ffi, tag: 'terminal_$key');
 
     debugPrint(
       '[TerminalConnectionManager] New connection created. Total connections: ${_connections.length}',
@@ -63,60 +65,88 @@ class TerminalConnectionManager {
   }
 
   /// Release a connection reference
-  static void releaseConnection(String peerId) {
-    final refCount = _connectionRefCount[peerId] ?? 0;
+  static void releaseConnection(
+    String peerId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    final refCount = _connectionRefCount[key] ?? 0;
     debugPrint(
-      '[TerminalConnectionManager] Releasing connection for peer $peerId. Current ref count: $refCount',
+      '[TerminalConnectionManager] Releasing connection for key $key. Current ref count: $refCount',
     );
 
     if (refCount <= 1) {
       // Last reference, close the connection
-      final ffi = _connections[peerId];
+      final ffi = _connections[key];
       if (ffi != null) {
         debugPrint(
-          '[TerminalConnectionManager] Closing connection for peer $peerId (last reference)',
+          '[TerminalConnectionManager] Closing connection for key $key (last reference)',
         );
         ffi.close();
-        _connections.remove(peerId);
-        _connectionRefCount.remove(peerId);
-        _connectionAdminMode.remove(peerId);
-        Get.delete<FFI>(tag: 'terminal_$peerId');
+        _connections.remove(key);
+        _connectionRefCount.remove(key);
+        _connectionAdminMode.remove(key);
+        Get.delete<FFI>(tag: 'terminal_$key');
       }
     } else {
       // Decrement reference count
-      _connectionRefCount[peerId] = refCount - 1;
+      _connectionRefCount[key] = refCount - 1;
       debugPrint(
-        '[TerminalConnectionManager] Connection still in use. New ref count: ${_connectionRefCount[peerId]}',
+        '[TerminalConnectionManager] Connection still in use. New ref count: ${_connectionRefCount[key]}',
       );
     }
   }
 
-  /// Check if a connection exists for a peer
-  static bool hasConnection(String peerId) {
-    final ffi = _connections[peerId];
+  /// Check if a connection exists for a peer and privilege mode
+  static bool hasConnection(
+    String peerId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    final ffi = _connections[key];
     return ffi != null && !ffi.closed;
   }
 
   /// Get existing connection without creating new one
-  static FFI? getExistingConnection(String peerId) {
-    return _connections[peerId];
+  static FFI? getExistingConnection(
+    String peerId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    return _connections[key];
   }
 
   /// Get connection count for debugging
   static int getConnectionCount() => _connections.length;
 
-  /// Get terminal count for a peer
-  static int getTerminalCount(String peerId) =>
-      _connectionRefCount[peerId] ?? 0;
+  /// Get terminal count for a peer and privilege mode
+  static int getTerminalCount(
+    String peerId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    return _connectionRefCount[key] ?? 0;
+  }
 
-  /// Get service ID for a peer
-  static String? getServiceId(String peerId) => _serviceIds[peerId];
+  /// Get service ID for a peer and privilege mode
+  static String? getServiceId(
+    String peerId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    return _serviceIds[key];
+  }
 
-  /// Set service ID for a peer
-  static void setServiceId(String peerId, String serviceId) {
-    _serviceIds[peerId] = serviceId;
+  /// Set service ID for a peer and privilege mode
+  static void setServiceId(
+    String peerId,
+    String serviceId, {
+    bool isTerminalRunAsAdmin = false,
+  }) {
+    final key = connectionKey(peerId, isTerminalRunAsAdmin);
+    _serviceIds[key] = serviceId;
     debugPrint(
-      '[TerminalConnectionManager] Service ID for $peerId: $serviceId',
+      '[TerminalConnectionManager] Service ID for key $key: $serviceId',
     );
   }
 }

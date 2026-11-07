@@ -12,6 +12,8 @@ use camellia_remote_protocol::{get_time, log};
 
 /// Threshold within which remote input is considered recent and active.
 pub const REMOTE_INPUT_RECENCY_THRESHOLD: Duration = Duration::from_millis(1000);
+/// Maximum lifetime for an issued action token before expiration.
+pub const ACTION_TOKEN_EXPIRATION: Duration = Duration::from_secs(10);
 
 static NEXT_ACTION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -26,17 +28,48 @@ pub struct ConnectionInputState {
     pub last_click: Option<Instant>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActionToken {
+    pub conn_id: i32,
+    pub page_generation: i64,
+    pub created_at: Instant,
+}
+
 struct ActionGateState {
     connections: HashMap<i32, ConnectionInputState>,
     last_global_remote_input: Option<Instant>,
+    pending_actions: HashMap<i64, ActionToken>,
 }
 
 static ACTION_GATE: LazyLock<Mutex<ActionGateState>> = LazyLock::new(|| {
     Mutex::new(ActionGateState {
         connections: HashMap::new(),
         last_global_remote_input: None,
+        pending_actions: HashMap::new(),
     })
 });
+
+/// Create an authoritative, single-use action token bound to a connection and page generation.
+pub fn create_action_token(conn_id: i32, page_generation: i64) -> i64 {
+    let action_id = next_action_id();
+    let mut state = match ACTION_GATE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    // Purge expired tokens
+    state
+        .pending_actions
+        .retain(|_, token| token.created_at.elapsed() < ACTION_TOKEN_EXPIRATION);
+    state.pending_actions.insert(
+        action_id,
+        ActionToken {
+            conn_id,
+            page_generation,
+            created_at: Instant::now(),
+        },
+    );
+    action_id
+}
 
 /// Record remote pointer or click input from a specific connection.
 pub fn record_remote_input(conn_id: i32, is_click: bool) {
@@ -67,6 +100,9 @@ pub fn clean_connection(conn_id: i32) {
         Err(poisoned) => poisoned.into_inner(),
     };
     state.connections.remove(&conn_id);
+    state
+        .pending_actions
+        .retain(|_, token| token.conn_id != conn_id);
 }
 
 /// Reset all action gate state (used in testing).
@@ -76,6 +112,7 @@ pub fn reset_action_gate_for_test() {
         Err(poisoned) => poisoned.into_inner(),
     };
     state.connections.clear();
+    state.pending_actions.clear();
     state.last_global_remote_input = None;
     #[cfg(not(any(target_os = "ios")))]
     {
@@ -122,7 +159,8 @@ pub fn is_connection_remote_input_recent(conn_id: i32, threshold: Duration) -> b
 
 /// Authoritative check for Connection Manager actions (e.g. Elevate, Accept, permission switch).
 /// Returns true only if the action is affirmatively authorized.
-/// Any missing connection, disconnected state, or recent remote input results in false (fail closed).
+/// Any missing connection, disconnected state, unissued/consumed action ID, generation mismatch,
+/// or recent remote input results in false (fail closed).
 pub fn authorize_cm_action(
     conn_id: i32,
     action: &str,
@@ -132,6 +170,58 @@ pub fn authorize_cm_action(
     // If local config explicitly allows remote CM modification:
     if crate::common::get_local_option("allow-remote-cm-modification") == "Y" {
         return true;
+    }
+
+    // Authoritative action token verification (single-use, bound to conn_id and generation)
+    let token = {
+        let mut state = match ACTION_GATE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.pending_actions.remove(&action_id)
+    };
+
+    let token = match token {
+        Some(t) => t,
+        None => {
+            log::warn!(
+                "CM action '{}' rejected: action_id {} is invalid, unissued, or already consumed",
+                action,
+                action_id
+            );
+            return false;
+        }
+    };
+
+    if token.conn_id != conn_id {
+        log::warn!(
+            "CM action '{}' rejected: conn_id mismatch for action_id {} (token={}, param={})",
+            action,
+            action_id,
+            token.conn_id,
+            conn_id
+        );
+        return false;
+    }
+
+    if token.page_generation != page_generation {
+        log::warn!(
+            "CM action '{}' rejected: generation mismatch for action_id {} (token={}, param={})",
+            action,
+            action_id,
+            token.page_generation,
+            page_generation
+        );
+        return false;
+    }
+
+    if token.created_at.elapsed() > ACTION_TOKEN_EXPIRATION {
+        log::warn!(
+            "CM action '{}' rejected: action_id {} has expired",
+            action,
+            action_id
+        );
+        return false;
     }
 
     // Verify connection existence in CM using encapsulated helper
@@ -190,8 +280,8 @@ pub fn check_pointer_source_authoritative(_action_id: i64) -> bool {
         let now_ms = get_time();
         let threshold_ms = REMOTE_INPUT_RECENCY_THRESHOLD.as_millis() as i64;
 
-        if (last_mouse > 0 && now_ms - last_mouse < threshold_ms)
-            || (last_click > 0 && now_ms - last_click < threshold_ms)
+        if (last_mouse > 0 && (now_ms - last_mouse).abs() < threshold_ms)
+            || (last_click > 0 && (now_ms - last_click).abs() < threshold_ms)
         {
             return true;
         }

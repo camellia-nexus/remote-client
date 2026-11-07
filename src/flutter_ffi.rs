@@ -2396,6 +2396,10 @@ pub fn cm_get_click_time() -> f64 {
     return 0 as _;
 }
 
+pub fn cm_create_action_token(conn_id: i32, page_generation: i64) -> i64 {
+    crate::ui_cm_interface::cm_create_action_token(conn_id, page_generation)
+}
+
 pub fn cm_authorize_action(
     conn_id: i32,
     action: String,

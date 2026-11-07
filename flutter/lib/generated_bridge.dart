@@ -925,6 +925,10 @@ class RustdeskImpl {
   Future<void> cmCheckClickTime({required int connId}) =>
       ffi.cmCheckClickTime(connId: connId);
   Future<double> cmGetClickTime() => ffi.cmGetClickTime();
+  Future<int> cmCreateActionToken({
+    required int connId,
+    required int pageGeneration,
+  }) => ffi.cmCreateActionToken(connId: connId, pageGeneration: pageGeneration);
   Future<bool> cmAuthorizeAction({
     required int connId,
     required String action,
