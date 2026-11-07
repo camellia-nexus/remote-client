@@ -69,7 +69,7 @@ enum TerminalPrivilegeMode {
       isAdmin ? TerminalPrivilegeMode.admin : TerminalPrivilegeMode.standard;
 }
 
-final _constSessionId = Uuid().v4obj();
+// Sessions mint fresh UUIDs per round to prevent cross-session leakage.
 final _auditSessionCapabilityPattern = RegExp(
   r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
 );
@@ -179,7 +179,7 @@ class FfiModel with ChangeNotifier {
   bool _viewOnly = false;
   bool _showMyCursor = false;
   WeakReference<FFI> parent;
-  late final SessionID sessionId;
+  late SessionID sessionId;
 
   RxBool waitForImageDialogShow = true.obs;
   Timer? waitForImageTimer;
@@ -4258,31 +4258,42 @@ class FFI {
   var version = '';
   var connType = ConnType.defaultConn;
   var closed = false;
+  final bool isGlobal;
+  int sessionGeneration = 1;
 
   /// dialogManager use late to ensure init after main page binding [globalKey]
   late final dialogManager = OverlayDialogManager();
 
-  late final SessionID sessionId;
+  late SessionID sessionId;
   late final ImageModel imageModel; // session
   late final FfiModel ffiModel; // session
   late final CursorModel cursorModel; // session
   late final CanvasModel canvasModel; // session
-  late final ServerModel serverModel; // global
+  ServerModel? _serverModel; // global
   late final ChatModel chatModel; // session
   late final FileModel fileModel; // session
-  late final AbModel abModel; // global
-  late final GroupModel groupModel; // global
-  late final UserModel userModel; // global
-  late final PeerTabModel peerTabModel; // global
+  AbModel? _abModel; // global
+  GroupModel? _groupModel; // global
+  UserModel? _userModel; // global
+  PeerTabModel? _peerTabModel; // global
   late final QualityMonitorModel qualityMonitorModel; // session
   late final RecordingModel recordingModel; // session
   late final InputModel inputModel; // session
   late final ElevationModel elevationModel; // session
   late final CmFileModel cmFileModel; // cm
   late final TextureModel textureModel; //session
-  late final Peers recentPeersModel; // global
-  late final Peers favoritePeersModel; // global
-  late final Peers lanPeersModel; // global
+  Peers? _recentPeersModel; // global
+  Peers? _favoritePeersModel; // global
+  Peers? _lanPeersModel; // global
+
+  ServerModel get serverModel => isGlobal ? _serverModel! : gFFI.serverModel;
+  AbModel get abModel => isGlobal ? _abModel! : gFFI.abModel;
+  GroupModel get groupModel => isGlobal ? _groupModel! : gFFI.groupModel;
+  UserModel get userModel => isGlobal ? _userModel! : gFFI.userModel;
+  PeerTabModel get peerTabModel => isGlobal ? _peerTabModel! : gFFI.peerTabModel;
+  Peers get recentPeersModel => isGlobal ? _recentPeersModel! : gFFI.recentPeersModel;
+  Peers get favoritePeersModel => isGlobal ? _favoritePeersModel! : gFFI.favoritePeersModel;
+  Peers get lanPeersModel => isGlobal ? _lanPeersModel! : gFFI.lanPeersModel;
 
   // Terminal model registry for multiple terminals
   final Map<int, TerminalModel> _terminalModels = {};
@@ -4290,44 +4301,50 @@ class FFI {
   // Getter for terminal models
   Map<int, TerminalModel> get terminalModels => _terminalModels;
 
-  FFI(SessionID? sId) {
-    sessionId = sId ?? (isDesktop ? Uuid().v4obj() : _constSessionId);
+  FFI(SessionID? sId, {this.isGlobal = false}) {
+    sessionId = sId ?? Uuid().v4obj();
     imageModel = ImageModel(WeakReference(this));
     ffiModel = FfiModel(WeakReference(this));
     cursorModel = CursorModel(WeakReference(this));
     canvasModel = CanvasModel(WeakReference(this));
-    serverModel = ServerModel(WeakReference(this));
     chatModel = ChatModel(WeakReference(this));
     fileModel = FileModel(WeakReference(this));
-    userModel = UserModel(WeakReference(this));
-    peerTabModel = PeerTabModel(WeakReference(this));
-    abModel = AbModel(WeakReference(this));
-    groupModel = GroupModel(WeakReference(this));
     qualityMonitorModel = QualityMonitorModel(WeakReference(this));
     recordingModel = RecordingModel(WeakReference(this));
     inputModel = InputModel(WeakReference(this));
     elevationModel = ElevationModel(WeakReference(this));
     cmFileModel = CmFileModel(WeakReference(this));
     textureModel = TextureModel(WeakReference(this));
-    recentPeersModel = Peers(
-      name: PeersModelName.recent,
-      loadEvent: LoadEvent.recent,
-      getInitPeers: null,
-    );
-    favoritePeersModel = Peers(
-      name: PeersModelName.favorite,
-      loadEvent: LoadEvent.favorite,
-      getInitPeers: null,
-    );
-    lanPeersModel = Peers(
-      name: PeersModelName.lan,
-      loadEvent: LoadEvent.lan,
-      getInitPeers: null,
-    );
+
+    if (isGlobal) {
+      _serverModel = ServerModel(WeakReference(this));
+      _userModel = UserModel(WeakReference(this));
+      _peerTabModel = PeerTabModel(WeakReference(this));
+      _abModel = AbModel(WeakReference(this));
+      _groupModel = GroupModel(WeakReference(this));
+      _recentPeersModel = Peers(
+        name: PeersModelName.recent,
+        loadEvent: LoadEvent.recent,
+        getInitPeers: null,
+      );
+      _favoritePeersModel = Peers(
+        name: PeersModelName.favorite,
+        loadEvent: LoadEvent.favorite,
+        getInitPeers: null,
+      );
+      _lanPeersModel = Peers(
+        name: PeersModelName.lan,
+        loadEvent: LoadEvent.lan,
+        getInitPeers: null,
+      );
+    }
   }
 
   /// Mobile reuse FFI
   void mobileReset() {
+    sessionId = Uuid().v4obj();
+    sessionGeneration++;
+    ffiModel.sessionId = sessionId;
     ffiModel.resetReconnectRetry();
     ffiModel.resetRestartReconnectState();
     ffiModel.waitForFirstImage.value = true;
@@ -4354,10 +4371,11 @@ class FFI {
     int? display,
     List<int>? displays,
     bool isTerminalRunAsAdmin = false,
+    bool skipMobileReset = false,
   }) {
     closed = false;
     ffiModel.resetReconnectRetry();
-    if (isMobile) mobileReset();
+    if (isMobile && !skipMobileReset) mobileReset();
     assert(
       (!(isPortForward && isViewCamera)) &&
           (!(isViewCamera && isPortForward)) &&
@@ -4667,6 +4685,12 @@ class FFI {
     inputModel.disposeSideButtonTracking();
     if (closeSession) {
       await bind.sessionClose(sessionId: sessionId);
+    }
+    if (isGlobal) {
+      await _serverModel?.stopPoller();
+      await _abModel?.stopPoller();
+      _serverModel?.dispose();
+      _abModel?.dispose();
     }
     debugPrint('model $id closed');
     id = '';

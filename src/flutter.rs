@@ -2529,58 +2529,186 @@ pub mod sessions {
     }
 }
 
-pub(super) mod async_tasks {
-    use camellia_remote_protocol::{bail, tokio, ResultType};
+pub mod async_tasks {
+    use camellia_remote_protocol::{bail, log, tokio, ResultType};
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         sync::{
-            mpsc::{sync_channel, SyncSender},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            mpsc::{sync_channel, Receiver, SyncSender},
             Arc, Mutex,
         },
+        time::Duration,
     };
 
-    type TxQueryOnlines = SyncSender<Vec<String>>;
+    #[allow(dead_code)]
+    struct RunnerControl {
+        tx: SyncSender<Vec<String>>,
+        cancel_token: Arc<AtomicBool>,
+        join_handle: Option<std::thread::JoinHandle<()>>,
+    }
+
     lazy_static::lazy_static! {
-        static ref TX_QUERY_ONLINES: Arc<Mutex<Option<TxQueryOnlines>>> = Default::default();
+        static ref RUNNER_CONTROL: Mutex<Option<RunnerControl>> = Mutex::new(None);
+        static ref CURRENT_ENGINE_GEN: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
+        static ref ACTIVE_ENGINE_COUNT: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+    }
+
+    pub fn register_flutter_engine() -> u64 {
+        ACTIVE_ENGINE_COUNT.fetch_add(1, Ordering::SeqCst);
+        CURRENT_ENGINE_GEN.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    #[allow(dead_code)]
+    pub fn unregister_flutter_engine(_gen: u64) {
+        let _ = ACTIVE_ENGINE_COUNT.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    #[allow(dead_code)]
+    pub fn get_engine_generation() -> u64 {
+        CURRENT_ENGINE_GEN.load(Ordering::SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_active_engine_count() -> usize {
+        ACTIVE_ENGINE_COUNT.load(Ordering::SeqCst)
+    }
+
+    #[allow(dead_code)]
+    pub fn is_runner_running() -> bool {
+        let control_guard = RUNNER_CONTROL.lock().unwrap();
+        control_guard
+            .as_ref()
+            .map_or(false, |c| !c.cancel_token.load(Ordering::SeqCst))
     }
 
     #[inline]
     pub fn start_flutter_async_runner() {
-        std::thread::spawn(start_flutter_async_runner_);
+        let mut control_guard = RUNNER_CONTROL.lock().unwrap();
+        if control_guard.is_some() {
+            // Idempotent: already running. Do not spawn duplicate thread or replace sender!
+            return;
+        }
+
+        let (tx, rx) = sync_channel::<Vec<String>>(32);
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel_token.clone();
+        let gen_clone = CURRENT_ENGINE_GEN.clone();
+
+        let join_handle = std::thread::Builder::new()
+            .name("flutter_async_runner".to_string())
+            .spawn(move || {
+                run_online_query_loop(rx, cancel_clone, gen_clone);
+            })
+            .ok();
+
+        *control_guard = Some(RunnerControl {
+            tx,
+            cancel_token,
+            join_handle,
+        });
     }
 
     #[allow(dead_code)]
     pub fn stop_flutter_async_runner() {
-        let _ = TX_QUERY_ONLINES.lock().unwrap().take();
-    }
-
-    #[tokio::main(flavor = "current_thread")]
-    async fn start_flutter_async_runner_() {
-        // Only one task is allowed to run at the same time.
-        let (tx_onlines, rx_onlines) = sync_channel::<Vec<String>>(1);
-        TX_QUERY_ONLINES.lock().unwrap().replace(tx_onlines);
-
-        loop {
-            match rx_onlines.recv() {
-                Ok(ids) => {
-                    crate::client::peer_online::query_online_states(ids, handle_query_onlines).await
-                }
-                _ => {
-                    // unreachable!
-                    break;
-                }
+        let mut handle_to_join = None;
+        {
+            let mut control_guard = RUNNER_CONTROL.lock().unwrap();
+            if let Some(mut control) = control_guard.take() {
+                control.cancel_token.store(true, Ordering::SeqCst);
+                handle_to_join = control.join_handle.take();
+            }
+        }
+        if let Some(handle) = handle_to_join {
+            let start = std::time::Instant::now();
+            while !handle.is_finished() && start.elapsed() < Duration::from_millis(1500) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
             }
         }
     }
 
+    #[tokio::main(flavor = "current_thread")]
+    async fn run_online_query_loop(
+        rx: Receiver<Vec<String>>,
+        cancel_token: Arc<AtomicBool>,
+        engine_gen: Arc<AtomicU64>,
+    ) {
+        loop {
+            if cancel_token.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let initial_ids = match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(ids) => ids,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            if cancel_token.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let mut coalesced_set = HashSet::new();
+            for id in initial_ids {
+                if !id.is_empty() {
+                    coalesced_set.insert(id);
+                }
+            }
+
+            // Drain any pending queries currently in channel to coalesce into one batch
+            while let Ok(more_ids) = rx.try_recv() {
+                for id in more_ids {
+                    if !id.is_empty() {
+                        coalesced_set.insert(id);
+                    }
+                }
+            }
+
+            if coalesced_set.is_empty() {
+                continue;
+            }
+
+            let ids_to_query: Vec<String> = coalesced_set.into_iter().collect();
+            let query_gen = engine_gen.load(Ordering::SeqCst);
+            let cancel_ref = cancel_token.clone();
+            let gen_ref = engine_gen.clone();
+
+            let query_timeout = Duration::from_millis(3500);
+            let query_future = crate::client::peer_online::query_online_states(
+                ids_to_query,
+                move |onlines, offlines| {
+                    if cancel_ref.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if gen_ref.load(Ordering::SeqCst) != query_gen {
+                        log::info!(
+                            "Discarding online query results from stale engine generation {}",
+                            query_gen
+                        );
+                        return;
+                    }
+                    handle_query_onlines(onlines, offlines);
+                },
+            );
+
+            let _ = tokio::time::timeout(query_timeout, query_future).await;
+        }
+    }
+
     pub fn query_onlines(ids: Vec<String>) -> ResultType<()> {
-        if let Some(tx) = TX_QUERY_ONLINES.lock().unwrap().as_ref() {
-            // Ignore if the channel is full.
-            let _ = tx.try_send(ids)?;
+        let control_guard = RUNNER_CONTROL.lock().unwrap();
+        if let Some(control) = control_guard.as_ref() {
+            if control.cancel_token.load(Ordering::SeqCst) {
+                bail!("Online query runner is shutting down");
+            }
+            control.tx.try_send(ids)?;
+            Ok(())
         } else {
             bail!("No tx_query_onlines");
         }
-        Ok(())
     }
 
     fn handle_query_onlines(onlines: Vec<String>, offlines: Vec<String>) {

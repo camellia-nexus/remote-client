@@ -27,6 +27,7 @@ import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../../common/shared_state.dart';
 import '../widgets/popup_menu.dart';
 
 /// status of location bar
@@ -128,11 +129,12 @@ class _FileManagerPageState extends State<FileManagerPage>
 
   @override
   void dispose() {
+    final ffi = _ffi;
     model.close().whenComplete(() {
-      _ffi.close();
-      _ffi.dialogManager.dismissAll();
+      ffi.close();
+      ffi.dialogManager.dismissAll();
       WakelockManager.disable(_uniqueKey);
-      Get.delete<FFI>(tag: 'ft_${widget.id}');
+      deleteIfMatching<FFI>('ft_${widget.id}', ffi);
     });
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

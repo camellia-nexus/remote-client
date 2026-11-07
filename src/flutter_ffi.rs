@@ -34,50 +34,56 @@ lazy_static::lazy_static! {
     static ref TEXTURE_RENDER_KEY: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
 }
 
+static GLOBAL_INIT_ONCE: std::sync::Once = std::sync::Once::new();
+
 fn initialize(app_dir: &str, custom_client_config: &str) {
-    flutter::async_tasks::start_flutter_async_runner();
-    // `APP_DIR` is set in `main_get_data_dir_ios()` on iOS.
-    #[cfg(not(target_os = "ios"))]
-    {
-        *config::APP_DIR.write().unwrap() = app_dir.to_owned();
-    }
-    // core_main's load_custom_client does not work for flutter since it is only applied to its load_library in main.c
-    if custom_client_config.is_empty() {
-        crate::load_custom_client();
-    } else {
-        crate::read_custom_client(custom_client_config);
-    }
-    #[cfg(target_os = "android")]
-    {
-        // flexi_logger can't work when android_logger initialized.
-        #[cfg(debug_assertions)]
-        android_logger::init_once(
-            android_logger::Config::default()
-                .with_max_level(log::LevelFilter::Debug) // limit log level
-                .with_tag("ffi"), // logs will show under mytag tag
-        );
-        #[cfg(not(debug_assertions))]
-        camellia_remote_protocol::init_log(false, "");
-        #[cfg(feature = "mediacodec")]
-        scrap::mediacodec::check_mediacodec();
-        crate::common::test_rendezvous_server();
-        crate::common::test_nat_type();
-    }
-    #[cfg(target_os = "ios")]
-    {
-        use camellia_remote_protocol::env_logger::*;
-        init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
-        crate::common::test_nat_type();
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let _ = crate::common::global_init();
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        // core_main's init_log does not work for flutter since it is only applied to its load_library in main.c
-        camellia_remote_protocol::init_log(false, "flutter_ffi");
-    }
+    GLOBAL_INIT_ONCE.call_once(|| {
+        flutter::async_tasks::start_flutter_async_runner();
+        // `APP_DIR` is set in `main_get_data_dir_ios()` on iOS.
+        #[cfg(not(target_os = "ios"))]
+        {
+            *config::APP_DIR.write().unwrap() = app_dir.to_owned();
+        }
+        // core_main's load_custom_client does not work for flutter since it is only applied to its load_library in main.c
+        if custom_client_config.is_empty() {
+            crate::load_custom_client();
+        } else {
+            crate::read_custom_client(custom_client_config);
+        }
+        #[cfg(target_os = "android")]
+        {
+            // flexi_logger can't work when android_logger initialized.
+            #[cfg(debug_assertions)]
+            android_logger::init_once(
+                android_logger::Config::default()
+                    .with_max_level(log::LevelFilter::Debug) // limit log level
+                    .with_tag("ffi"), // logs will show under mytag tag
+            );
+            #[cfg(not(debug_assertions))]
+            camellia_remote_protocol::init_log(false, "");
+            #[cfg(feature = "mediacodec")]
+            scrap::mediacodec::check_mediacodec();
+            crate::common::test_rendezvous_server();
+            crate::common::test_nat_type();
+        }
+        #[cfg(target_os = "ios")]
+        {
+            use camellia_remote_protocol::env_logger::*;
+            init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
+            crate::common::test_nat_type();
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = crate::common::global_init();
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            // core_main's init_log does not work for flutter since it is only applied to its load_library in main.c
+            camellia_remote_protocol::init_log(false, "flutter_ffi");
+        }
+    });
+
+    let _engine_gen = flutter::async_tasks::register_flutter_engine();
 }
 
 #[inline]

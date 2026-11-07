@@ -2008,17 +2008,22 @@ FFI get gFFI => _globalFFI;
 
 Future<void> initGlobalFFI() async {
   debugPrint("_globalFFI init");
-  _globalFFI = FFI(null);
+  _globalFFI = FFI(null, isGlobal: true);
   debugPrint("_globalFFI init end");
   // after `put`, can also be globally found by Get.find<FFI>();
   Get.put<FFI>(_globalFFI, permanent: true);
 }
 
 String translate(String name) {
+  if (isTest) return name;
   if (name.startsWith('Failed to') && name.contains(': ')) {
     return name.split(': ').map((x) => translate(x)).join(': ');
   }
-  return platformFFI.translate(name, localeName);
+  try {
+    return platformFFI.translate(name, localeName);
+  } catch (_) {
+    return name;
+  }
 }
 
 // This function must be kept the same as the Rust implementation.

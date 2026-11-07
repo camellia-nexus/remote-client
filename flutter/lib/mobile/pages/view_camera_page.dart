@@ -62,6 +62,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   Orientation? _currentOrientation;
   double _viewInsetsBottom = 0;
   final _uniqueKey = UniqueKey();
+  late final int _generation;
+  bool _teardownCalled = false;
   Timer? _timerDidChangeMetrics;
 
   final _blockableOverlayState = BlockableOverlayState();
@@ -78,15 +80,16 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     text: initText,
   );
 
-  _ViewCameraPageState(String id) {
-    initSharedStates(id);
-    gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
-    gFFI.dialogManager.loadMobileActionsOverlayVisible();
-  }
+  _ViewCameraPageState(String id);
 
   @override
   void initState() {
     super.initState();
+    gFFI.mobileReset();
+    _generation = gFFI.sessionGeneration;
+    initSharedStates(widget.id, generation: _generation);
+    gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
+    gFFI.dialogManager.loadMobileActionsOverlayVisible();
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
     gFFI.start(
       widget.id,
@@ -94,6 +97,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       password: widget.password,
       isSharedPassword: widget.isSharedPassword,
       forceRelay: widget.forceRelay,
+      skipMobileReset: true,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
@@ -124,32 +128,50 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     WidgetsBinding.instance.addObserver(this);
   }
 
-  @override
-  Future<void> dispose() async {
-    WidgetsBinding.instance.removeObserver(this);
-    // https://github.com/flutter/flutter/issues/64935
-    super.dispose();
+  Future<void> teardown() async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    final myGen = _generation;
+    final mySessionId = sessionId;
+
+    unawaited(bind.sessionClose(sessionId: mySessionId));
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
     gFFI.inputModel.listenToMouse(false);
     gFFI.imageModel.disposeImage();
     gFFI.cursorModel.disposeImages();
     await gFFI.invokeMethod("enable_soft_keyboard", true);
-    _mobileFocusNode.dispose();
-    _physicalFocusNode.dispose();
+
     await gFFI.close();
-    _timer?.cancel();
-    _timerDidChangeMetrics?.cancel();
-    gFFI.dialogManager.dismissAll();
+    if (gFFI.sessionGeneration != myGen) return;
+
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.manual,
       overlays: SystemUiOverlay.values,
     );
+    if (gFFI.sessionGeneration != myGen) return;
+
     WakelockManager.disable(_uniqueKey);
-    removeSharedStates(widget.id);
-    // `on_voice_call_closed` should be called when the connection is ended.
-    // The inner logic of `on_voice_call_closed` will check if the voice call is active.
-    // Only one client is considered here for now.
+    removeSharedStates(widget.id, expectedGeneration: myGen);
     gFFI.chatModel.onVoiceCallClosed("End connetion");
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _mobileFocusNode.dispose();
+    _physicalFocusNode.dispose();
+    _textController.dispose();
+    _timer?.cancel();
+    _timer = null;
+    _timerDidChangeMetrics?.cancel();
+    _timerDidChangeMetrics = null;
+    gFFI.dialogManager.dismissAll();
+
+    if (!_teardownCalled) {
+      unawaited(teardown());
+    }
+
+    super.dispose();
   }
 
   @override
