@@ -10,7 +10,9 @@ on run {daemon_file, agent_file, user, cur_pid, source_dir}
   set unload_service to "launchctl unload -w " & daemon_plist & " || true;"
   set kill_others to "pids=$(pgrep -x 'Camellia' | grep -vx " & cur_pid & " || true); if [ -n \"$pids\" ]; then echo \"$pids\" | xargs kill -9 || true; fi;"
 
-  set copy_files to "(rm -rf " & quoted form of app_bundle & " && ditto " & quoted form of source_dir & " " & quoted form of app_bundle & " && chown -R " & quoted form of user & ":staff " & quoted form of app_bundle & " && (xattr -r -d com.apple.quarantine " & quoted form of app_bundle & " || true)) || exit 1;"
+  set staging_bundle to app_bundle & ".staging"
+  set backup_bundle to app_bundle & ".backup"
+  set copy_files to "rm -rf " & quoted form of staging_bundle & " " & quoted form of backup_bundle & " && ditto " & quoted form of source_dir & " " & quoted form of staging_bundle & " && chown -R " & quoted form of user & ":staff " & quoted form of staging_bundle & " && (test -d " & quoted form of staging_bundle & "/Contents/MacOS || exit 1) && (if [ -d " & quoted form of app_bundle & " ]; then mv " & quoted form of app_bundle & " " & quoted form of backup_bundle & "; fi) && (if ! mv " & quoted form of staging_bundle & " " & quoted form of app_bundle & "; then (if [ -d " & quoted form of backup_bundle & " ]; then mv " & quoted form of backup_bundle & " " & quoted form of app_bundle & "; fi); exit 1; fi) && rm -rf " & quoted form of backup_bundle & ";"
 
   set write_daemon_plist to "echo " & quoted form of daemon_file & " > " & daemon_plist & " && chown root:wheel " & daemon_plist & ";"
   set write_agent_plist to "echo " & quoted form of agent_file & " > " & agent_plist & " && chown root:wheel " & agent_plist & ";"

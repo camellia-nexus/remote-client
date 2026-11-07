@@ -294,6 +294,8 @@ static CFMachPortRef g_eventTap = NULL;
 static CFRunLoopSourceRef g_runLoopSource = NULL;
 static std::mutex g_privacyModeMutex;
 static bool g_privacyModeActive = false;
+typedef void (*MacPrivacyLostCallback)(void);
+static MacPrivacyLostCallback g_privacyLostCallback = NULL;
 
 // Flag to request asynchronous shutdown of privacy mode.
 // This is set by DisplayReconfigurationCallback when an error occurs, instead of calling
@@ -370,10 +372,13 @@ static CGDirectDisplayID FindDisplayIdByUUID(const std::string& targetUuid) {
 // Note: This function does NOT clear g_originalGammas - caller should do that if needed.
 static bool RestoreAllGammas() {
     bool allSuccess = true;
+    std::vector<std::string> restoredUuids;
+
     for (auto const& [uuid, gamma] : g_originalGammas) {
         CGDirectDisplayID d = FindDisplayIdByUUID(uuid);
         if (d == kCGNullDirectDisplay) {
-            NSLog(@"Display with UUID %s no longer online, skipping gamma restore", uuid.c_str());
+            NSLog(@"Display with UUID %s no longer online, retaining pending gamma snapshot", uuid.c_str());
+            allSuccess = false;
             continue;
         }
 
@@ -386,9 +391,17 @@ static bool RestoreAllGammas() {
             if (error != kCGErrorSuccess) {
                 NSLog(@"Failed to restore gamma for display (ID: %u, UUID: %s, error: %d)", (unsigned)d, uuid.c_str(), error);
                 allSuccess = false;
+            } else {
+                restoredUuids.push_back(uuid);
             }
         }
     }
+
+    // STATE-003: Only remove original gamma snapshots that were actually successfully restored
+    for (const auto& uuid : restoredUuids) {
+        g_originalGammas.erase(uuid);
+    }
+
     return allSuccess;
 }
 
@@ -439,15 +452,26 @@ static void ScheduleAsyncPrivacyModeShutdown(const char* reason) {
 
 // Helper function to apply blackout to all online displays.
 // Must be called while holding g_privacyModeMutex.
-static void ApplyBlackoutToAllDisplays() {
+static bool ApplyBlackoutToAllDisplays() {
     uint32_t onlineCount = 0;
-    CGGetOnlineDisplayList(0, NULL, &onlineCount);
-    std::vector<CGDirectDisplayID> onlineDisplays(onlineCount);
-    CGGetOnlineDisplayList(onlineCount, onlineDisplays.data(), &onlineCount);
-
-    for (uint32_t i = 0; i < onlineCount; i++) {
-        ApplyBlackoutToDisplay(onlineDisplays[i]);
+    CGError err = CGGetOnlineDisplayList(0, NULL, &onlineCount);
+    if (err != kCGErrorSuccess || onlineCount == 0) {
+        return false;
     }
+
+    std::vector<CGDirectDisplayID> onlineDisplays(onlineCount);
+    err = CGGetOnlineDisplayList(onlineCount, onlineDisplays.data(), &onlineCount);
+    if (err != kCGErrorSuccess || onlineCount == 0) {
+        return false;
+    }
+
+    bool allSuccess = true;
+    for (uint32_t i = 0; i < onlineCount; i++) {
+        if (!ApplyBlackoutToDisplay(onlineDisplays[i])) {
+            allSuccess = false;
+        }
+    }
+    return allSuccess;
 }
 
 // Helper function to get current timestamp in milliseconds
@@ -460,13 +484,13 @@ static uint64_t GetCurrentTimestampMs() {
 static bool IsDisplayBlackedOut(CGDirectDisplayID display) {
     uint32_t capacity = CGDisplayGammaTableCapacity(display);
     if (capacity == 0) {
-        return true; // Can't check, assume it's fine
+        return false; // PRIV-006: Cannot verify, fail-closed
     }
 
     std::vector<CGGammaValue> red(capacity), green(capacity), blue(capacity);
     uint32_t sampleCount = 0;
-    if (CGGetDisplayTransferByTable(display, capacity, red.data(), green.data(), blue.data(), &sampleCount) != kCGErrorSuccess) {
-        return true; // Can't read, assume it's fine
+    if (CGGetDisplayTransferByTable(display, capacity, red.data(), green.data(), blue.data(), &sampleCount) != kCGErrorSuccess || sampleCount == 0) {
+        return false; // PRIV-006: Cannot read, fail-closed
     }
 
     // Check if all values are zero (or very close to zero)
@@ -495,11 +519,21 @@ static void RunBlackoutMonitor() {
         // Calculate effective end time based on the last reconfig event
         uint64_t effectiveEndTime = g_lastReconfigTimestamp + DISPLAY_RECONFIG_MONITOR_DURATION_MS;
 
-        // Check all displays and reapply blackout if any has been restored
         uint32_t onlineCount = 0;
-        CGGetOnlineDisplayList(0, NULL, &onlineCount);
+        CGError err = CGGetOnlineDisplayList(0, NULL, &onlineCount);
+        if (err != kCGErrorSuccess || onlineCount == 0) {
+            NSLog(@"Failed to enumerate online displays during monitoring, scheduling shutdown");
+            ScheduleAsyncPrivacyModeShutdown("Online display enumeration failed during monitoring");
+            return;
+        }
+
         std::vector<CGDirectDisplayID> onlineDisplays(onlineCount);
-        CGGetOnlineDisplayList(onlineCount, onlineDisplays.data(), &onlineCount);
+        err = CGGetOnlineDisplayList(onlineCount, onlineDisplays.data(), &onlineCount);
+        if (err != kCGErrorSuccess || onlineCount == 0) {
+            NSLog(@"Failed to retrieve online displays during monitoring, scheduling shutdown");
+            ScheduleAsyncPrivacyModeShutdown("Online display retrieval failed during monitoring");
+            return;
+        }
 
         bool needsReapply = false;
         for (uint32_t i = 0; i < onlineCount; i++) {
@@ -511,7 +545,11 @@ static void RunBlackoutMonitor() {
 
         if (needsReapply) {
             NSLog(@"Gamma was restored by system, reapplying blackout");
-            ApplyBlackoutToAllDisplays();
+            if (!ApplyBlackoutToAllDisplays()) {
+                NSLog(@"Failed to reapply blackout to all displays, scheduling privacy mode shutdown");
+                ScheduleAsyncPrivacyModeShutdown("Blackout reapplication failed during monitoring");
+                return;
+            }
         }
 
         // Continue monitoring if we haven't reached the end time
@@ -761,7 +799,7 @@ static void TeardownEventTapOnMainThread() {
 // Internal function to turn off privacy mode without acquiring the mutex
 // Must be called while holding g_privacyModeMutex
 static bool TurnOffPrivacyModeInternal() {
-    if (!g_privacyModeActive) {
+    if (!g_privacyModeActive && g_originalGammas.empty()) {
         return true;
     }
 
@@ -779,12 +817,16 @@ static bool TurnOffPrivacyModeInternal() {
     // if the system (ColorSync/Night Shift) modified gamma during privacy mode
     CGDisplayRestoreColorSyncSettings();
 
-    // Clean up
-    g_originalGammas.clear();
+    // Reset runtime flags
     g_privacyModeActive = false;
     g_privacyModeShutdownRequested = false;
     g_lastReconfigTimestamp = 0;
     g_blackoutReapplicationScheduled = false;
+
+    // STATE-003: Notify registered Rust listener that native privacy mode was turned off / lost
+    if (g_privacyLostCallback) {
+        g_privacyLostCallback();
+    }
 
     return restoreSuccess;
 }
@@ -803,16 +845,34 @@ extern "C" bool MacSetPrivacyMode(bool on) {
         }
 
         // 2. Register display reconfiguration callback to handle hot-plug events
-        CGDisplayRegisterReconfigurationCallback(DisplayReconfigurationCallback, NULL);
+        CGError regErr = CGDisplayRegisterReconfigurationCallback(DisplayReconfigurationCallback, NULL);
+        if (regErr != kCGErrorSuccess) {
+            NSLog(@"MacSetPrivacyMode: Failed to register display reconfiguration callback (error %d)", regErr);
+            TeardownEventTapOnMainThread();
+            return false;
+        }
 
         // 3. Gamma Blackout
         uint32_t count = 0;
-        CGGetOnlineDisplayList(0, NULL, &count);
-        std::vector<CGDirectDisplayID> displays(count);
-        CGGetOnlineDisplayList(count, displays.data(), &count);
+        CGError listErr = CGGetOnlineDisplayList(0, NULL, &count);
+        if (listErr != kCGErrorSuccess || count == 0) {
+            NSLog(@"MacSetPrivacyMode: Failed to enumerate online displays (error %d, count %u)", listErr, count);
+            CGDisplayRemoveReconfigurationCallback(DisplayReconfigurationCallback, NULL);
+            TeardownEventTapOnMainThread();
+            return false;
+        }
 
-        uint32_t blackoutSuccessCount = 0;
-        uint32_t blackoutAttemptCount = 0;
+        std::vector<CGDirectDisplayID> displays(count);
+        listErr = CGGetOnlineDisplayList(count, displays.data(), &count);
+        if (listErr != kCGErrorSuccess || count == 0) {
+            NSLog(@"MacSetPrivacyMode: Failed to retrieve online display IDs (error %d, count %u)", listErr, count);
+            CGDisplayRemoveReconfigurationCallback(DisplayReconfigurationCallback, NULL);
+            TeardownEventTapOnMainThread();
+            return false;
+        }
+
+        bool allDisplaysOk = true;
+        std::vector<std::string> blackedOutUuids;
 
         for (uint32_t i = 0; i < count; i++) {
             CGDirectDisplayID d = displays[i];
@@ -820,73 +880,59 @@ extern "C" bool MacSetPrivacyMode(bool on) {
 
             if (uuid.empty()) {
                 NSLog(@"MacSetPrivacyMode: Failed to get UUID for display %u, privacy mode requires all displays", (unsigned)d);
-                // Privacy mode requires ALL connected displays to be successfully blacked out
-                // to ensure user privacy. If we can't identify a display (no UUID),
-                // we can't safely manage its state or restore it later.
-                // Therefore, we must abort the entire operation and clean up any resources
-                // already allocated (like event taps and reconfiguration callbacks).
-                CGDisplayRemoveReconfigurationCallback(DisplayReconfigurationCallback, NULL);
-                TeardownEventTapOnMainThread();
-                // Restore gamma for displays that were already blacked out before this failure
-                if (!RestoreAllGammas()) {
-                    // If any display failed to restore, use system reset as fallback
-                    CGDisplayRestoreColorSyncSettings();
-                }
-                g_originalGammas.clear();
-                return false;
+                allDisplaysOk = false;
+                break;
             }
 
             // Save original gamma using UUID as key (stable across reconnections)
             if (g_originalGammas.find(uuid) == g_originalGammas.end()) {
                 uint32_t capacity = CGDisplayGammaTableCapacity(d);
-                if (capacity > 0) {
-                    std::vector<CGGammaValue> red(capacity), green(capacity), blue(capacity);
-                    uint32_t sampleCount = 0;
-                    if (CGGetDisplayTransferByTable(d, capacity, red.data(), green.data(), blue.data(), &sampleCount) == kCGErrorSuccess) {
-                        std::vector<CGGammaValue> all;
-                        all.insert(all.end(), red.begin(), red.begin() + sampleCount);
-                        all.insert(all.end(), green.begin(), green.begin() + sampleCount);
-                        all.insert(all.end(), blue.begin(), blue.begin() + sampleCount);
-                        g_originalGammas[uuid] = all;
-                    } else {
-                        NSLog(@"MacSetPrivacyMode: Failed to get gamma table for display %u (UUID: %s)", (unsigned)d, uuid.c_str());
-                    }
-                } else {
+                if (capacity == 0) {
                     NSLog(@"MacSetPrivacyMode: Display %u (UUID: %s) has zero gamma table capacity, not supported", (unsigned)d, uuid.c_str());
+                    allDisplaysOk = false;
+                    break;
                 }
+
+                std::vector<CGGammaValue> red(capacity), green(capacity), blue(capacity);
+                uint32_t sampleCount = 0;
+                CGError getErr = CGGetDisplayTransferByTable(d, capacity, red.data(), green.data(), blue.data(), &sampleCount);
+                if (getErr != kCGErrorSuccess || sampleCount == 0) {
+                    NSLog(@"MacSetPrivacyMode: Failed to get gamma table for display %u (UUID: %s, error %d)", (unsigned)d, uuid.c_str(), getErr);
+                    allDisplaysOk = false;
+                    break;
+                }
+
+                std::vector<CGGammaValue> all;
+                all.insert(all.end(), red.begin(), red.begin() + sampleCount);
+                all.insert(all.end(), green.begin(), green.begin() + sampleCount);
+                all.insert(all.end(), blue.begin(), blue.begin() + sampleCount);
+                g_originalGammas[uuid] = all;
             }
 
-            // Set to black only if we have saved original gamma for this display
-            if (g_originalGammas.find(uuid) != g_originalGammas.end()) {
-                uint32_t capacity = CGDisplayGammaTableCapacity(d);
-                if (capacity > 0) {
-                    std::vector<CGGammaValue> zeros(capacity, 0.0f);
-                    blackoutAttemptCount++;
-                    CGError error = CGSetDisplayTransferByTable(d, capacity, zeros.data(), zeros.data(), zeros.data());
-                    if (error != kCGErrorSuccess) {
-                        NSLog(@"MacSetPrivacyMode: Failed to blackout display (ID: %u, UUID: %s, error: %d)", (unsigned)d, uuid.c_str(), error);
-                    } else {
-                        blackoutSuccessCount++;
-                    }
-                } else {
-                    NSLog(@"MacSetPrivacyMode: Display %u (UUID: %s) has zero gamma table capacity for blackout", (unsigned)d, uuid.c_str());
-                }
+            // Apply blackout
+            if (!ApplyBlackoutToDisplay(d)) {
+                NSLog(@"MacSetPrivacyMode: Failed to apply blackout to display %u (UUID: %s)", (unsigned)d, uuid.c_str());
+                allDisplaysOk = false;
+                break;
             }
+
+            // PRIV-006: Immediate readback verification to ensure hardware applied the black gamma
+            if (!IsDisplayBlackedOut(d)) {
+                NSLog(@"MacSetPrivacyMode: Readback verification failed for display %u (UUID: %s), screen not black", (unsigned)d, uuid.c_str());
+                allDisplaysOk = false;
+                break;
+            }
+
+            blackedOutUuids.push_back(uuid);
         }
 
         // Return false if any display failed to blackout - privacy mode requires ALL displays to be blacked out
-        if (blackoutAttemptCount > 0 && blackoutSuccessCount < blackoutAttemptCount) {
-            NSLog(@"MacSetPrivacyMode: Failed to blackout all displays (%u/%u succeeded)", blackoutSuccessCount, blackoutAttemptCount);
-            // Clean up: unregister callback and disable event tap since we're failing
+        if (!allDisplaysOk || blackedOutUuids.size() != count) {
+            NSLog(@"MacSetPrivacyMode: Failed to blackout all displays (%zu/%u verified)", blackedOutUuids.size(), count);
             CGDisplayRemoveReconfigurationCallback(DisplayReconfigurationCallback, NULL);
             TeardownEventTapOnMainThread();
-            // Restore gamma for displays that were successfully blacked out
-            if (!RestoreAllGammas()) {
-                // If any display failed to restore, use system reset as fallback
-                NSLog(@"Some displays failed to restore gamma during cleanup, using CGDisplayRestoreColorSyncSettings as fallback");
-                CGDisplayRestoreColorSyncSettings();
-            }
-            g_originalGammas.clear();
+            RestoreAllGammas();
+            CGDisplayRestoreColorSyncSettings();
             return false;
         }
 
@@ -896,4 +942,19 @@ extern "C" bool MacSetPrivacyMode(bool on) {
     } else {
         return TurnOffPrivacyModeInternal();
     }
+}
+
+extern "C" bool MacIsPrivacyModeActive() {
+    std::lock_guard<std::mutex> lock(g_privacyModeMutex);
+    return g_privacyModeActive;
+}
+
+extern "C" size_t MacGetPendingGammaSnapshotCount() {
+    std::lock_guard<std::mutex> lock(g_privacyModeMutex);
+    return g_originalGammas.size();
+}
+
+extern "C" void MacRegisterPrivacyLostCallback(MacPrivacyLostCallback callback) {
+    std::lock_guard<std::mutex> lock(g_privacyModeMutex);
+    g_privacyLostCallback = callback;
 }

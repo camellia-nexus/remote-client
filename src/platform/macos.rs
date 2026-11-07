@@ -255,29 +255,33 @@ pub fn is_installed_daemon(prompt: bool) -> bool {
     false
 }
 
-fn update_daemon_agent(agent_plist_file: String, update_source_dir: String, sync: bool) {
+fn update_daemon_agent(
+    agent_plist_file: String,
+    update_source_dir: String,
+    sync: bool,
+) -> ResultType<()> {
     let update_script_file = "update.scpt";
     let Some(update_script) = PRIVILEGES_SCRIPTS_DIR.get_file(update_script_file) else {
-        return;
+        bail!("Missing update.scpt resource");
     };
     let Some(update_script_body) = update_script.contents_utf8().map(correct_app_name) else {
-        return;
+        bail!("Failed to read update.scpt contents");
     };
 
     let Some(daemon_plist) = PRIVILEGES_SCRIPTS_DIR.get_file("daemon.plist") else {
-        return;
+        bail!("Missing daemon.plist resource");
     };
     let Some(daemon_plist_body) = daemon_plist.contents_utf8().map(correct_app_name) else {
-        return;
+        bail!("Failed to read daemon.plist contents");
     };
     let Some(agent_plist) = PRIVILEGES_SCRIPTS_DIR.get_file("agent.plist") else {
-        return;
+        bail!("Missing agent.plist resource");
     };
     let Some(agent_plist_body) = agent_plist.contents_utf8().map(correct_app_name) else {
-        return;
+        bail!("Failed to read agent.plist contents");
     };
 
-    let func = move || {
+    let func = move || -> ResultType<()> {
         let mut binding = std::process::Command::new("osascript");
         let cmd = binding
             .arg("-e")
@@ -287,23 +291,26 @@ fn update_daemon_agent(agent_plist_file: String, update_source_dir: String, sync
             .arg(&get_active_username())
             .arg(std::process::id().to_string())
             .arg(update_source_dir);
-        match cmd.status() {
-            Err(e) => {
-                log::error!("run osascript failed: {}", e);
-            }
-            Ok(status) if !status.success() => {
-                log::warn!("run osascript failed with status: {}", status);
-            }
-            _ => {
-                let installed = std::path::Path::new(&agent_plist_file).exists();
-                log::info!("Agent file {} installed: {}", &agent_plist_file, installed);
-            }
+        let status = cmd.status()?;
+        if !status.success() {
+            bail!("osascript daemon update failed with status: {}", status);
         }
+        let installed = std::path::Path::new(&agent_plist_file).exists();
+        log::info!("Agent file {} installed: {}", &agent_plist_file, installed);
+        if !installed {
+            bail!("Agent plist was not installed at {}", agent_plist_file);
+        }
+        Ok(())
     };
     if sync {
-        func();
+        func()
     } else {
-        std::thread::spawn(func);
+        std::thread::spawn(move || {
+            if let Err(e) = func() {
+                log::error!("Async daemon update failed: {}", e);
+            }
+        });
+        Ok(())
     }
 }
 
@@ -959,41 +966,26 @@ pub fn update_me() -> ResultType<()> {
     if is_installed_daemon && !is_service_stopped {
         let agent = format!("{}_server.plist", crate::get_full_name());
         let agent_plist_file = format!("/Library/LaunchAgents/{}", agent);
-        update_daemon_agent(agent_plist_file, app_dir, true);
+        update_daemon_agent(agent_plist_file, app_dir, true)?;
     } else {
-        // `kill -9` may not work without "administrator privileges"
-        let update_body = r#"
-on run {app_name, cur_pid, app_dir, user_name}
-    set app_bundle to "/Applications/" & app_name & ".app"
-    set app_bundle_q to quoted form of app_bundle
-    set app_dir_q to quoted form of app_dir
-    set user_name_q to quoted form of user_name
-
-    set check_source to "test -d " & app_dir_q & " || exit 1;"
-    set kill_others to "pids=$(pgrep -x '" & app_name & "' | grep -vx " & cur_pid & " || true); if [ -n \"$pids\" ]; then echo \"$pids\" | xargs kill -9 || true; fi;"
-    set copy_files to "rm -rf " & app_bundle_q & " && ditto " & app_dir_q & " " & app_bundle_q & " && chown -R " & user_name_q & ":staff " & app_bundle_q & " && (xattr -r -d com.apple.quarantine " & app_bundle_q & " || true);"
-    set sh to "set -e;" & check_source & kill_others & copy_files
-
-    do shell script sh with prompt app_name & " wants to update itself" with administrator privileges
-end run
-        "#;
+        let tx_id = uuid::Uuid::new_v4().to_string();
         let active_user = get_active_username();
+        let update_script =
+            super::macos_update_safety::UpdateTransactionAssembler::assemble_transaction_script(
+                &app_name,
+                &app_dir,
+                &active_user,
+                std::process::id(),
+                &tx_id,
+            );
         let status = Command::new("osascript")
             .arg("-e")
-            .arg(update_body)
-            .arg(app_name.to_string())
-            .arg(std::process::id().to_string())
-            .arg(app_dir)
-            .arg(active_user)
-            .status();
-        match status {
-            Ok(status) if !status.success() => {
-                log::error!("osascript execution failed with status: {}", status);
-            }
-            Err(e) => {
-                log::error!("run osascript failed: {}", e);
-            }
-            _ => {}
+            .arg(&update_script)
+            .status()
+            .map_err(|e| anyhow!("Failed to execute update osascript: {}", e))?;
+
+        if !status.success() {
+            bail!("macOS update transaction failed with status: {:?}", status);
         }
     }
     std::process::Command::new("open")
@@ -1078,11 +1070,37 @@ fn extract_dmg_inner(dmg_path: &str, target_dir: &str) -> ResultType<()> {
         );
     }
 
-    if !Path::new(&dest_path).exists() {
+    let dest_bundle = Path::new(&dest_path);
+    if !dest_bundle.exists() {
         bail!(
             "Copy operation failed - destination not found at {}",
             dest_path
         );
+    }
+
+    // UPDATE-002: Verify bundle structure, codesign, and version monotonicity before proceeding
+    let meta =
+        super::macos_update_safety::MacAppBundleValidator::validate_bundle_structure(dest_bundle)?;
+    super::macos_update_safety::MacAppBundleValidator::verify_bundle_signature(dest_bundle)?;
+
+    // Check version monotonicity against current executable
+    if let Ok(cur_exe) = std::env::current_exe() {
+        if let Some(cur_app) = cur_exe
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+        {
+            if let Ok(cur_meta) =
+                super::macos_update_safety::MacAppBundleValidator::validate_bundle_structure(
+                    cur_app,
+                )
+            {
+                super::macos_update_safety::MacAppBundleValidator::verify_version_monotonicity(
+                    &cur_meta.short_version_string,
+                    &meta.short_version_string,
+                )?;
+            }
+        }
     }
 
     Ok(())

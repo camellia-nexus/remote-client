@@ -25,6 +25,7 @@ pub mod gtk_sudo;
 
 pub mod cert;
 pub mod install_safety;
+pub mod macos_update_safety;
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub use camellia_platform_power as power;
