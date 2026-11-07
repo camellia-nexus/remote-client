@@ -12,19 +12,27 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL},
         Security::{
+            AclSizeInformation,
             Authorization::{
                 ConvertSidToStringSidW, ConvertStringSidToSidW, GetNamedSecurityInfoW,
-                SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, SET_ACCESS,
-                SE_FILE_OBJECT, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+                SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
+                REVOKE_ACCESS, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID,
+                TRUSTEE_IS_USER, TRUSTEE_W,
             },
-            ACE_FLAGS, ACL, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, NO_INHERITANCE,
-            OBJECT_INHERIT_ACE, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+            EqualSid as WinEqualSid, GetAce, GetAclInformation, LookupAccountNameW,
+            ACCESS_ALLOWED_ACE, ACE_FLAGS, ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
+            CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OBJECT_INHERIT_ACE,
+            PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SID_NAME_USE,
             TOKEN_QUERY, TOKEN_USER,
         },
-        Storage::FileSystem::{FILE_ALL_ACCESS, FILE_GENERIC_WRITE},
+        Storage::FileSystem::{
+            FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+        },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     },
 };
+
+const ACCESS_ALLOWED_ACE_TYPE_U8: u8 = 0;
 
 const FILE_ATTRIBUTE_REPARSE_POINT_U32: u32 = 0x400;
 
@@ -130,61 +138,391 @@ fn apply_grant_sid_allow_ace_to_path(
     Ok(())
 }
 
-/// Grants `Everyone` on `dir` recursively for helper/runtime files that must be
-/// readable/executable across user contexts.
-///
-/// `access_mask` is the Win32 file access mask to grant recursively.
-pub fn set_path_permission(dir: &Path, access_mask: u32) -> ResultType<()> {
-    let metadata = fs::symlink_metadata(dir).map_err(|e| {
-        anyhow!(
-            "Failed to inspect ACL target directory '{}': {}",
-            dir.display(),
-            e
+pub(crate) fn get_file_dacl(path: &Path) -> ResultType<(*mut ACL, LocalAllocGuard)> {
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    let path_utf16: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        GetNamedSecurityInfoW(
+            PCWSTR::from_raw(path_utf16.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut dacl),
+            None,
+            &mut sd,
         )
-    })?;
-    if is_reparse_point(&metadata) {
+    };
+    if result.0 != 0 {
         bail!(
-            "ACL target directory is a reparse point and is rejected: '{}'",
-            dir.display()
+            "GetNamedSecurityInfoW failed for '{}': win32_error={}",
+            path.display(),
+            result.0
         );
     }
+    if dacl.is_null() || sd.0.is_null() {
+        bail!("DACL/security descriptor missing for '{}'", path.display());
+    }
+    Ok((dacl, LocalAllocGuard(sd.0)))
+}
+
+pub(crate) fn has_allow_ace_with_mask(
+    dacl: *const ACL,
+    sid_ptr: *mut std::ffi::c_void,
+    mask: u32,
+) -> bool {
+    let mut info = ACL_SIZE_INFORMATION::default();
+    if unsafe {
+        GetAclInformation(
+            dacl,
+            &mut info as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    for index in 0..info.AceCount {
+        let mut ace_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+        if unsafe { GetAce(dacl, index, &mut ace_ptr) }.is_err() || ace_ptr.is_null() {
+            continue;
+        }
+        let header = unsafe { &*(ace_ptr as *const ACE_HEADER) };
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE_U8 {
+            continue;
+        }
+        let allowed = unsafe { &*(ace_ptr as *const ACCESS_ALLOWED_ACE) };
+        let ace_sid = PSID((&allowed.SidStart as *const u32) as *mut std::ffi::c_void);
+        if unsafe { WinEqualSid(PSID(sid_ptr), ace_sid) }.is_ok() && (allowed.Mask & mask) == mask {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolves an account name (e.g. "Administrator", "DOMAIN\\User") to its canonical SID string.
+pub fn lookup_account_sid_string(account_name: &str) -> ResultType<String> {
+    let trimmed = account_name.trim();
+    if trimmed.is_empty() {
+        bail!("Account name cannot be empty");
+    }
+    let account_utf16 = wide_string(trimmed);
+    let mut sid_bytes_len: u32 = 0;
+    let mut domain_chars_len: u32 = 0;
+    let mut pe_use = SID_NAME_USE::default();
+    let _ = unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            PCWSTR::from_raw(account_utf16.as_ptr()),
+            None,
+            &mut sid_bytes_len,
+            None,
+            &mut domain_chars_len,
+            &mut pe_use,
+        )
+    };
+    if sid_bytes_len == 0 {
+        bail!(
+            "Account '{}' not found or failed to determine SID length",
+            trimmed
+        );
+    }
+
+    let mut sid_buf = vec![0u8; sid_bytes_len as usize];
+    let mut domain_buf = vec![0u16; (domain_chars_len.max(1)) as usize];
+    unsafe {
+        LookupAccountNameW(
+            PCWSTR::null(),
+            PCWSTR::from_raw(account_utf16.as_ptr()),
+            Some(PSID(sid_buf.as_mut_ptr() as *mut _)),
+            &mut sid_bytes_len,
+            Some(PWSTR::from_raw(domain_buf.as_mut_ptr())),
+            &mut domain_chars_len,
+            &mut pe_use,
+        )
+    }
+    .map_err(|e| anyhow!("Failed to resolve account '{}': {}", trimmed, e))?;
+
+    let mut sid_string_ptr = PWSTR::null();
+    unsafe {
+        ConvertSidToStringSidW(PSID(sid_buf.as_mut_ptr() as *mut _), &mut sid_string_ptr)
+            .map_err(|e| anyhow!("ConvertSidToStringSidW failed for resolved SID: {}", e))?;
+    }
+    if sid_string_ptr.is_null() {
+        bail!("ConvertSidToStringSidW returned null SID string pointer");
+    }
+    let _sid_string_guard = LocalAllocGuard(sid_string_ptr.0 as *mut std::ffi::c_void);
+    unsafe {
+        sid_string_ptr
+            .to_string()
+            .map_err(|e| anyhow!("Failed to decode SID string as UTF-16: {}", e))
+    }
+}
+
+/// Revokes any explicit ACEs granted to `sid_str` on `path`.
+pub fn revoke_sid_ace_from_path(path: &Path, sid_str: &str) -> ResultType<()> {
+    let sid_guard = sid_string_to_local_alloc_guard(sid_str)?;
+    let mut old_dacl: *mut ACL = std::ptr::null_mut();
+    let mut security_descriptor = PSECURITY_DESCRIPTOR::default();
+    let path_utf16: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let get_named_result = unsafe {
+        GetNamedSecurityInfoW(
+            PCWSTR::from_raw(path_utf16.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut old_dacl),
+            None,
+            &mut security_descriptor,
+        )
+    };
+    if get_named_result.0 != 0 {
+        bail!(
+            "GetNamedSecurityInfoW failed for '{}': win32_error={}",
+            path.display(),
+            get_named_result.0
+        );
+    }
+    let _sd_guard = LocalAllocGuard(security_descriptor.0);
+    if old_dacl.is_null() {
+        return Ok(());
+    }
+
+    let explicit_access = [EXPLICIT_ACCESS_W {
+        grfAccessPermissions: 0,
+        grfAccessMode: REVOKE_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: windows::Win32::Security::Authorization::NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: PWSTR::from_raw(sid_guard.as_sid_ptr() as *mut u16),
+        },
+    }];
+
+    let mut new_acl: *mut ACL = std::ptr::null_mut();
+    let set_entries_result = unsafe {
+        SetEntriesInAclW(
+            Some(explicit_access.as_slice()),
+            Some(old_dacl as *const ACL),
+            &mut new_acl,
+        )
+    };
+    if set_entries_result.0 != 0 {
+        bail!(
+            "SetEntriesInAclW (revoke) failed for '{}': win32_error={}",
+            path.display(),
+            set_entries_result.0
+        );
+    }
+    if new_acl.is_null() {
+        return Ok(());
+    }
+    let _acl_guard = LocalAllocGuard(new_acl as *mut std::ffi::c_void);
+
+    let set_named_result = unsafe {
+        SetNamedSecurityInfoW(
+            PCWSTR::from_raw(path_utf16.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(new_acl),
+            None,
+        )
+    };
+    if set_named_result.0 != 0 {
+        bail!(
+            "SetNamedSecurityInfoW failed for '{}': win32_error={}",
+            path.display(),
+            set_named_result.0
+        );
+    }
+    Ok(())
+}
+
+/// Remediates legacy insecure Everyone (`S-1-1-0`) allow ACE from `path`.
+pub fn remediate_legacy_insecure_everyone_ace(path: &Path) -> ResultType<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let everyone_sid = sid_string_to_local_alloc_guard("S-1-1-0")?;
+    let (dacl, _sd_guard) = get_file_dacl(path)?;
+    if has_allow_ace_with_mask(dacl, everyone_sid.as_sid_ptr(), 0) {
+        revoke_sid_ace_from_path(path, "S-1-1-0")?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// RAII guard providing scoped, temporary access to a specific file for a specific target user SID.
+#[derive(Debug)]
+pub struct ScopedFileAceGuard {
+    path: PathBuf,
+    sid_string: String,
+    active: bool,
+}
+
+impl ScopedFileAceGuard {
+    pub fn grant_temporary_file_access(
+        file: &Path,
+        sid_string: &str,
+        access_mask: u32,
+    ) -> ResultType<Self> {
+        let metadata = fs::symlink_metadata(file)
+            .map_err(|e| anyhow!("Failed to inspect file '{}': {}", file.display(), e))?;
+        if is_reparse_point(&metadata) {
+            bail!("Target file is a reparse point: {}", file.display());
+        }
+        if metadata.file_type().is_dir() {
+            bail!(
+                "Scoped ACE target must be a file, not a directory: {}",
+                file.display()
+            );
+        }
+
+        let sid_guard = sid_string_to_local_alloc_guard(sid_string)?;
+        apply_grant_sid_allow_ace_to_path(file, sid_guard.as_sid_ptr(), access_mask, false, false)?;
+
+        Ok(Self {
+            path: file.to_path_buf(),
+            sid_string: sid_string.to_string(),
+            active: true,
+        })
+    }
+
+    pub fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for ScopedFileAceGuard {
+    fn drop(&mut self) {
+        if self.active {
+            if let Err(e) = revoke_sid_ace_from_path(&self.path, &self.sid_string) {
+                log::warn!(
+                    "Failed to revoke temporary scoped ACE on '{}' for SID '{}': {}",
+                    self.path.display(),
+                    self.sid_string,
+                    e
+                );
+            }
+        }
+    }
+}
+
+/// Configures strict DACL for an elevation workspace directory, permitting only
+/// LocalSystem, Built-in Administrators, and the Current Process Token User.
+pub fn secure_elevation_directory(dir: &Path) -> ResultType<()> {
+    let metadata = fs::symlink_metadata(dir)
+        .map_err(|e| anyhow!("Failed to inspect directory '{}': {}", dir.display(), e))?;
+    if is_reparse_point(&metadata) {
+        bail!("Elevation directory is a reparse point: {}", dir.display());
+    }
     if !metadata.file_type().is_dir() {
-        bail!("ACL target is not a directory: '{}'", dir.display());
+        bail!("Elevation target is not a directory: {}", dir.display());
+    }
+
+    let system_sid = sid_string_to_local_alloc_guard("S-1-5-18")?;
+    let admin_sid = sid_string_to_local_alloc_guard("S-1-5-32-544")?;
+    let user_sid_str = current_process_user_sid_string()?;
+    let user_sid = sid_string_to_local_alloc_guard(&user_sid_str)?;
+
+    let dir_inherit = ACE_FLAGS(OBJECT_INHERIT_ACE.0 | CONTAINER_INHERIT_ACE.0);
+    let explicit_access = [
+        make_sid_trustee_entry(
+            system_sid.as_sid_ptr(),
+            FILE_ALL_ACCESS.0,
+            dir_inherit,
+            false,
+        ),
+        make_sid_trustee_entry(
+            admin_sid.as_sid_ptr(),
+            FILE_ALL_ACCESS.0,
+            dir_inherit,
+            false,
+        ),
+        make_sid_trustee_entry(user_sid.as_sid_ptr(), FILE_ALL_ACCESS.0, dir_inherit, false),
+    ];
+
+    let mut new_acl: *mut ACL = std::ptr::null_mut();
+    let set_entries_result =
+        unsafe { SetEntriesInAclW(Some(explicit_access.as_slice()), None, &mut new_acl) };
+    if set_entries_result.0 != 0 {
+        bail!(
+            "SetEntriesInAclW failed for elevation directory '{}': win32_error={}",
+            dir.display(),
+            set_entries_result.0
+        );
+    }
+    if new_acl.is_null() {
+        bail!("SetEntriesInAclW returned null ACL for elevation directory");
+    }
+    let _acl_guard = LocalAllocGuard(new_acl as *mut std::ffi::c_void);
+
+    let dir_utf16: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let set_named_result = unsafe {
+        SetNamedSecurityInfoW(
+            PCWSTR::from_raw(dir_utf16.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(new_acl),
+            None,
+        )
+    };
+    if set_named_result.0 != 0 {
+        bail!(
+            "SetNamedSecurityInfoW failed for elevation directory '{}': win32_error={}",
+            dir.display(),
+            set_named_result.0
+        );
+    }
+
+    Ok(())
+}
+
+/// Grants access to a single file without recursive directory traversal (ACL-001).
+///
+/// Refuses to modify directories or apply broad recursive permissions.
+pub fn set_path_permission(path: &Path, access_mask: u32) -> ResultType<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| anyhow!("Failed to inspect ACL target '{}': {}", path.display(), e))?;
+    if is_reparse_point(&metadata) {
+        bail!(
+            "ACL target is a reparse point and is rejected: '{}'",
+            path.display()
+        );
+    }
+    if metadata.file_type().is_dir() {
+        bail!(
+            "Refusing to grant loose permissions on directory '{}'. Use scoped per-file ACL management.",
+            path.display()
+        );
     }
 
     let everyone_sid = sid_string_to_local_alloc_guard("S-1-1-0")?;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|e| anyhow!("Failed to inspect ACL target '{}': {}", path.display(), e))?;
-        if is_reparse_point(&metadata) {
-            continue;
-        }
-        let is_dir = metadata.file_type().is_dir();
-        apply_grant_sid_allow_ace_to_path(
-            &path,
-            everyone_sid.as_sid_ptr(),
-            access_mask,
-            true,
-            is_dir,
-        )?;
-        if !is_dir {
-            continue;
-        }
-        for entry in fs::read_dir(&path)
-            .map_err(|e| anyhow!("Failed to list ACL target dir '{}': {}", path.display(), e))?
-        {
-            let entry = entry.map_err(|e| {
-                anyhow!(
-                    "Failed to read ACL target dir entry under '{}': {}",
-                    path.display(),
-                    e
-                )
-            })?;
-            stack.push(entry.path());
-        }
-    }
-    Ok(())
+    apply_grant_sid_allow_ace_to_path(path, everyone_sid.as_sid_ptr(), access_mask, true, false)
 }
 
 /// Returns the current process user SID as a standard SID string
@@ -510,10 +848,12 @@ fn set_path_permission_for_portable_service_shmem_impl(
 #[cfg(test)]
 mod tests {
     use super::{
-        current_process_user_sid_string, set_path_permission,
+        current_process_user_sid_string, get_file_dacl, has_allow_ace_with_mask,
+        has_any_allow_ace_for_sid, remediate_legacy_insecure_everyone_ace,
+        secure_elevation_directory, set_path_permission,
         set_path_permission_for_portable_service_shmem_dir,
         set_path_permission_for_portable_service_shmem_file, sid_string_to_local_alloc_guard,
-        LocalAllocGuard, ResultType,
+        LocalAllocGuard, ResultType, ScopedFileAceGuard,
     };
     use camellia_remote_protocol::bail;
     use std::{
@@ -525,19 +865,15 @@ mod tests {
         core::PCWSTR,
         Win32::{
             Security::{
-                AclSizeInformation,
                 Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
-                EqualSid as WinEqualSid, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-                ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION,
-                DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+                GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+                PSID, SE_DACL_PROTECTED,
             },
             Storage::FileSystem::{
                 FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
             },
         },
     };
-
-    const ACCESS_ALLOWED_ACE_TYPE_U8: u8 = 0;
 
     fn unique_acl_test_path(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -572,81 +908,6 @@ mod tests {
                 false
             }
         }
-    }
-
-    fn get_file_dacl(path: &Path) -> ResultType<(*mut ACL, LocalAllocGuard)> {
-        let mut dacl: *mut ACL = std::ptr::null_mut();
-        let mut sd = PSECURITY_DESCRIPTOR::default();
-        let path_utf16: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let result = unsafe {
-            GetNamedSecurityInfoW(
-                PCWSTR::from_raw(path_utf16.as_ptr()),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                None,
-                None,
-                Some(&mut dacl),
-                None,
-                &mut sd,
-            )
-        };
-        if result.0 != 0 {
-            bail!(
-                "GetNamedSecurityInfoW failed for '{}': win32_error={}",
-                path.display(),
-                result.0
-            );
-        }
-        if dacl.is_null() || sd.0.is_null() {
-            bail!("DACL/security descriptor missing for '{}'", path.display());
-        }
-        Ok((dacl, LocalAllocGuard(sd.0)))
-    }
-
-    fn has_allow_ace_with_mask(
-        dacl: *const ACL,
-        sid_ptr: *mut std::ffi::c_void,
-        mask: u32,
-    ) -> bool {
-        let mut info = ACL_SIZE_INFORMATION::default();
-        if unsafe {
-            GetAclInformation(
-                dacl,
-                &mut info as *mut _ as *mut std::ffi::c_void,
-                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
-                AclSizeInformation,
-            )
-        }
-        .is_err()
-        {
-            return false;
-        }
-        for index in 0..info.AceCount {
-            let mut ace_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-            if unsafe { GetAce(dacl, index, &mut ace_ptr) }.is_err() || ace_ptr.is_null() {
-                continue;
-            }
-            let header = unsafe { &*(ace_ptr as *const ACE_HEADER) };
-            if header.AceType != ACCESS_ALLOWED_ACE_TYPE_U8 {
-                continue;
-            }
-            let allowed = unsafe { &*(ace_ptr as *const ACCESS_ALLOWED_ACE) };
-            let ace_sid = PSID((&allowed.SidStart as *const u32) as *mut std::ffi::c_void);
-            if unsafe { WinEqualSid(PSID(sid_ptr), ace_sid) }.is_ok()
-                && (allowed.Mask & mask) == mask
-            {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn has_any_allow_ace_for_sid(dacl: *const ACL, sid_ptr: *mut std::ffi::c_void) -> bool {
-        has_allow_ace_with_mask(dacl, sid_ptr, 0)
     }
 
     fn is_dacl_protected(sd: PSECURITY_DESCRIPTOR) -> bool {
@@ -749,35 +1010,48 @@ mod tests {
     }
 
     #[test]
-    fn test_set_path_permission_rx_applies_recursively() {
+    fn test_set_path_permission_rejects_directory_and_allows_scoped_file() {
         let root = unique_acl_test_path("set_path_permission");
         let child_dir = root.join("child");
         let child_file = child_dir.join("helper.exe");
         fs::create_dir_all(&child_dir).unwrap();
         fs::write(&child_file, b"x").unwrap();
 
-        if let Err(err) = set_path_permission(&root, FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0) {
-            let text = err.to_string();
-            let _ = fs::remove_file(&child_file);
-            let _ = fs::remove_dir_all(&root);
-            if text.contains("win32_error=5") || text.contains("Access is denied") {
-                eprintln!(
-                    "skip test_set_path_permission_rx_applies_recursively: insufficient WRITE_DAC in current environment: {}",
-                    text
-                );
-                return;
-            }
-            panic!("set_path_permission failed unexpectedly: {}", text);
-        }
+        // 1. set_path_permission on a directory must be strictly rejected (ACL-001)
+        let dir_res = set_path_permission(&root, FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0);
+        assert!(
+            dir_res.is_err(),
+            "Expected set_path_permission to reject directory, but got: {:?}",
+            dir_res
+        );
+        let err_msg = dir_res.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("directory"),
+            "Expected error message mentioning directory, got: {}",
+            err_msg
+        );
 
-        let everyone_sid = sid_string_to_local_alloc_guard("S-1-1-0").unwrap();
+        // 2. ScopedFileAceGuard grants temporary ACE and revokes on drop
+        let everyone_sid = "S-1-1-0";
         let rx_mask = FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0;
-        for target in [&root, &child_dir, &child_file] {
-            let (dacl, _sd_guard) = get_file_dacl(target).unwrap();
+        let everyone_guard = sid_string_to_local_alloc_guard(everyone_sid).unwrap();
+
+        {
+            let guard_res =
+                ScopedFileAceGuard::grant_temporary_file_access(&child_file, everyone_sid, rx_mask);
+            if let Ok(_guard) = guard_res {
+                let (dacl, _sd_guard) = get_file_dacl(&child_file).unwrap();
+                assert!(
+                    has_allow_ace_with_mask(dacl, everyone_guard.as_sid_ptr(), rx_mask),
+                    "Temporary ACE grant missing while guard is active"
+                );
+            }
+        }
+        // After guard drops, the ACE should be cleanly revoked
+        if let Ok((dacl, _sd_guard)) = get_file_dacl(&child_file) {
             assert!(
-                has_allow_ace_with_mask(dacl, everyone_sid.as_sid_ptr(), rx_mask),
-                "Everyone RX grant missing on '{}'",
-                target.display()
+                !has_allow_ace_with_mask(dacl, everyone_guard.as_sid_ptr(), rx_mask),
+                "Temporary ACE was not revoked on guard drop"
             );
         }
 
@@ -816,20 +1090,21 @@ mod tests {
     #[test]
     fn test_set_path_permission_rejects_reparse_entrypoint() {
         let root = unique_acl_test_path("reparse_entry");
-        let real_dir = root.join("real");
-        let link_dir = root.join("link");
-        fs::create_dir_all(&real_dir).unwrap();
-        if !try_create_dir_reparse_point(
-            &real_dir,
-            &link_dir,
+        let real_file = root.join("real.txt");
+        let link_file = root.join("link.txt");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&real_file, b"x").unwrap();
+        if !try_create_file_reparse_point(
+            &real_file,
+            &link_file,
             "test_set_path_permission_rejects_reparse_entrypoint",
         ) {
-            let _ = fs::remove_dir_all(&real_dir);
+            let _ = fs::remove_file(&real_file);
             let _ = fs::remove_dir_all(&root);
             return;
         }
 
-        let result = set_path_permission(&link_dir, FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0);
+        let result = set_path_permission(&link_file, FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0);
         let text = result.err().map(|e| e.to_string()).unwrap_or_default();
         assert!(
             text.contains("reparse point"),
@@ -837,8 +1112,8 @@ mod tests {
             text
         );
 
-        let _ = fs::remove_dir(&link_dir);
-        let _ = fs::remove_dir_all(&real_dir);
+        let _ = fs::remove_file(&link_file);
+        let _ = fs::remove_file(&real_file);
         let _ = fs::remove_dir_all(&root);
     }
 

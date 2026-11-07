@@ -5736,9 +5736,15 @@ impl Connection {
         } else {
             err = "No need to elevate".to_string();
             if !crate::platform::is_installed() && !portable_client::running() {
-                err = portable_client::start_portable_service(para)
-                    .err()
-                    .map_or("".to_string(), |e| e.to_string());
+                let spawn_res = tokio::task::spawn_blocking(move || {
+                    portable_client::start_portable_service(para)
+                })
+                .await;
+                err = match spawn_res {
+                    Ok(Ok(())) => "".to_string(),
+                    Ok(Err(e)) => e.to_string(),
+                    Err(e) => format!("Elevation task join error: {}", e),
+                };
             }
         }
 

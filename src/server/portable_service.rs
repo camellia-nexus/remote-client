@@ -1224,18 +1224,34 @@ pub mod client {
                 }
                 StartPara::Logon(username, password) => {
                     let exe = std::env::current_exe()?.to_string_lossy().to_string();
-                    #[cfg(feature = "flutter")]
-                    {
-                        if let Some(dir) = Path::new(&exe).parent() {
-                            if let Err(err) = set_path_permission(
-                                Path::new(dir),
-                                FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0,
-                            ) {
+                    if username.trim().is_empty() {
+                        clear_runtime_shmem_state();
+                        bail!("Logon elevation rejected: username cannot be empty");
+                    }
+                    #[cfg(windows)]
+                    let _scoped_ace_guard = {
+                        let target_sid_res =
+                            crate::platform::windows::lookup_account_sid_string(&username);
+                        match target_sid_res {
+                            Ok(target_sid) => {
+                                crate::platform::windows::ScopedFileAceGuard::grant_temporary_file_access(
+                                    Path::new(&exe),
+                                    &target_sid,
+                                    crate::platform::windows::FILE_GENERIC_READ.0
+                                        | crate::platform::windows::FILE_GENERIC_EXECUTE.0,
+                                )
+                                .ok()
+                            }
+                            Err(e) => {
                                 clear_runtime_shmem_state();
-                                bail!("Failed to set permission of {:?}: {}", dir, err);
+                                bail!(
+                                    "Logon elevation rejected: failed to resolve user account '{}': {}",
+                                    username, e
+                                );
                             }
                         }
-                    }
+                    };
+
                     if let Err(e) = crate::platform::windows::create_process_with_logon(
                         username.as_str(),
                         password.as_str(),

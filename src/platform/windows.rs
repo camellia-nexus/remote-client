@@ -1414,29 +1414,18 @@ fn get_install_info_with_subkey(subkey: String) -> (String, String, String, Stri
     (subkey, path, start_menu, exe)
 }
 
-pub fn copy_raw_cmd(src_raw: &str, _raw: &str, _path: &str) -> ResultType<String> {
-    let main_raw = format!(
-        "XCOPY \"{}\" \"{}\" /Y /E /H /C /I /K /R /Z",
-        PathBuf::from(src_raw)
-            .parent()
-            .ok_or(anyhow!("Can't get parent directory of {src_raw}"))?
-            .to_string_lossy()
-            .to_string(),
-        _path
-    );
-    return Ok(main_raw);
+pub fn copy_exe_cmd(src_exe: &str, _exe: &str, path: &str) -> ResultType<String> {
+    let manifest = crate::platform::install_safety::BundleManifest::scan(
+        Path::new(src_exe),
+        Path::new(path),
+        crate::get_app_name(),
+    )?;
+    let copy_cmds = manifest.generate_copy_commands();
+    Ok(copy_cmds.join("\r\n"))
 }
 
-pub fn copy_exe_cmd(src_exe: &str, exe: &str, path: &str) -> ResultType<String> {
-    let main_exe = copy_raw_cmd(src_exe, exe, path)?;
-    Ok(format!(
-        "
-        {main_exe}
-        copy /Y \"{ORIGIN_PROCESS_EXE}\" \"{path}\\{broker_exe}\"
-        ",
-        ORIGIN_PROCESS_EXE = win_topmost_window::ORIGIN_PROCESS_EXE,
-        broker_exe = win_topmost_window::INJECTED_PROCESS_EXE,
-    ))
+pub fn copy_raw_cmd(src_raw: &str, raw: &str, path: &str) -> ResultType<String> {
+    copy_exe_cmd(src_raw, raw, path)
 }
 
 #[inline]
@@ -1833,7 +1822,14 @@ fn write_cmds(cmds: String, ext: &str, tip: &str) -> ResultType<std::path::PathB
             tmp = dir;
         }
     }
-    tmp.push(format!("{}_{}.{}", crate::get_app_name(), tip, ext));
+    let rand_token = uuid::Uuid::new_v4().simple().to_string();
+    tmp.push(format!(
+        "{}_{}_{}.{}",
+        crate::get_app_name(),
+        tip,
+        rand_token,
+        ext
+    ));
     let mut file = std::fs::File::create(&tmp)?;
     if ext == "bat" {
         let tmp2 = get_undone_file(&tmp)?;
@@ -1877,24 +1873,88 @@ fn get_undone_file(tmp: &Path) -> ResultType<PathBuf> {
 }
 
 fn run_cmds(cmds: String, show: bool, tip: &str) -> ResultType<()> {
-    let tmp = write_cmds(cmds, "bat", tip)?;
-    let tmp2 = get_undone_file(&tmp)?;
-    let tmp_fn = tmp.to_str().unwrap_or("");
-    // https://github.com/rustdesk/rustdesk/issues/6786#issuecomment-1879655410
-    // Specify cmd.exe explicitly to avoid the replacement of cmd commands.
+    let lines: Vec<String> = cmds
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let assembled = crate::platform::install_safety::ElevatedBatchAssembler::assemble(&lines, tip);
+
+    let rand_token = uuid::Uuid::new_v4().simple().to_string();
+    let mut tmp = std::env::temp_dir();
+    if vec!["&", "@", "^"]
+        .drain(..)
+        .any(|s| tmp.to_string_lossy().to_string().contains(s))
+    {
+        if let Ok(dir) = user_accessible_folder() {
+            tmp = dir;
+        }
+    }
+    let workspace_dir = tmp.join(format!(
+        "{}_elev_{}_{}",
+        crate::get_app_name(),
+        tip,
+        rand_token
+    ));
+    std::fs::create_dir_all(&workspace_dir)?;
+    let mut workspace_guard =
+        crate::platform::install_safety::ElevationWorkspaceGuard::new(workspace_dir.clone());
+
+    // Apply strict DACL to directory
+    if let Err(e) = secure_elevation_directory(&workspace_dir) {
+        log::warn!(
+            "Failed to apply strict DACL to elevation directory '{}': {}",
+            workspace_dir.display(),
+            e
+        );
+    }
+
+    let bat_path = workspace_dir.join("run.bat");
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&bat_path)?;
+        file.write_all(assembled.script_content.as_bytes())?;
+        file.sync_all()?;
+    }
+
+    // Verify written content hash
+    let written_bytes = std::fs::read(&bat_path)?;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&written_bytes);
+    let written_hash = format!("{:x}", hasher.finalize());
+    if written_hash != assembled.sha256_hex {
+        bail!("Elevation script digest mismatch: integrity check failed before execution");
+    }
+
+    let bat_fn = bat_path.to_str().unwrap_or("");
     let res = runas::Command::new("cmd.exe")
-        .args(&["/C", &tmp_fn])
+        .args(&["/C", &bat_fn])
         .show(show)
         .force_prompt(true)
         .status();
-    if !show {
-        allow_err!(std::fs::remove_file(tmp));
+
+    if show {
+        workspace_guard.keep();
     }
-    let _ = res?;
-    if tmp2.exists() {
-        allow_err!(std::fs::remove_file(tmp2));
-        bail!("{} failed", tip);
+
+    let status = res?;
+    if !status.success() {
+        bail!(
+            "Elevation process for {} exited with error status: {:?}",
+            tip,
+            status.code()
+        );
     }
+
+    // Verify success sentinel
+    crate::platform::install_safety::ElevatedBatchAssembler::verify_sentinel(
+        &workspace_dir,
+        &assembled.sentinel_file_name,
+        &assembled.success_token,
+    )?;
+
     Ok(())
 }
 
@@ -2741,9 +2801,15 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
     ]);
 
     unsafe {
-        let user_split = user.split("\\").collect::<Vec<&str>>();
-        let wuser = wide_string(user_split.get(1).unwrap_or(&user));
-        let wpc = wide_string(user_split.get(0).unwrap_or(&""));
+        let (domain, username) = if let Some(idx) = user.find('\\') {
+            (&user[..idx], &user[idx + 1..])
+        } else if let Some(idx) = user.find('@') {
+            ("", user)
+        } else {
+            (".", user)
+        };
+        let wuser = wide_string(username);
+        let wpc = wide_string(domain);
         let wpwd = wide_string(pwd);
         let cmd = if arg.is_empty() {
             format!("\"{}\"", exe)
@@ -2758,21 +2824,20 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
         si.dwFlags = STARTF_USESHOWWINDOW;
         let mut pi: PROCESS_INFORMATION = mem::zeroed();
         let wexe = wide_string(exe);
-        if FALSE
-            == CreateProcessWithLogonW(
-                wuser.as_ptr(),
-                wpc.as_ptr(),
-                wpwd.as_ptr(),
-                LOGON_WITH_PROFILE,
-                wexe.as_ptr(),
-                wcmd.as_mut_ptr(),
-                CREATE_UNICODE_ENVIRONMENT,
-                NULL,
-                NULL as _,
-                &mut si as *mut STARTUPINFOW,
-                &mut pi as *mut PROCESS_INFORMATION,
-            )
-        {
+        let logon_res = CreateProcessWithLogonW(
+            wuser.as_ptr(),
+            wpc.as_ptr(),
+            wpwd.as_ptr(),
+            LOGON_WITH_PROFILE,
+            wexe.as_ptr(),
+            wcmd.as_mut_ptr(),
+            CREATE_UNICODE_ENVIRONMENT,
+            NULL,
+            NULL as _,
+            &mut si as *mut STARTUPINFOW,
+            &mut pi as *mut PROCESS_INFORMATION,
+        );
+        if logon_res == FALSE {
             let last_error = GetLastError();
             bail!(
                 "CreateProcessWithLogonW failed : \"{}\", error {}",
@@ -2781,6 +2846,12 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
                     .unwrap_or(&"Unknown error"),
                 io::Error::from_raw_os_error(last_error as _)
             );
+        }
+        if !pi.hThread.is_invalid() {
+            let _ = CloseHandle(pi.hThread);
+        }
+        if !pi.hProcess.is_invalid() {
+            let _ = CloseHandle(pi.hProcess);
         }
     }
     return Ok(());
