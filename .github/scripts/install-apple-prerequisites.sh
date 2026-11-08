@@ -35,3 +35,34 @@ pod_version="$("$gem_bin/pod" --version)"
 
 printf '%s\n' "$gem_bin" >> "$GITHUB_PATH"
 echo "CocoaPods $pod_version, JSON $json_version and NASM are ready"
+
+# Pre-seed vcpkg baseline and binary in RUNNER_TEMP if needed.
+# This prevents bootstrap failures when GitHub's releases/download redirector suffers 504 gateway timeouts.
+vcpkg_baseline="120deac3062162151622ca4860575a33844ba10b"
+vcpkg_target_dir="${RUNNER_TEMP}/vcpkg"
+vcpkg_binary_sha="504b96a5b76136308fc1d461c7721ab7797c3dc0c31eba872bae61ed4fd2960af668f96b862c663dbe4f89c029996a51cf945e9407b2a58b9987f6c166475735"
+
+if [[ ! -x "${vcpkg_target_dir}/vcpkg" ]]; then
+  echo "Pre-seeding vcpkg at ${vcpkg_target_dir}..."
+  rm -rf "${vcpkg_target_dir}"
+  git clone https://github.com/microsoft/vcpkg.git -n "${vcpkg_target_dir}"
+  git -C "${vcpkg_target_dir}" checkout --force "${vcpkg_baseline}"
+
+  download_url="https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg-macos"
+  api_asset_url="https://api.github.com/repos/microsoft/vcpkg-tool/releases/assets/275051630"
+
+  if ! curl -L --tlsv1.2 --create-dirs --connect-timeout 5 --max-time 15 --retry 1 --output "${vcpkg_target_dir}/vcpkg" --silent --show-error --fail "${download_url}"; then
+    echo "Direct release download failed; fetching vcpkg-macos from GitHub API asset endpoint..."
+    curl -L --tlsv1.2 --create-dirs --connect-timeout 10 --max-time 60 --retry 3 -H "Accept: application/octet-stream" --output "${vcpkg_target_dir}/vcpkg" --silent --show-error --fail "${api_asset_url}"
+  fi
+
+  actual_sha="$(shasum -a 512 "${vcpkg_target_dir}/vcpkg" | awk '{print $1}')"
+  if [[ "${actual_sha}" != "${vcpkg_binary_sha}" ]]; then
+    echo "Downloaded vcpkg binary hash mismatch: expected ${vcpkg_binary_sha}, got ${actual_sha}" >&2
+    exit 1
+  fi
+  chmod +x "${vcpkg_target_dir}/vcpkg"
+  printf '%s\n' "${vcpkg_baseline}" > "${vcpkg_target_dir}/vcpkgLastBuiltCommitId"
+  echo "vcpkg pre-seed complete."
+fi
+
