@@ -77,6 +77,9 @@ class _PortForwardPageState extends State<PortForwardPage>
       connToken: widget.connToken,
       isRdp: widget.isRDP,
     );
+    if (Get.isRegistered<FFI>(tag: 'pf_${widget.id}')) {
+      Get.delete<FFI>(tag: 'pf_${widget.id}', force: true);
+    }
     Get.put<FFI>(_ffi, tag: 'pf_${widget.id}');
     debugPrint("Port forward page init success with id ${widget.id}");
     // Call onSelected in post frame callback, since we cannot guarantee that the callback will not call setState.

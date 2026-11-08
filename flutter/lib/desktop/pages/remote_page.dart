@@ -166,6 +166,9 @@ class _RemotePageState extends State<RemotePage>
       _tabStateSubscription =
           widget.tabController?.state.listen(_onMacOSTabStateChanged);
     }
+    if (Get.isRegistered<FFI>(tag: widget.id)) {
+      Get.delete<FFI>(tag: widget.id, force: true);
+    }
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
       _ffi.canvasModel.activateLocalCursor();

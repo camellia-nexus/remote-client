@@ -108,6 +108,9 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   void initState() {
     super.initState();
     _ffi = FFI(widget.sessionId);
+    if (Get.isRegistered<FFI>(tag: widget.id)) {
+      Get.delete<FFI>(tag: widget.id, force: true);
+    }
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
       showKBLayoutTypeChooserIfNeeded(

@@ -2895,20 +2895,30 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
   });
   gFFI.dialogManager.show((setState, close, context) {
     change(String password) async {
+      if (isInProgress.value) return;
       isInProgress.value = true;
-      bool res = await gFFI.abModel.changeSharedPassword(
-        abName,
-        peer.id,
-        password,
-      );
-      isInProgress.value = false;
-      if (res) {
-        showToast(translate('Successful'));
+      try {
+        bool res = await gFFI.abModel.changeSharedPassword(
+          abName,
+          peer.id,
+          password,
+        );
+        isInProgress.value = false;
+        if (res) {
+          showToast(translate('Successful'));
+          controller.dispose();
+          close();
+        } else {
+          showToast(translate('Failed'));
+        }
+      } catch (e) {
+        isInProgress.value = false;
+        showToast('${translate('Failed')}: $e');
       }
-      close();
     }
 
     cancel() {
+      controller.dispose();
       close();
     }
 
@@ -2961,20 +2971,24 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
         ),
       ),
       actions: [
-        dialogButton(
-          "Cancel",
-          icon: Icon(Icons.close_rounded),
-          onPressed: cancel,
-          isOutline: true,
+        Obx(
+          () => dialogButton(
+            "Cancel",
+            icon: Icon(Icons.close_rounded),
+            onPressed: isInProgress.value ? null : cancel,
+            isOutline: true,
+          ),
         ),
         if (peer.password.isNotEmpty)
-          dialogButton(
-            "Remove",
-            icon: Icon(Icons.delete_outline_rounded),
-            onPressed: () => change(''),
-            buttonStyle: ButtonStyle(
-              backgroundColor: WidgetStatePropertyAll(
-                AppVisual.tone(context, AppTone.danger),
+          Obx(
+            () => dialogButton(
+              "Remove",
+              icon: Icon(Icons.delete_outline_rounded),
+              onPressed: isInProgress.value ? null : () => change(''),
+              buttonStyle: ButtonStyle(
+                backgroundColor: WidgetStatePropertyAll(
+                  AppVisual.tone(context, AppTone.danger),
+                ),
               ),
             ),
           ),
@@ -2982,13 +2996,17 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
           () => dialogButton(
             "OK",
             icon: Icon(Icons.done_rounded),
-            onPressed: isInputEmpty.value
+            onPressed: isInputEmpty.value || isInProgress.value
                 ? null
                 : () => change(controller.text),
           ),
         ),
       ],
-      onSubmit: isInputEmpty.value ? null : () => change(controller.text),
+      onSubmit: () {
+        if (!isInputEmpty.value && !isInProgress.value) {
+          change(controller.text);
+        }
+      },
       onCancel: cancel,
     );
   });

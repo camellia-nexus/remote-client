@@ -237,7 +237,18 @@ class DesktopTabController {
   }
 
   void clear() {
+    if (!isDesktop) return;
+    final tabsToClear = List<TabInfo>.from(state.value.tabs);
     state.value.tabs.clear();
+    state.value.selected = 0;
+    state.value.scrollController.itemCount = 0;
+    for (int i = tabsToClear.length - 1; i >= 0; i--) {
+      try {
+        onRemoved?.call(i, tabsToClear[i].key);
+      } catch (e) {
+        debugPrint('Error invoking onRemoved during clear: $e');
+      }
+    }
     state.refresh();
   }
 

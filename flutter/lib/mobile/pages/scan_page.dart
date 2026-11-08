@@ -71,7 +71,7 @@ class _ScanPageState extends State<ScanPage> {
       this.controller = controller;
     });
     scanSubscription = controller.scannedDataStream.listen((scanData) {
-      if (scanData.code != null) {
+      if (scanData.code != null && !_isProcessingScan) {
         showServerSettingFromQr(scanData.code!);
       }
     });
@@ -140,26 +140,49 @@ class _ScanPageState extends State<ScanPage> {
     );
   }
 
+  bool _isProcessingScan = false;
+  Timer? _openDialogTimer;
+
   @override
   void dispose() {
+    _openDialogTimer?.cancel();
+    _openDialogTimer = null;
     scanSubscription?.cancel();
+    scanSubscription = null;
     super.dispose();
   }
 
   void showServerSettingFromQr(String data) async {
-    closeConnection();
-    await controller?.pauseCamera();
+    if (_isProcessingScan || !mounted) return;
+    _isProcessingScan = true;
+
     if (!data.startsWith('config=')) {
       showToast('Invalid QR code');
+      _isProcessingScan = false;
       return;
     }
+
+    final ServerConfig sc;
     try {
-      final sc = ServerConfig.decode(data.substring(7));
-      Timer(Duration(milliseconds: 60), () {
-        showServerSettingsWithValue(sc, gFFI.dialogManager, null);
-      });
+      sc = ServerConfig.decode(data.substring(7));
     } catch (e) {
       showToast('Invalid QR code');
+      _isProcessingScan = false;
+      return;
     }
+
+    try {
+      await controller?.pauseCamera();
+    } catch (e) {
+      debugPrint('pauseCamera error: $e');
+    }
+    if (!mounted) return;
+    closeConnection();
+
+    _openDialogTimer?.cancel();
+    _openDialogTimer = Timer(const Duration(milliseconds: 60), () {
+      _openDialogTimer = null;
+      showServerSettingsWithValue(sc, gFFI.dialogManager, null);
+    });
   }
 }

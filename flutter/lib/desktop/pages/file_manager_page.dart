@@ -113,6 +113,9 @@ class _FileManagerPageState extends State<FileManagerPage>
         onCancel: closeConnection,
       );
     });
+    if (Get.isRegistered<FFI>(tag: 'ft_${widget.id}')) {
+      Get.delete<FFI>(tag: 'ft_${widget.id}', force: true);
+    }
     Get.put<FFI>(_ffi, tag: 'ft_${widget.id}');
     WakelockManager.enable(_uniqueKey);
     if (isWeb) {

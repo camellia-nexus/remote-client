@@ -65,6 +65,7 @@ class RustDeskMultiWindowManager {
   final List<int> _viewCameraWindows = List.empty(growable: true);
   final List<int> _portForwardWindows = List.empty(growable: true);
   final List<int> _terminalWindows = List.empty(growable: true);
+  final Map<String, Future<MultiWindowCallResult>> _inFlightSessionCreates = {};
 
   moveTabToNewWindow(
     int windowId,
@@ -164,27 +165,64 @@ class RustDeskMultiWindowManager {
       windowController.setInitBackgroundColor(Colors.black);
     }
     final windowId = windowController.windowId;
-    if (!withScreenRect) {
-      windowController
-        ..setFrame(
-          const Offset(0, 0) & Size(1280 + windowId * 20, 720 + windowId * 20),
-        )
-        ..center()
-        ..setTitle(getWindowNameWithId(remoteId, overrideType: type));
-    } else {
-      windowController.setTitle(
-        getWindowNameWithId(remoteId, overrideType: type),
-      );
-    }
-    if (isMacOS) {
-      Future.microtask(() => windowController.show());
-    }
     registerActiveWindow(windowId);
-    windows.add(windowId);
+    if (!windows.contains(windowId)) {
+      windows.add(windowId);
+    }
+    try {
+      if (!withScreenRect) {
+        windowController
+          ..setFrame(
+            const Offset(0, 0) & Size(1280 + windowId * 20, 720 + windowId * 20),
+          )
+          ..center()
+          ..setTitle(getWindowNameWithId(remoteId, overrideType: type));
+      } else {
+        windowController.setTitle(
+          getWindowNameWithId(remoteId, overrideType: type),
+        );
+      }
+      if (isMacOS) {
+        Future.microtask(() => windowController.show());
+      }
+    } catch (e) {
+      debugPrint('Error configuring window $windowId frame/title: $e');
+    }
     return windowId;
   }
 
   Future<MultiWindowCallResult> _newSession(
+    bool openInTabs,
+    WindowType type,
+    String methodName,
+    String remoteId,
+    List<int> windows,
+    String msg, {
+    Rect? screenRect,
+  }) async {
+    final createKey = '${type.name}:$remoteId:$openInTabs:${screenRect != null}';
+    final inFlight = _inFlightSessionCreates[createKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final future = _newSessionInner(
+      openInTabs,
+      type,
+      methodName,
+      remoteId,
+      windows,
+      msg,
+      screenRect: screenRect,
+    );
+    _inFlightSessionCreates[createKey] = future;
+    try {
+      return await future;
+    } finally {
+      _inFlightSessionCreates.remove(createKey);
+    }
+  }
+
+  Future<MultiWindowCallResult> _newSessionInner(
     bool openInTabs,
     WindowType type,
     String methodName,
@@ -210,19 +248,27 @@ class RustDeskMultiWindowManager {
       if (_inactiveWindows.isNotEmpty) {
         for (final windowId in windows) {
           if (_inactiveWindows.contains(windowId)) {
-            if (screenRect == null) {
-              await restoreWindowPosition(
-                type,
-                windowId: windowId,
-                peerId: remoteId,
-              );
+            // Atomically claim inactive window immediately before async awaits
+            _inactiveWindows.remove(windowId);
+            try {
+              if (screenRect == null) {
+                await restoreWindowPosition(
+                  type,
+                  windowId: windowId,
+                  peerId: remoteId,
+                );
+              }
+              await DesktopMultiWindow.invokeMethod(windowId, methodName, msg);
+              if (methodName != kWindowEventNewRemoteDesktop) {
+                WindowController.fromWindowId(windowId).show();
+              }
+              registerActiveWindow(windowId);
+              return MultiWindowCallResult(windowId, null);
+            } catch (e) {
+              debugPrint('Failed to reuse inactive window $windowId: $e');
+              _inactiveWindows.add(windowId);
+              rethrow;
             }
-            await DesktopMultiWindow.invokeMethod(windowId, methodName, msg);
-            if (methodName != kWindowEventNewRemoteDesktop) {
-              WindowController.fromWindowId(windowId).show();
-            }
-            registerActiveWindow(windowId);
-            return MultiWindowCallResult(windowId, null);
           }
         }
       }
@@ -370,6 +416,35 @@ class RustDeskMultiWindowManager {
   }
 
   Future<MultiWindowCallResult> newTerminal(
+    String remoteId, {
+    String? password,
+    bool? isSharedPassword,
+    bool? forceRelay,
+    String? connToken,
+    bool isTerminalRunAsAdmin = false,
+  }) async {
+    final terminalKey = 'Terminal:$remoteId:$isTerminalRunAsAdmin';
+    final inFlight = _inFlightSessionCreates[terminalKey];
+    if (inFlight != null) {
+      return inFlight;
+    }
+    final future = _newTerminalInner(
+      remoteId,
+      password: password,
+      isSharedPassword: isSharedPassword,
+      forceRelay: forceRelay,
+      connToken: connToken,
+      isTerminalRunAsAdmin: isTerminalRunAsAdmin,
+    );
+    _inFlightSessionCreates[terminalKey] = future;
+    try {
+      return await future;
+    } finally {
+      _inFlightSessionCreates.remove(terminalKey);
+    }
+  }
+
+  Future<MultiWindowCallResult> _newTerminalInner(
     String remoteId, {
     String? password,
     bool? isSharedPassword,
@@ -529,8 +604,9 @@ class RustDeskMultiWindowManager {
         await WindowController.fromWindowId(wId).close();
         _activeWindows.remove(wId);
       } catch (e) {
-        debugPrint("$e");
-        return;
+        debugPrint("Failed to close window $wId: $e");
+        _activeWindows.remove(wId);
+        // Do not abort loop on single window failure; continue closing remainder
       }
     }
     clearWindowType(type);
