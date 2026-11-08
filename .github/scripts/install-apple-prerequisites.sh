@@ -62,7 +62,20 @@ if [[ ! -x "${vcpkg_target_dir}/vcpkg" ]]; then
     exit 1
   fi
   chmod +x "${vcpkg_target_dir}/vcpkg"
-  printf '%s\n' "${vcpkg_baseline}" > "${vcpkg_target_dir}/vcpkgLastBuiltCommitId"
+  printf '%s' "${vcpkg_baseline}" > "${vcpkg_target_dir}/vcpkgLastBuiltCommitId"
+  if [[ -f "${vcpkg_target_dir}/bootstrap-vcpkg.sh" ]]; then
+    python3 -c "
+p = '${vcpkg_target_dir}/bootstrap-vcpkg.sh'
+with open(p, 'r') as f:
+    c = f.read()
+if 'exit 0' not in c:
+    lines = c.split('\n', 1)
+    rest = lines[1] if len(lines) > 1 else ''
+    with open(p, 'w') as f:
+        f.write('#!/bin/sh -e\nif [ -x \"\$(dirname \"\$0\")/vcpkg\" ]; then exit 0; fi\n' + rest)
+"
+    chmod +x "${vcpkg_target_dir}/bootstrap-vcpkg.sh"
+  fi
   echo "vcpkg pre-seed complete."
 fi
 

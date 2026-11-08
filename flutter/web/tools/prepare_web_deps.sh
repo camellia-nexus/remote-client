@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WEB_DEPS_URL="https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/web_deps.tar.gz"
+WEB_DEPS_API_ASSET_URL="https://api.github.com/repos/rustdesk/doc.rustdesk.com/releases/assets/305513689"
 WEB_DEPS_SHA256="b66011c4fc066b90c46ba0c78884fe5d1a7e5a7fad3dce401300ad893de63818"
 
 have_web_deps() {
@@ -32,10 +33,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Downloading web deps: $WEB_DEPS_URL"
-if command -v wget >/dev/null 2>&1; then
-  wget -O "$deps_tar" "$WEB_DEPS_URL"
-else
-  curl --fail --location --retry 3 -o "$deps_tar" "$WEB_DEPS_URL"
+if ! curl -L --tlsv1.2 --create-dirs --connect-timeout 5 --max-time 15 --retry 1 -o "$deps_tar" --silent --show-error --fail "$WEB_DEPS_URL"; then
+  echo "Direct release download failed; fetching web_deps.tar.gz from GitHub API asset endpoint..."
+  curl -L --tlsv1.2 --create-dirs --connect-timeout 10 --max-time 60 --retry 3 -H "Accept: application/octet-stream" -o "$deps_tar" --silent --show-error --fail "$WEB_DEPS_API_ASSET_URL"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then
