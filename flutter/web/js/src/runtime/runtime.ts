@@ -888,13 +888,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         return String(this.getCustomImageQualityValue());
       case 'image_quality':
         return this.resolveImageQualityPreference();
+      case 'has_remembered_password':
       case 'peer_has_password':
         if (typeof arg0 === 'string') {
           const peerId = String(arg0 ?? '').trim();
           if (!peerId) {
             return 'false';
           }
-          return this.getPeerOptionValue(peerId, 'password').trim() ? 'true' : 'false';
+          return this.hasRememberedPeerPassword(peerId) ? 'true' : 'false';
         }
         return 'false';
       case 'peer_exists':
@@ -1081,6 +1082,17 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     if (!payload) {
       return '';
     }
+    const normalizedKey = payload.name.trim().toLowerCase().replace(/_/g, '-');
+    if (
+      normalizedKey === 'has-remembered-password' ||
+      normalizedKey === 'peer-has-password' ||
+      normalizedKey === 'has-password'
+    ) {
+      return this.hasRememberedPeerPassword(payload.id) ? 'true' : 'false';
+    }
+    if (this.isSecretPeerOption(payload.name)) {
+      return '';
+    }
     return this.getPeerOptionValue(payload.id, payload.name);
   }
 
@@ -1230,6 +1242,40 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     return this.decryptLocalPasswordValue(value);
   }
 
+  private isSecretPeerOption(name: string): boolean {
+    const normalized = name.trim().toLowerCase().replace(/_/g, '-');
+    return (
+      normalized === 'password' ||
+      normalized === 'rdp-password' ||
+      normalized === 'os-password'
+    );
+  }
+
+  hasRememberedPeerPassword(id: string): boolean {
+    if (!id) {
+      return false;
+    }
+    const options = this.getPeerOptions(id);
+    const stored = options['password'] ?? '';
+    if (!stored) {
+      return false;
+    }
+    const decrypted = this.decodePeerPasswordOption(id, stored);
+    return Boolean(decrypted && decrypted.trim().length > 0);
+  }
+
+  private getRememberedPeerPasswordInternal(id: string): string {
+    if (!id) {
+      return '';
+    }
+    const options = this.getPeerOptions(id);
+    const stored = options['password'] ?? '';
+    if (!stored) {
+      return '';
+    }
+    return this.decodePeerPasswordOption(id, stored);
+  }
+
   private getPeerOptions(id: string): Record<string, string> {
     if (!id) {
       return {};
@@ -1241,12 +1287,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     if (!id || !name) {
       return '';
     }
-    const options = this.getPeerOptions(id);
-    const value = options[name] ?? '';
-    if (name === 'password') {
-      return this.decodePeerPasswordOption(id, value);
+    if (this.isSecretPeerOption(name)) {
+      return '';
     }
-    return value;
+    const options = this.getPeerOptions(id);
+    return options[name] ?? '';
   }
 
   private setPeerOptionValue(id: string, name: string, value: string): void {
@@ -4101,7 +4146,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       const peerId = String(parsed.id ?? '').trim();
       const rememberedPassword =
         peerId && (!parsed.password || !String(parsed.password).trim())
-          ? this.getPeerOptionValue(peerId, 'password')
+          ? this.getRememberedPeerPasswordInternal(peerId)
           : '';
       const request: ConnectRequest = {
         id: parsed.id,

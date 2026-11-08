@@ -15,6 +15,20 @@ import { ConnectionRoute, RelayInfo, RendezvousClient } from './rendezvous';
 import { assertPeerAuthenticatedRoute } from './direct_access_policy';
 import { WebSocketTransport } from './transport';
 import { ConnectRequest, ConnectionState, SessionContext, SessionMode } from './types';
+import { safeZstdDecompress } from './zstd';
+
+import {
+  UPLOAD_BACKPRESSURE_HIGH_WATERMARK,
+  UPLOAD_BACKPRESSURE_LOW_WATERMARK,
+  MAX_CURSOR_DIMENSION,
+  MAX_CURSOR_BYTES,
+  MAX_DOWNLOAD_CHUNKS_BYTES,
+  MAX_DOWNLOAD_BLOCK_BYTES,
+  MAX_TERMINAL_PAYLOAD_BYTES
+} from './session_constants';
+export * from './session_constants';
+
+
 import {
   RenderQualityPreference,
   VideoPipeline,
@@ -108,6 +122,9 @@ type DownloadJob = {
   files: FileEntryInfo[];
   currentFileNum: number;
   chunks: Uint8Array[];
+  chunksBytes: number;
+  currentFileReceivedBytes: number;
+  nextBlockId: number;
   receivedBytes: number;
   totalSize: number;
   startTime: number;
@@ -115,6 +132,7 @@ type DownloadJob = {
   lastProgressBytes: number;
   cancelled: boolean;
   confirmRetryTimer?: number;
+  createdUrls: string[];
 };
 
 enum SupportedDecodingPreferCodec {
@@ -207,6 +225,7 @@ export class WebSession {
   private readonly video: VideoPipeline;
   private readonly uploadJobs = new Map<number, UploadJob>();
   private readonly downloadJobs = new Map<number, DownloadJob>();
+  private readonly activeDownloadUrls = new Map<string, number>();
   private readonly qualityStats = new Map<number, { frames: number; bytes: number }>();
   private readonly peerInfoSnapshot: PeerInfoSnapshot = {
     version: '',
@@ -283,6 +302,42 @@ export class WebSession {
       window.clearTimeout(job.confirmRetryTimer);
       job.confirmRetryTimer = undefined;
     }
+  }
+
+  private revokeDownloadObjectUrl(url: string): void {
+    const timer = this.activeDownloadUrls.get(url);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      this.activeDownloadUrls.delete(url);
+    }
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // noop
+    }
+  }
+
+  private clearAllDownloadObjectUrls(): void {
+    for (const [url, timer] of this.activeDownloadUrls.entries()) {
+      window.clearTimeout(timer);
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // noop
+      }
+    }
+    this.activeDownloadUrls.clear();
+  }
+
+  private cleanupDownloadJobResources(job: DownloadJob): void {
+    job.cancelled = true;
+    this.clearDownloadConfirmRetry(job);
+    for (const url of job.createdUrls) {
+      this.revokeDownloadObjectUrl(url);
+    }
+    job.createdUrls = [];
+    job.chunks = [];
+    job.chunksBytes = 0;
   }
 
   private scheduleDownloadConfirmRetry(job: DownloadJob, fileNum: number): void {
@@ -554,10 +609,10 @@ export class WebSession {
     }
     this.uploadJobs.clear();
     for (const download of this.downloadJobs.values()) {
-      download.cancelled = true;
-      this.clearDownloadConfirmRetry(download);
+      this.cleanupDownloadJobResources(download);
     }
     this.downloadJobs.clear();
+    this.clearAllDownloadObjectUrls();
     this.detachTransportMessageHandler();
     this.stopInitialVideoRefreshLoop();
     this.finalizeClosedState();
@@ -582,8 +637,7 @@ export class WebSession {
     }
     const existing = this.downloadJobs.get(id);
     if (existing) {
-      existing.cancelled = true;
-      this.clearDownloadConfirmRetry(existing);
+      this.cleanupDownloadJobResources(existing);
       this.downloadJobs.delete(id);
     }
     const token = Symbol(`download-job-${id}`);
@@ -594,12 +648,16 @@ export class WebSession {
       files: [],
       currentFileNum: -1,
       chunks: [],
+      chunksBytes: 0,
+      currentFileReceivedBytes: 0,
+      nextBlockId: 0,
       receivedBytes: 0,
       totalSize: 0,
       startTime: Date.now(),
       lastProgressTime: Date.now(),
       lastProgressBytes: 0,
-      cancelled: false
+      cancelled: false,
+      createdUrls: []
     };
     this.downloadJobs.set(id, job);
     this.sendMessage({
@@ -1281,8 +1339,7 @@ export class WebSession {
     }
     const download = this.downloadJobs.get(id);
     if (download) {
-      download.cancelled = true;
-      this.clearDownloadConfirmRetry(download);
+      this.cleanupDownloadJobResources(download);
       this.downloadJobs.delete(id);
     }
     if (!this.ensureFileTransferProtocol(id)) {
@@ -1929,18 +1986,39 @@ export class WebSession {
     }
     const width = this.toFiniteNumber(data.width, 0);
     const height = this.toFiniteNumber(data.height, 0);
-    const expectedBytes =
-      width > 0 && height > 0 ? Math.floor(width) * Math.floor(height) * 4 : 0;
+    if (
+      width <= 0 ||
+      height <= 0 ||
+      width > MAX_CURSOR_DIMENSION ||
+      height > MAX_CURSOR_DIMENSION
+    ) {
+      this.logger.warn(`Dropped cursor with invalid dimensions: ${width}x${height}`);
+      return;
+    }
+    const expectedBytes = Math.floor(width) * Math.floor(height) * 4;
+    if (expectedBytes <= 0 || expectedBytes > MAX_CURSOR_BYTES) {
+      this.logger.warn(`Dropped cursor with invalid expected byte count: ${expectedBytes}`);
+      return;
+    }
     let normalizedColors = colors;
-    if (expectedBytes > 0 && normalizedColors.length !== expectedBytes) {
+    if (normalizedColors.length !== expectedBytes) {
       try {
-        const inflated = fzstd.decompress(normalizedColors);
+        const inflated = safeZstdDecompress(normalizedColors, expectedBytes);
         if (inflated.length === expectedBytes) {
           normalizedColors = inflated;
         }
-      } catch {
-        // Keep original bytes; downstream validation will drop malformed payloads.
+      } catch (err) {
+        this.logger.warn('Failed to decompress cursor colors safely', err);
       }
+    }
+    if (
+      normalizedColors.length !== expectedBytes ||
+      normalizedColors.byteLength > MAX_CURSOR_BYTES
+    ) {
+      this.logger.warn(
+        `Cursor data byte length ${normalizedColors.length} does not match expected ${expectedBytes}`
+      );
+      return;
     }
     const colorsJson = JSON.stringify(Array.from(normalizedColors));
     this.events.emit({
@@ -2067,8 +2145,7 @@ export class WebSession {
         }
         const download = this.downloadJobs.get(id);
         if (download) {
-          download.cancelled = true;
-          this.clearDownloadConfirmRetry(download);
+          this.cleanupDownloadJobResources(download);
           this.downloadJobs.delete(id);
         }
       }
@@ -2115,6 +2192,25 @@ export class WebSession {
       return;
     }
     const fileNum = Number(block.fileNum ?? 0);
+
+    // Enforce monotonic file sequence
+    if (job.currentFileNum >= 0 && fileNum < job.currentFileNum) {
+      this.logger.warn(
+        `Download job ${id} received out-of-order fileNum (${fileNum} < ${job.currentFileNum})`
+      );
+      this.events.emit({
+        name: 'job_error',
+        id: String(id),
+        file_num: String(fileNum),
+        err: 'out_of_order_file'
+      });
+      this.cleanupDownloadJobResources(job);
+      if (this.downloadJobs.get(id)?.token === job.token) {
+        this.downloadJobs.delete(id);
+      }
+      return;
+    }
+
     if (job.currentFileNum !== fileNum) {
       if (job.currentFileNum >= 0) {
         void this.finalizeDownloadFile(job, job.currentFileNum).catch((err) => {
@@ -2122,17 +2218,46 @@ export class WebSession {
         });
       }
       job.chunks = [];
+      job.chunksBytes = 0;
+      job.currentFileReceivedBytes = 0;
+      job.nextBlockId = 0;
       job.currentFileNum = fileNum;
     }
+
+    // Enforce monotonic block sequence
+    const blkId = Number(block.blkId ?? 0);
+    if (blkId !== job.nextBlockId) {
+      this.logger.warn(
+        `Download job ${id} received non-monotonic block sequence: got blkId=${blkId}, expected=${job.nextBlockId}`
+      );
+      this.events.emit({
+        name: 'job_error',
+        id: String(id),
+        file_num: String(fileNum),
+        err: 'invalid_block_sequence'
+      });
+      this.cleanupDownloadJobResources(job);
+      if (this.downloadJobs.get(id)?.token === job.token) {
+        this.downloadJobs.delete(id);
+      }
+      return;
+    }
+
     this.clearDownloadConfirmRetry(job);
     const compressed = Boolean(block.compressed);
     let data = normalizeDownloadChunk(block.data);
     if (!data || data.byteLength === 0) {
       return;
     }
+
     if (compressed) {
       try {
-        data = normalizeDownloadChunk(fzstd.decompress(data));
+        data = normalizeDownloadChunk(
+          safeZstdDecompress(
+            data,
+            Math.min(MAX_DOWNLOAD_BLOCK_BYTES, MAX_DOWNLOAD_CHUNKS_BYTES)
+          )
+        );
       } catch (err) {
         this.clearDownloadConfirmRetry(job);
         this.events.emit({
@@ -2141,6 +2266,7 @@ export class WebSession {
           file_num: String(fileNum),
           err: 'decompress_failed'
         });
+        this.cleanupDownloadJobResources(job);
         if (this.downloadJobs.get(id)?.token === job.token) {
           this.downloadJobs.delete(id);
         }
@@ -2154,13 +2280,61 @@ export class WebSession {
           file_num: String(fileNum),
           err: 'invalid_file_block'
         });
+        this.cleanupDownloadJobResources(job);
         if (this.downloadJobs.get(id)?.token === job.token) {
           this.downloadJobs.delete(id);
         }
         return;
       }
     }
+
+    // Verify against declared file size if known
+    const declaredEntry = job.files[fileNum];
+    if (
+      declaredEntry &&
+      Number.isFinite(declaredEntry.size) &&
+      declaredEntry.size >= 0
+    ) {
+      if (job.currentFileReceivedBytes + data.byteLength > declaredEntry.size) {
+        this.logger.warn(
+          `Download job ${id} received bytes exceeding declared file size (${job.currentFileReceivedBytes + data.byteLength} > ${declaredEntry.size})`
+        );
+        this.events.emit({
+          name: 'job_error',
+          id: String(id),
+          file_num: String(fileNum),
+          err: 'declared_size_exceeded'
+        });
+        this.cleanupDownloadJobResources(job);
+        if (this.downloadJobs.get(id)?.token === job.token) {
+          this.downloadJobs.delete(id);
+        }
+        return;
+      }
+    }
+
+    // Enforce total chunks budget (MAX_DOWNLOAD_CHUNKS_BYTES = 256 MiB)
+    if (job.chunksBytes + data.byteLength > MAX_DOWNLOAD_CHUNKS_BYTES) {
+      this.logger.warn(
+        `Download job ${id} exceeded chunks memory budget (${job.chunksBytes + data.byteLength} > ${MAX_DOWNLOAD_CHUNKS_BYTES})`
+      );
+      this.events.emit({
+        name: 'job_error',
+        id: String(id),
+        file_num: String(fileNum),
+        err: 'budget_exceeded'
+      });
+      this.cleanupDownloadJobResources(job);
+      if (this.downloadJobs.get(id)?.token === job.token) {
+        this.downloadJobs.delete(id);
+      }
+      return;
+    }
+
+    job.nextBlockId++;
     job.chunks.push(data);
+    job.chunksBytes += data.byteLength;
+    job.currentFileReceivedBytes += data.byteLength;
     job.receivedBytes += data.byteLength;
     this.emitJobProgress(id, fileNum, job.receivedBytes, job.startTime);
   }
@@ -2227,6 +2401,7 @@ export class WebSession {
     } finally {
       this.clearDownloadConfirmRetry(job);
       if (this.downloadJobs.get(id)?.token === job.token) {
+        this.cleanupDownloadJobResources(job);
         this.downloadJobs.delete(id);
       }
     }
@@ -2249,16 +2424,11 @@ export class WebSession {
         ? entry.name
         : remoteBaseName) || job.remotePath;
     const name = sanitizeFileName(baseName) || `download-${job.id}-${fileNum}`;
-    const parts: BlobPart[] =
-      job.chunks.length > 0
-        ? job.chunks.map((chunk) => {
-            const copy = new Uint8Array(chunk.byteLength);
-            copy.set(chunk);
-            return copy;
-          })
-        : [new Uint8Array(0)];
-    const blob = new Blob(parts, { type: 'application/octet-stream' });
+    const blob = new Blob(job.chunks as unknown as BlobPart[], {
+      type: 'application/octet-stream'
+    });
     const url = URL.createObjectURL(blob);
+    job.createdUrls.push(url);
     const link = document.createElement('a');
     link.href = url;
     link.download = name;
@@ -2283,8 +2453,16 @@ export class WebSession {
         }
       }, 1000);
     });
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    const timer = window.setTimeout(() => {
+      this.revokeDownloadObjectUrl(url);
+      const idx = job.createdUrls.indexOf(url);
+      if (idx >= 0) {
+        job.createdUrls.splice(idx, 1);
+      }
+    }, 60000);
+    this.activeDownloadUrls.set(url, timer);
     job.chunks = [];
+    job.chunksBytes = 0;
   }
 
   private emitJobProgress(
@@ -2387,6 +2565,41 @@ export class WebSession {
       ) {
         return;
       }
+
+      if (
+        this.transport.getBufferedAmount() >= UPLOAD_BACKPRESSURE_HIGH_WATERMARK
+      ) {
+        try {
+          await this.transport.drainBackpressure(
+            UPLOAD_BACKPRESSURE_LOW_WATERMARK
+          );
+        } catch (err) {
+          if (
+            !job.cancelled &&
+            this.uploadJobs.get(job.id)?.token === job.token
+          ) {
+            this.logger.warn(
+              `Backpressure drain failed for upload job ${job.id}`,
+              err
+            );
+            this.events.emit({
+              name: 'job_error',
+              id: String(job.id),
+              file_num: String(job.fileNum),
+              err: 'transport_error'
+            });
+            this.uploadJobs.delete(job.id);
+          }
+          return;
+        }
+        if (
+          job.cancelled ||
+          this.uploadJobs.get(job.id)?.token !== job.token ||
+          this.isClosed()
+        ) {
+          return;
+        }
+      }
       let buffer: ArrayBuffer;
       try {
         const slice = job.file.slice(offset, offset + chunkSize);
@@ -2478,9 +2691,9 @@ export class WebSession {
       }
       if (Boolean(data.compressed)) {
         try {
-          raw = fzstd.decompress(raw);
+          raw = safeZstdDecompress(raw, MAX_TERMINAL_PAYLOAD_BYTES);
         } catch (err) {
-          this.logger.warn('Failed to decompress terminal payload', err);
+          this.logger.warn('Failed to decompress terminal payload safely', err);
           return;
         }
       }
@@ -3050,14 +3263,21 @@ export class WebSession {
     this.video.close();
     for (const job of this.uploadJobs.values()) {
       job.cancelled = true;
+      job.abortController?.abort();
+      if (job.pendingStartTimer !== undefined) {
+        window.clearTimeout(job.pendingStartTimer);
+        job.pendingStartTimer = undefined;
+      }
     }
     this.uploadJobs.clear();
     for (const job of this.downloadJobs.values()) {
-      job.cancelled = true;
+      this.cleanupDownloadJobResources(job);
     }
     this.downloadJobs.clear();
+    this.clearAllDownloadObjectUrls();
     this.pendingLogin = undefined;
     this.hash = undefined;
+    this.request.password = undefined;
   }
 
   private isVideoSession(): boolean {

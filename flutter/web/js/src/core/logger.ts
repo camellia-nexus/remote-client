@@ -5,7 +5,10 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   warn: 30,
   error: 40,
 };
-const ACTIVE_LEVEL: LogLevel = import.meta.env.PROD ? 'error' : 'info';
+const ACTIVE_LEVEL: LogLevel =
+  typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD
+    ? 'error'
+    : 'info';
 
 function shouldLog(level: LogLevel): boolean {
   return LEVEL_RANK[level] >= LEVEL_RANK[ACTIVE_LEVEL];
