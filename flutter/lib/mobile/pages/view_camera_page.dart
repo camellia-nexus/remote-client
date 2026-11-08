@@ -60,6 +60,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   Orientation? _currentOrientation;
+  Timer? _orientationTimer;
   double _viewInsetsBottom = 0;
   final _uniqueKey = UniqueKey();
   late final int _generation;
@@ -163,6 +164,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     _textController.dispose();
     _timer?.cancel();
     _timer = null;
+    _orientationTimer?.cancel();
+    _orientationTimer = null;
     _timerDidChangeMetrics?.cancel();
     _timerDidChangeMetrics = null;
     gFFI.dialogManager.dismissAll();
@@ -284,13 +287,18 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                         child: OrientationBuilder(
                           builder: (ctx, orientation) {
                             if (_currentOrientation != orientation) {
-                              Timer(const Duration(milliseconds: 200), () {
-                                gFFI.dialogManager.resetMobileActionsOverlay(
-                                  ffi: gFFI,
-                                );
-                                _currentOrientation = orientation;
-                                gFFI.canvasModel.updateViewStyle();
-                              });
+                              _currentOrientation = orientation;
+                              _orientationTimer?.cancel();
+                              _orientationTimer = Timer(
+                                const Duration(milliseconds: 200),
+                                () {
+                                  if (!mounted) return;
+                                  gFFI.dialogManager.resetMobileActionsOverlay(
+                                    ffi: gFFI,
+                                  );
+                                  gFFI.canvasModel.updateViewStyle();
+                                },
+                              );
                             }
                             return Container(
                               color: MyTheme.canvasColor,
@@ -530,12 +538,14 @@ class _ViewCameraPageState extends State<ViewCameraPage>
           .toList(),
     ];
     () async {
+      if (!mounted) return;
       var index = await showMenu(
         context: context,
         position: RelativeRect.fromLTRB(x, y, x, y),
         items: more,
         elevation: 8,
       );
+      if (!mounted) return;
       if (index != null) {
         if (index < mobileActionMenus.length) {
           mobileActionMenus[index].onPressed?.call();
@@ -608,6 +618,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         .map((e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key))
         .toList();
     Future.delayed(Duration.zero, () async {
+      if (!mounted) return;
       final size = MediaQuery.of(context).size;
       final x = 120.0;
       final y = size.height;
@@ -617,6 +628,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         items: menuItems,
         elevation: 8,
       );
+      if (!mounted) return;
       if (index != null && index < menus.length) {
         menus[index].onPressed?.call();
       }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
@@ -737,8 +738,8 @@ class BlockableOverlayState extends OverlayKeyState {
 
   RxBool get middleBlocked => _middleBlocked;
 
-  void addMiddleBlockedListener(void Function(bool) cb) {
-    _middleBlocked.listen(cb);
+  StreamSubscription<bool> addMiddleBlockedListener(void Function(bool) cb) {
+    return _middleBlocked.listen(cb);
   }
 
   void setMiddleBlocked(bool blocked) {

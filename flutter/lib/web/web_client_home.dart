@@ -61,6 +61,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final lastRemoteId = await bind.mainGetLastRemoteId();
+        if (!mounted) return;
         if (lastRemoteId != _idController.id) {
           setState(() {
             _idController.id = lastRemoteId;
@@ -259,7 +260,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
   }
 
   void _handleUnilink(BuildContext context) {
-    if (webInitialLink.isEmpty) {
+    if (!mounted || webInitialLink.isEmpty) {
       return;
     }
     final link = webInitialLink;
@@ -342,7 +343,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
           break;
       }
     }
-    if (id != null) {
+    if (id != null && mounted) {
       connect(
         context,
         id,

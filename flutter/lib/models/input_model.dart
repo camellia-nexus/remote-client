@@ -414,6 +414,19 @@ class InputModel {
   final ToReleaseRawKeys toReleaseRawKeys = ToReleaseRawKeys();
   final ToReleaseKeys toReleaseKeys = ToReleaseKeys();
 
+  bool _disposed = false;
+  bool get isDisposed => _disposed;
+
+  void dispose() {
+    _disposed = true;
+    _flingTimer?.cancel();
+    _flingTimer = null;
+    _stopFling = true;
+    _fling = false;
+    _queryOtherWindowCoords = false;
+    _remoteWindowCoords.clear();
+  }
+
   // trackpad
   var _trackpadLastDelta = Offset.zero;
   var _stopFling = true;
@@ -740,7 +753,7 @@ class InputModel {
     final isRelease = e is RawKeyUpEvent;
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl && !isRelease) return KeyEventResult.handled;
     if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
@@ -830,7 +843,7 @@ class InputModel {
     final isRelease = e is KeyUpEvent;
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl && !isRelease) return KeyEventResult.handled;
     if (isViewCamera) return KeyEventResult.handled;
     if (!isInputSourceFlutter) {
@@ -1060,7 +1073,7 @@ class InputModel {
     final isRelease = (down == false) && (press == false);
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl && !isRelease) return;
     if (isViewCamera) return;
     bind.sessionInputKey(
@@ -1135,7 +1148,7 @@ class InputModel {
   Future<void> scroll(int y) async {
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl) return;
     if (isViewCamera) return;
     await bind.sessionSendMouse(
@@ -1173,7 +1186,7 @@ class InputModel {
     final isRelease = type == _kMouseEventUp || type == 'up';
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl && !isRelease) return;
     if (isViewCamera) return;
     await _sendMouseUnchecked(type, button);
@@ -1211,7 +1224,7 @@ class InputModel {
   Future<void> moveMouse(double x, double y) async {
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl) return;
     if (isViewCamera) return;
     var x2 = x.toInt();
@@ -1231,7 +1244,7 @@ class InputModel {
   Future<void> sendMobileRelativeMouseMove(double dx, double dy) async {
     final canControl =
         parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-            false;
+        false;
     if (!canControl) return;
     if (isViewCamera) return;
     // Only send relative mouse events when relative mode is enabled and supported.
@@ -1454,14 +1467,14 @@ class InputModel {
   }
 
   void _scheduleFling(double x, double y, int delay) {
-    if (isViewCamera) return;
+    if (isViewCamera || _disposed) return;
     if ((x == 0 && y == 0) || _stopFling) {
       _fling = false;
       return;
     }
 
     _flingTimer = Timer(Duration(milliseconds: delay), () {
-      if (_stopFling) {
+      if (_disposed || _stopFling) {
         _fling = false;
         return;
       }
@@ -1966,7 +1979,7 @@ class InputModel {
     if (evtToPeer != null) {
       final canControl =
           parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-              false;
+          false;
       final isUp = evtToPeer['type'] == kMouseEventTypeUp;
       if (canControl || isUp) {
         bind.sessionSendMouse(
@@ -2223,6 +2236,7 @@ class InputModel {
   Future<void> onMobileApps() async {
     sendMouse('down', MouseButtons.wheel);
     await Future.delayed(const Duration(milliseconds: 500));
+    if (_disposed) return;
     sendMouse('up', MouseButtons.wheel);
   }
 
@@ -2231,6 +2245,7 @@ class InputModel {
   Future<void> tapHidKey(int usbHidUsage) async {
     newKeyboardMode(kKeyFlutterKey, usbHidUsage, true, false);
     await Future.delayed(Duration(milliseconds: 100));
+    if (_disposed) return;
     newKeyboardMode(kKeyFlutterKey, usbHidUsage, false, false);
   }
 

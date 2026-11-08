@@ -68,19 +68,21 @@ class FileModel {
     fileFetcher = FileFetcher(getSessionID);
     jobController = JobController(getSessionID, getDialogManager);
     localController = FileController(
-        isLocal: true,
-        getSessionID: getSessionID,
-        rootState: parent,
-        jobController: jobController,
-        fileFetcher: fileFetcher,
-        getOtherSideDirectoryData: () => remoteController.directoryData());
+      isLocal: true,
+      getSessionID: getSessionID,
+      rootState: parent,
+      jobController: jobController,
+      fileFetcher: fileFetcher,
+      getOtherSideDirectoryData: () => remoteController.directoryData(),
+    );
     remoteController = FileController(
-        isLocal: false,
-        getSessionID: getSessionID,
-        rootState: parent,
-        jobController: jobController,
-        fileFetcher: fileFetcher,
-        getOtherSideDirectoryData: () => localController.directoryData());
+      isLocal: false,
+      getSessionID: getSessionID,
+      rootState: parent,
+      jobController: jobController,
+      fileFetcher: fileFetcher,
+      getOtherSideDirectoryData: () => localController.directoryData(),
+    );
     evtLoop = FileDialogEventLoop();
   }
 
@@ -157,25 +159,36 @@ class FileModel {
       return;
     }
     evtLoop.pushEvent(
-        _FileDialogEvent(WeakReference(this), FileDialogType.overwrite, evt));
+      _FileDialogEvent(WeakReference(this), FileDialogType.overwrite, evt),
+    );
   }
 
-  Future<void> overrideFileConfirm(Map<String, dynamic> evt,
-      {bool? overrideConfirm, bool skip = false}) async {
+  Future<void> overrideFileConfirm(
+    Map<String, dynamic> evt, {
+    bool? overrideConfirm,
+    bool skip = false,
+  }) async {
     final id = int.tryParse(evt['id']?.toString() ?? '') ?? 0;
-    if (id == 0 || !jobController.hasTransferConflictJob(id)) {
+    if (id == 0 ||
+        evtLoop.isClosed ||
+        !jobController.hasTransferConflictJob(id)) {
       debugPrint("Ignore override confirm for inactive job: $evt");
       return;
     }
     // If `skip == true`, it means to skip this file without showing dialog.
     // Because `resp` may be null after the user operation or the last remembered operation,
     // and we should distinguish them.
-    final resp = overrideConfirm ??
+    final resp =
+        overrideConfirm ??
         (!skip
-            ? await showFileConfirmDialog(translate("Overwrite"),
-                "${evt['read_path']}", true, evt['is_identical'] == "true")
+            ? await showFileConfirmDialog(
+                translate("Overwrite"),
+                "${evt['read_path']}",
+                true,
+                evt['is_identical'] == "true",
+              )
             : null);
-    if (!jobController.hasTransferConflictJob(id)) {
+    if (evtLoop.isClosed || !jobController.hasTransferConflictJob(id)) {
       debugPrint("Ignore override confirm result for inactive job: $evt");
       return;
     }
@@ -195,16 +208,20 @@ class FileModel {
         jobController.rememberTransferConflictBatch(id, resp);
         evtLoop.setSkip(!need_override);
       }
+      if (evtLoop.isClosed || !jobController.hasTransferConflictJob(id)) {
+        return;
+      }
       await bind.sessionSetConfirmOverrideFile(
-          sessionId: sessionId,
-          actId: id,
-          fileNum: int.parse(evt['file_num']),
-          needOverride: need_override,
-          remember: fileConfirmCheckboxRemember,
-          isUpload: evt['is_upload'] == "true");
+        sessionId: sessionId,
+        actId: id,
+        fileNum: int.parse(evt['file_num']),
+        needOverride: need_override,
+        remember: fileConfirmCheckboxRemember,
+        isUpload: evt['is_upload'] == "true",
+      );
     }
     // Update the loop config.
-    if (fileConfirmCheckboxRemember) {
+    if (fileConfirmCheckboxRemember && !evtLoop.isClosed) {
       evtLoop.setOverrideConfirm(resp);
     }
   }
@@ -212,58 +229,69 @@ class FileModel {
   bool fileConfirmCheckboxRemember = false;
 
   Future<bool?> showFileConfirmDialog(
-      String title, String content, bool showCheckbox, bool isIdentical) async {
+    String title,
+    String content,
+    bool showCheckbox,
+    bool isIdentical,
+  ) async {
     fileConfirmCheckboxRemember = false;
-    return await parent.target?.dialogManager.show<bool?>(
-        (setState, Function(bool? v) close, context) {
+    return await parent.target?.dialogManager.show<bool?>((
+      setState,
+      Function(bool? v) close,
+      context,
+    ) {
       cancel() => close(false);
       submit() => close(true);
       return CustomAlertDialog(
         title: Row(
           children: [
             const Icon(Icons.warning_rounded, color: Colors.red),
-            Text(title).paddingOnly(
-              left: 10,
-            ),
+            Text(title).paddingOnly(left: 10),
           ],
         ),
-        contentBoxConstraints:
-            BoxConstraints(minHeight: 100, minWidth: 400, maxWidth: 400),
+        contentBoxConstraints: BoxConstraints(
+          minHeight: 100,
+          minWidth: 400,
+          maxWidth: 400,
+        ),
         content: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(translate("This file exists, skip or overwrite this file?"),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 5),
-              Text(content),
-              Offstage(
-                offstage: !isIdentical,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(height: 12),
-                    Text(translate("identical_file_tip"),
-                        style: const TextStyle(fontWeight: FontWeight.w500))
-                  ],
-                ),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              translate("This file exists, skip or overwrite this file?"),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 5),
+            Text(content),
+            Offstage(
+              offstage: !isIdentical,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 12),
+                  Text(
+                    translate("identical_file_tip"),
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                ],
               ),
-              showCheckbox
-                  ? CheckboxListTile(
-                      contentPadding: const EdgeInsets.all(0),
-                      dense: true,
-                      controlAffinity: ListTileControlAffinity.leading,
-                      title: Text(
-                        translate("Do this for all conflicts"),
-                      ),
-                      value: fileConfirmCheckboxRemember,
-                      onChanged: (v) {
-                        if (v == null) return;
-                        setState(() => fileConfirmCheckboxRemember = v);
-                      },
-                    )
-                  : const SizedBox.shrink()
-            ]),
+            ),
+            showCheckbox
+                ? CheckboxListTile(
+                    contentPadding: const EdgeInsets.all(0),
+                    dense: true,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(translate("Do this for all conflicts")),
+                    value: fileConfirmCheckboxRemember,
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => fileConfirmCheckboxRemember = v);
+                    },
+                  )
+                : const SizedBox.shrink(),
+          ],
+        ),
         actions: [
           dialogButton(
             "Cancel",
@@ -277,11 +305,7 @@ class FileModel {
             onPressed: () => close(null),
             isOutline: true,
           ),
-          dialogButton(
-            "OK",
-            icon: Icon(Icons.done_rounded),
-            onPressed: submit,
-          ),
+          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
         ],
         onSubmit: submit,
         onCancel: cancel,
@@ -302,8 +326,9 @@ class FileModel {
       final isWindows = otherSideData.options.isWindows;
       final showHidden = otherSideData.options.showHidden;
       final jobID = jobController.addTransferJob(entry, false);
-      jobController.registerTransferConflictBatch([jobID],
-          batchId: int.tryParse(obj['batchId']?.toString() ?? ''));
+      jobController.registerTransferConflictBatch([
+        jobID,
+      ], batchId: int.tryParse(obj['batchId']?.toString() ?? ''));
       webSendLocalFiles(
         handleIndex: handleIndex,
         actId: jobID,
@@ -366,13 +391,14 @@ class FileController {
   final DirectoryData Function() getOtherSideDirectoryData;
   late final SelectedItems selectedItems = SelectedItems(isLocal: isLocal);
 
-  FileController(
-      {required this.isLocal,
-      required this.getSessionID,
-      required this.rootState,
-      required this.jobController,
-      required this.fileFetcher,
-      required this.getOtherSideDirectoryData});
+  FileController({
+    required this.isLocal,
+    required this.getSessionID,
+    required this.rootState,
+    required this.jobController,
+    required this.fileFetcher,
+    required this.getOtherSideDirectoryData,
+  });
 
   String get homePath => options.value.home;
   void set homePath(String path) => options.value.home = path;
@@ -402,9 +428,9 @@ class FileController {
       options.value.home = await bind.mainGetHomeDir();
     }
     options.value.showHidden = (await bind.sessionGetPeerOption(
-            sessionId: sessionId,
-            name: isLocal ? "local_show_hidden" : "remote_show_hidden"))
-        .isNotEmpty;
+      sessionId: sessionId,
+      name: isLocal ? "local_show_hidden" : "remote_show_hidden",
+    )).isNotEmpty;
     options.value.isWindows = isLocal
         ? isWindows
         : rootState.target?.ffiModel.pi.platform == kPeerPlatformWindows;
@@ -412,7 +438,9 @@ class FileController {
     await Future.delayed(Duration(milliseconds: 100));
 
     final savedDir = (await bind.sessionGetPeerOption(
-        sessionId: sessionId, name: isLocal ? "local_dir" : "remote_dir"));
+      sessionId: sessionId,
+      name: isLocal ? "local_dir" : "remote_dir",
+    ));
     Future<bool> tryOpenReadyDirs() async {
       final dirs = <String>{
         if (directory.value.path.isNotEmpty) directory.value.path,
@@ -446,7 +474,10 @@ class FileController {
         options.value.showHidden ? "Y" : "";
     for (final msg in msgMap.entries) {
       await bind.sessionPeerOption(
-          sessionId: sessionId, name: msg.key, value: msg.value);
+        sessionId: sessionId,
+        name: msg.key,
+        value: msg.value,
+      );
     }
     directory.value.clear();
     options.value.clear();
@@ -578,7 +609,9 @@ class FileController {
 
   /// sendFiles from current side (FileController.isLocal) to other side (SelectedItems).
   Future<void> sendFiles(
-      SelectedItems items, DirectoryData otherSideData) async {
+    SelectedItems items,
+    DirectoryData otherSideData,
+  ) async {
     /// ignore wrong items side status
     if (items.isLocal != isLocal) {
       return;
@@ -600,16 +633,18 @@ class FileController {
     jobController.registerTransferConflictBatch(transferJobIds);
     for (final (from, jobID) in transferJobs) {
       bind.sessionSendFiles(
-          sessionId: sessionId,
-          actId: jobID,
-          path: from.path,
-          to: PathUtil.join(toPath, from.name, isWindows),
-          fileNum: 0,
-          includeHidden: showHidden,
-          isRemote: isRemoteToLocal,
-          isDir: from.isDirectory);
+        sessionId: sessionId,
+        actId: jobID,
+        path: from.path,
+        to: PathUtil.join(toPath, from.name, isWindows),
+        fileNum: 0,
+        includeHidden: showHidden,
+        isRemote: isRemoteToLocal,
+        isDir: from.isDirectory,
+      );
       debugPrint(
-          "path: ${from.path}, toPath: $toPath, to: ${PathUtil.join(toPath, from.name, isWindows)}");
+        "path: ${from.path}, toPath: $toPath, to: ${PathUtil.join(toPath, from.name, isWindows)}",
+      );
     }
 
     if (isWeb ||
@@ -628,8 +663,11 @@ class FileController {
 
       final List<String> paths = [];
 
-      final emptyDirs =
-          await fileFetcher.readEmptyDirs(item.path, isLocal, showHidden);
+      final emptyDirs = await fileFetcher.readEmptyDirs(
+        item.path,
+        isLocal,
+        showHidden,
+      );
 
       if (emptyDirs.isEmpty) {
         return;
@@ -640,8 +678,13 @@ class FileController {
       }
 
       final dirs = paths.map((path) {
-        return PathUtil.getOtherSidePath(directory.value.path, path,
-            options.value.isWindows, toPath, isWindows);
+        return PathUtil.getOtherSidePath(
+          directory.value.path,
+          path,
+          options.value.isWindows,
+          toPath,
+          isWindows,
+        );
       });
 
       for (var dir in dirs) {
@@ -674,13 +717,23 @@ class FileController {
         final FileDirectory fd;
         try {
           fd = await fileFetcher.fetchDirectoryRecursiveToRemove(
-              jobID, item.path, items.isLocal, true);
+            jobID,
+            item.path,
+            items.isLocal,
+            true,
+          );
         } catch (e) {
           dialogManager?.dismissAll();
           final dm = dialogManager;
           if (dm != null) {
-            msgBox(sessionId, 'custom-error-nook-nocancel-hasclose',
-                translate("Error"), e.toString(), '', dm);
+            msgBox(
+              sessionId,
+              'custom-error-nook-nocancel-hasclose',
+              translate("Error"),
+              e.toString(),
+              '',
+              dm,
+            );
           } else {
             debugPrint("removeAction error msgbox failed: $e");
           }
@@ -694,19 +747,18 @@ class FileController {
         if (fd.entries.isEmpty) {
           var deleteJobId = jobController.addDeleteDirJob(item, !isLocal, 0);
           final confirm = await showRemoveDialog(
-              translate(
-                  "Are you sure you want to delete this empty directory?"),
-              item.name,
-              false);
+            translate("Are you sure you want to delete this empty directory?"),
+            item.name,
+            false,
+          );
           if (confirm == true) {
-            await sendRemoveEmptyDir(
-              item.path,
-              0,
-              deleteJobId,
-            );
+            await sendRemoveEmptyDir(item.path, 0, deleteJobId);
           } else {
-            jobController.updateJobStatus(deleteJobId,
-                error: "cancel", state: JobState.done);
+            jobController.updateJobStatus(
+              deleteJobId,
+              error: "cancel",
+              state: JobState.done,
+            );
           }
           return;
         }
@@ -716,8 +768,11 @@ class FileController {
       }
       int deleteJobId;
       if (item.isDirectory) {
-        deleteJobId =
-            jobController.addDeleteDirJob(item, !isLocal, entries.length);
+        deleteJobId = jobController.addDeleteDirJob(
+          item,
+          !isLocal,
+          entries.length,
+        );
       } else {
         deleteJobId = jobController.addDeleteFileJob(item, !isLocal);
       }
@@ -743,8 +798,11 @@ class FileController {
               await sendRemoveEmptyDir(item.path, i, deleteJobId);
             }
           } else {
-            jobController.updateJobStatus(deleteJobId,
-                file_num: i, error: "cancel");
+            jobController.updateJobStatus(
+              deleteJobId,
+              file_num: i,
+              error: "cancel",
+            );
           }
           if (_removeCheckboxRemember) {
             if (confirm == true) {
@@ -757,10 +815,12 @@ class FileController {
                 }
               }
             } else {
-              jobController.updateJobStatus(deleteJobId,
-                  error: "cancel",
-                  file_num: entries.length,
-                  state: JobState.done);
+              jobController.updateJobStatus(
+                deleteJobId,
+                error: "cancel",
+                file_num: entries.length,
+                state: JobState.done,
+              );
             }
             break;
           }
@@ -773,9 +833,15 @@ class FileController {
   }
 
   Future<bool?> showRemoveDialog(
-      String title, String content, bool showCheckbox) async {
-    return await dialogManager?.show<bool>(
-        (setState, Function(bool v) close, context) {
+    String title,
+    String content,
+    bool showCheckbox,
+  ) async {
+    return await dialogManager?.show<bool>((
+      setState,
+      Function(bool v) close,
+      context,
+    ) {
       cancel() => close(false);
       submit() => close(true);
       return CustomAlertDialog(
@@ -783,15 +849,14 @@ class FileController {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Icon(Icons.warning_rounded, color: Colors.red),
-            Expanded(
-              child: Text(title).paddingOnly(
-                left: 10,
-              ),
-            ),
+            Expanded(child: Text(title).paddingOnly(left: 10)),
           ],
         ),
-        contentBoxConstraints:
-            BoxConstraints(minHeight: 100, minWidth: 400, maxWidth: 400),
+        contentBoxConstraints: BoxConstraints(
+          minHeight: 100,
+          minWidth: 400,
+          maxWidth: 400,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -808,16 +873,14 @@ class FileController {
                     contentPadding: const EdgeInsets.all(0),
                     dense: true,
                     controlAffinity: ListTileControlAffinity.leading,
-                    title: Text(
-                      translate("Do this for all conflicts"),
-                    ),
+                    title: Text(translate("Do this for all conflicts")),
                     value: _removeCheckboxRemember,
                     onChanged: (v) {
                       if (v == null) return;
                       setState(() => _removeCheckboxRemember = v);
                     },
                   )
-                : const SizedBox.shrink()
+                : const SizedBox.shrink(),
           ],
         ),
         actions: [
@@ -827,11 +890,7 @@ class FileController {
             onPressed: cancel,
             isOutline: true,
           ),
-          dialogButton(
-            "OK",
-            icon: Icon(Icons.done_rounded),
-            onPressed: submit,
-          ),
+          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
         ],
         onSubmit: submit,
         onCancel: cancel,
@@ -841,25 +900,31 @@ class FileController {
 
   void sendRemoveFile(String path, int fileNum, int actId) {
     bind.sessionRemoveFile(
-        sessionId: sessionId,
-        actId: actId,
-        path: path,
-        isRemote: !isLocal,
-        fileNum: fileNum);
+      sessionId: sessionId,
+      actId: actId,
+      path: path,
+      isRemote: !isLocal,
+      fileNum: fileNum,
+    );
   }
 
   Future<void> sendRemoveEmptyDir(String path, int fileNum, int actId) async {
     history.removeWhere((element) => element.contains(path));
     await bind.sessionRemoveAllEmptyDirs(
-        sessionId: sessionId, actId: actId, path: path, isRemote: !isLocal);
+      sessionId: sessionId,
+      actId: actId,
+      path: path,
+      isRemote: !isLocal,
+    );
   }
 
   Future<void> createDirWithRemote(String path, bool isRemote) async {
     bind.sessionCreateDir(
-        sessionId: sessionId,
-        actId: JobController.jobID.next(),
-        path: path,
-        isRemote: isRemote);
+      sessionId: sessionId,
+      actId: JobController.jobID.next(),
+      path: path,
+      isRemote: isRemote,
+    );
   }
 
   Future<void> createDir(String path) async {
@@ -900,11 +965,12 @@ class FileController {
           return;
         }
         await bind.sessionRenameFile(
-            sessionId: sessionId,
-            actId: JobController.jobID.next(),
-            path: item.path,
-            newName: newName,
-            isRemote: !isLocal);
+          sessionId: sessionId,
+          actId: JobController.jobID.next(),
+          path: item.path,
+          newName: newName,
+          isRemote: !isLocal,
+        );
         close();
       }
 
@@ -925,11 +991,7 @@ class FileController {
             onPressed: close,
             isOutline: true,
           ),
-          dialogButton(
-            "OK",
-            icon: Icon(Icons.done_rounded),
-            onPressed: submit,
-          ),
+          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
         ],
         onSubmit: submit,
         onCancel: close,
@@ -1014,41 +1076,47 @@ class JobController {
   // return jobID
   int addTransferJob(Entry from, bool isRemoteToLocal) {
     final jobID = JobController.jobID.next();
-    jobTable.add(JobProgress()
-      ..type = JobType.transfer
-      ..fileName = path.basename(from.path)
-      ..jobName = from.path
-      ..totalSize = from.size
-      ..state = JobState.inProgress
-      ..id = jobID
-      ..isRemoteToLocal = isRemoteToLocal);
+    jobTable.add(
+      JobProgress()
+        ..type = JobType.transfer
+        ..fileName = path.basename(from.path)
+        ..jobName = from.path
+        ..totalSize = from.size
+        ..state = JobState.inProgress
+        ..id = jobID
+        ..isRemoteToLocal = isRemoteToLocal,
+    );
     return jobID;
   }
 
   int addDeleteFileJob(Entry file, bool isRemote) {
     final jobID = JobController.jobID.next();
-    jobTable.add(JobProgress()
-      ..type = JobType.deleteFile
-      ..fileName = path.basename(file.path)
-      ..jobName = file.path
-      ..totalSize = file.size
-      ..state = JobState.none
-      ..id = jobID
-      ..isRemoteToLocal = isRemote);
+    jobTable.add(
+      JobProgress()
+        ..type = JobType.deleteFile
+        ..fileName = path.basename(file.path)
+        ..jobName = file.path
+        ..totalSize = file.size
+        ..state = JobState.none
+        ..id = jobID
+        ..isRemoteToLocal = isRemote,
+    );
     return jobID;
   }
 
   int addDeleteDirJob(Entry file, bool isRemote, int fileCount) {
     final jobID = JobController.jobID.next();
-    jobTable.add(JobProgress()
-      ..type = JobType.deleteDir
-      ..fileName = path.basename(file.path)
-      ..jobName = file.path
-      ..fileCount = fileCount
-      ..totalSize = file.size
-      ..state = JobState.none
-      ..id = jobID
-      ..isRemoteToLocal = isRemote);
+    jobTable.add(
+      JobProgress()
+        ..type = JobType.deleteDir
+        ..fileName = path.basename(file.path)
+        ..jobName = file.path
+        ..fileCount = fileCount
+        ..totalSize = file.size
+        ..state = JobState.none
+        ..id = jobID
+        ..isRemoteToLocal = isRemote,
+    );
     return jobID;
   }
 
@@ -1064,8 +1132,9 @@ class JobController {
         final job = jobTable[jobIndex];
         final fileNum = int.tryParse(evt['file_num']?.toString() ?? '');
         final speed = double.tryParse(evt['speed']?.toString() ?? '');
-        final finishedSize =
-            num.tryParse(evt['finished_size']?.toString() ?? '');
+        final finishedSize = num.tryParse(
+          evt['finished_size']?.toString() ?? '',
+        );
         if (fileNum != null) {
           job.fileNum = fileNum;
           if (job.fileCount <= fileNum) {
@@ -1078,8 +1147,10 @@ class JobController {
         if (finishedSize != null && finishedSize.isFinite) {
           final transferred = math.max(0, finishedSize.round());
           job.finishedSize = math.max(job.finishedSize, transferred);
-          job.lastTransferredSize =
-              math.max(job.lastTransferredSize, transferred);
+          job.lastTransferredSize = math.max(
+            job.lastTransferredSize,
+            transferred,
+          );
           if (job.totalSize > 0) {
             job.finishedSize = math.min(job.finishedSize, job.totalSize);
           }
@@ -1140,8 +1211,7 @@ class JobController {
         }
       }
       if (speed != null && speed.isFinite) job.speed = speed;
-      final transferred =
-          math.max(job.finishedSize, job.lastTransferredSize);
+      final transferred = math.max(job.finishedSize, job.lastTransferredSize);
       if (job.totalSize > 0) {
         job.finishedSize = job.totalSize;
       } else if (transferred > 0) {
@@ -1216,8 +1286,12 @@ class JobController {
     }
   }
 
-  void updateJobStatus(int id,
-      {int? file_num, String? error, JobState? state}) {
+  void updateJobStatus(
+    int id, {
+    int? file_num,
+    String? error,
+    JobState? state,
+  }) {
     final jobIndex = getJob(id);
     if (jobIndex < 0) return;
     final job = jobTable[jobIndex];
@@ -1334,7 +1408,10 @@ class JobController {
 
     if (isAutoStart) {
       await bind.sessionResumeJob(
-          sessionId: sessionId, actId: currJobId, isRemote: isRemote);
+        sessionId: sessionId,
+        actId: currJobId,
+        isRemote: isRemote,
+      );
     }
   }
 
@@ -1343,7 +1420,10 @@ class JobController {
     if (jobIndex != -1) {
       final job = jobTable[jobIndex];
       bind.sessionResumeJob(
-          sessionId: sessionId, actId: job.id, isRemote: job.isRemoteToLocal);
+        sessionId: sessionId,
+        actId: job.id,
+        isRemote: job.isRemoteToLocal,
+      );
       job.state = JobState.inProgress;
       jobTable.refresh();
     } else {
@@ -1434,7 +1514,9 @@ class FileFetcher {
   FileFetcher(this.getSessionID);
 
   Future<List<FileDirectory>> registerReadEmptyDirsTask(
-      bool isLocal, String path) {
+    bool isLocal,
+    String path,
+  ) {
     // final jobs = isLocal?localJobs:remoteJobs; // maybe we will use read local dir async later
     final tasks = remoteEmptyDirsTasks; // bypass now
     if (tasks.containsKey(path)) {
@@ -1491,8 +1573,9 @@ class FileFetcher {
       final map = jsonDecode(msg);
       final String path = map["path"];
       final List<dynamic> fdJsons = map["empty_dirs"];
-      final List<FileDirectory> fds =
-          fdJsons.map((fdJson) => FileDirectory.fromJson(fdJson)).toList();
+      final List<FileDirectory> fds = fdJsons
+          .map((fdJson) => FileDirectory.fromJson(fdJson))
+          .toList();
 
       tasks = remoteEmptyDirsTasks;
       final completer = tasks.remove(path);
@@ -1536,7 +1619,10 @@ class FileFetcher {
   }
 
   void tryCompleteListingTaskWithError(
-      String path, String error, bool emptyDirs) {
+    String path,
+    String error,
+    bool emptyDirs,
+  ) {
     final tasks = emptyDirs ? remoteEmptyDirsTasks : remoteTasks;
     final completer = tasks.remove(path);
     if (completer != null && !completer.isCompleted) {
@@ -1545,22 +1631,32 @@ class FileFetcher {
   }
 
   Future<List<FileDirectory>> readEmptyDirs(
-      String path, bool isLocal, bool showHidden) async {
+    String path,
+    bool isLocal,
+    bool showHidden,
+  ) async {
     try {
       if (isLocal) {
         final res = await bind.sessionReadLocalEmptyDirsRecursiveSync(
-            sessionId: sessionId, path: path, includeHidden: showHidden);
+          sessionId: sessionId,
+          path: path,
+          includeHidden: showHidden,
+        );
 
         final List<dynamic> fdJsons = jsonDecode(res);
 
-        final List<FileDirectory> fds =
-            fdJsons.map((fdJson) => FileDirectory.fromJson(fdJson)).toList();
+        final List<FileDirectory> fds = fdJsons
+            .map((fdJson) => FileDirectory.fromJson(fdJson))
+            .toList();
         return fds;
       } else {
         final result = registerReadEmptyDirsTask(isLocal, path);
         try {
           await bind.sessionReadRemoteEmptyDirsRecursiveSync(
-              sessionId: sessionId, path: path, includeHidden: showHidden);
+            sessionId: sessionId,
+            path: path,
+            includeHidden: showHidden,
+          );
         } catch (e) {
           tryCompleteListingTaskWithError(path, e.toString(), true);
         }
@@ -1572,18 +1668,27 @@ class FileFetcher {
   }
 
   Future<FileDirectory> fetchDirectory(
-      String path, bool isLocal, bool showHidden) async {
+    String path,
+    bool isLocal,
+    bool showHidden,
+  ) async {
     try {
       if (isLocal) {
         final res = await bind.sessionReadLocalDirSync(
-            sessionId: sessionId, path: path, showHidden: showHidden);
+          sessionId: sessionId,
+          path: path,
+          showHidden: showHidden,
+        );
         final fd = FileDirectory.fromJson(jsonDecode(res));
         return fd;
       } else {
         final result = registerReadTask(isLocal, path);
         try {
           await bind.sessionReadRemoteDir(
-              sessionId: sessionId, path: path, includeHidden: showHidden);
+            sessionId: sessionId,
+            path: path,
+            includeHidden: showHidden,
+          );
         } catch (e) {
           tryCompleteListingTaskWithError(path, e.toString(), false);
         }
@@ -1595,16 +1700,21 @@ class FileFetcher {
   }
 
   Future<FileDirectory> fetchDirectoryRecursiveToRemove(
-      int actID, String path, bool isLocal, bool showHidden) async {
+    int actID,
+    String path,
+    bool isLocal,
+    bool showHidden,
+  ) async {
     // TODO test Recursive is show hidden default?
     final result = registerReadRecursiveTask(actID);
     try {
       await bind.sessionReadDirToRemoveRecursive(
-          sessionId: sessionId,
-          actId: actID,
-          path: path,
-          isRemote: !isLocal,
-          showHidden: showHidden);
+        sessionId: sessionId,
+        actId: actID,
+        path: path,
+        isRemote: !isLocal,
+        showHidden: showHidden,
+      );
     } catch (e) {
       tryCompleteRecursiveTaskWithError(actID, e.toString());
     }
@@ -1794,8 +1904,9 @@ class JobProgress {
     final effectiveTotal = effectiveTotalSize;
     final effectiveFinished = effectiveFinishedSize;
     final filesStr = fileCount > 0 ? "$handledFileCount/$fileCount files" : "";
-    final sizeStr =
-        effectiveTotal > 0 ? readableFileSize(effectiveTotal.toDouble()) : "";
+    final sizeStr = effectiveTotal > 0
+        ? readableFileSize(effectiveTotal.toDouble())
+        : "";
     final transferredStr = effectiveFinished > 0
         ? readableFileSize(effectiveFinished.toDouble())
         : "";
@@ -1875,8 +1986,13 @@ class PathUtil {
   static final windowsContext = path.Context(style: path.Style.windows);
   static final posixContext = path.Context(style: path.Style.posix);
 
-  static String getOtherSidePath(String mainRootPath, String mainPath,
-      bool isMainWindows, String otherRootPath, bool isOtherWindows) {
+  static String getOtherSidePath(
+    String mainRootPath,
+    String mainPath,
+    bool isMainWindows,
+    String otherRootPath,
+    bool isOtherWindows,
+  ) {
     final mainPathUtil = isMainWindows ? windowsContext : posixContext;
     final relativePath = mainPathUtil.relative(mainPath, from: mainRootPath);
 
@@ -1927,8 +2043,11 @@ class DirectoryOptions {
   bool showHidden;
   bool isWindows;
 
-  DirectoryOptions(
-      {this.home = "", this.showHidden = false, this.isWindows = false});
+  DirectoryOptions({
+    this.home = "",
+    this.showHidden = false,
+    this.isWindows = false,
+  });
 
   clear() {
     home = "";
@@ -2002,9 +2121,11 @@ List<Entry> _sortList(List<Entry> list, SortBy sortType, bool ascending) {
     pathStat.sort((b, a) => a.dateTime.compareTo(b.dateTime));
 
     // sorting [list] according to [_pathStat]
-    list.sort((a, b) => pathStat
-        .indexWhere((element) => element.path == a.name)
-        .compareTo(pathStat.indexWhere((element) => element.path == b.name)));
+    list.sort(
+      (a, b) => pathStat
+          .indexWhere((element) => element.path == a.name)
+          .compareTo(pathStat.indexWhere((element) => element.path == b.name)),
+    );
     return ascending ? list : list.reversed.toList();
   } else if (sortType == SortBy.type) {
     // making list of only folders.
@@ -2017,11 +2138,13 @@ List<Entry> _sortList(List<Entry> list, SortBy sortType, bool ascending) {
     final files = list.where((element) => element.isFile).toList();
 
     // sorting files list by extension.
-    files.sort((a, b) => a.name
-        .toLowerCase()
-        .split('.')
-        .last
-        .compareTo(b.name.toLowerCase().split('.').last));
+    files.sort(
+      (a, b) => a.name
+          .toLowerCase()
+          .split('.')
+          .last
+          .compareTo(b.name.toLowerCase().split('.').last),
+    );
     return ascending
         ? [...dirs, ...files]
         : [...dirs.reversed.toList(), ...files.reversed.toList()];
@@ -2045,9 +2168,13 @@ List<Entry> _sortList(List<Entry> list, SortBy sortType, bool ascending) {
     sizeMapList.sort((b, a) => a.value.compareTo(b.value));
 
     // sort [list] according to [_sizeMapList]
-    files.sort((a, b) => sizeMapList
-        .indexWhere((element) => element.key == a.name)
-        .compareTo(sizeMapList.indexWhere((element) => element.key == b.name)));
+    files.sort(
+      (a, b) => sizeMapList
+          .indexWhere((element) => element.key == a.name)
+          .compareTo(
+            sizeMapList.indexWhere((element) => element.key == b.name),
+          ),
+    );
     return ascending
         ? [...dirs, ...files]
         : [...dirs.reversed.toList(), ...files.reversed.toList()];
@@ -2085,8 +2212,11 @@ class _FileDialogEvent extends BaseEvent<FileDialogType, Map<String, dynamic>> {
     switch (type) {
       case FileDialogType.overwrite:
         return (data) async {
-          return await model.overrideFileConfirm(data,
-              overrideConfirm: _overrideConfirm, skip: _skip);
+          return await model.overrideFileConfirm(
+            data,
+            overrideConfirm: _overrideConfirm,
+            skip: _skip,
+          );
         };
       default:
         debugPrint("Unknown event type: $type with $data");
@@ -2103,14 +2233,16 @@ class FileDialogEventLoop
 
   @override
   Future<void> onPreConsume(
-      BaseEvent<FileDialogType, Map<String, dynamic>> evt) async {
+    BaseEvent<FileDialogType, Map<String, dynamic>> evt,
+  ) async {
     final event = evt as _FileDialogEvent;
     final model = event.fileModel.target;
     final jobId = int.tryParse(evt.data['id']?.toString() ?? '');
     final batchId = model == null || jobId == null
         ? null
         : model.jobController.transferConflictBatchId(jobId);
-    final keepRemembered = model != null &&
+    final keepRemembered =
+        model != null &&
         model.jobController.isTransferConflictRememberBatch(batchId);
     // The loop only preloads the remembered batch choice. The model updates it
     // after the user answers the current overwrite dialog.
@@ -2122,14 +2254,15 @@ class FileDialogEventLoop
       _batchId = batchId;
     }
     if (keepRemembered) {
-      _overrideConfirm =
-          model.jobController.transferConflictRememberOverrideConfirm(batchId);
+      _overrideConfirm = model.jobController
+          .transferConflictRememberOverrideConfirm(batchId);
       _skip = _overrideConfirm == null;
     }
     event.setOverrideConfirm(_overrideConfirm);
     event.setSkip(_skip);
     debugPrint(
-        "FileDialogEventLoop: consuming<jobId: ${evt.data['id']} batchId: $_batchId overrideConfirm: $_overrideConfirm, skip: $_skip>");
+      "FileDialogEventLoop: consuming<jobId: ${evt.data['id']} batchId: $_batchId overrideConfirm: $_overrideConfirm, skip: $_skip>",
+    );
   }
 
   @override
@@ -2138,6 +2271,14 @@ class FileDialogEventLoop
     _overrideConfirm = null;
     _skip = false;
     return super.onEventsClear();
+  }
+
+  @override
+  Future<void> close({Duration timeout = const Duration(seconds: 2)}) async {
+    _batchId = null;
+    _overrideConfirm = null;
+    _skip = false;
+    await super.close(timeout: timeout);
   }
 
   void setOverrideConfirm(bool? confirm) {

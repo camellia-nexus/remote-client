@@ -155,21 +155,34 @@ class DesktopTabController {
     onRemoved?.call(index, key);
   }
 
+  int _jumpToken = 0;
+  Timer? _jumpTimer;
+
+  void dispose() {
+    _jumpTimer?.cancel();
+    _jumpTimer = null;
+    _jumpToken++;
+  }
+
   /// For addTab, tabPage has not been initialized, set [callOnSelected] to false,
   /// and call [onSelected] at the end of initState
   bool jumpTo(int index, {bool callOnSelected = true}) {
     if (!isDesktop || index < 0) {
       return false;
     }
+    _jumpTimer?.cancel();
+    final currentToken = ++_jumpToken;
     state.update((val) {
       if (val != null) {
         val.selected = index;
-        Future.delayed(Duration(milliseconds: 100), (() {
+        _jumpTimer = Timer(const Duration(milliseconds: 100), () {
+          if (currentToken != _jumpToken) return;
           if (val.pageController.hasClients) {
             val.pageController.jumpToPage(index);
           }
           val.scrollController.itemCount = val.tabs.length;
-          if (val.scrollController.hasClients &&
+          if (currentToken == _jumpToken &&
+              val.scrollController.hasClients &&
               val.scrollController.itemCount > index) {
             val.scrollController.scrollToItem(
               index,
@@ -177,7 +190,7 @@ class DesktopTabController {
               animate: true,
             );
           }
-        }));
+        });
       }
     });
     if ((isDesktop && (bind.isIncomingOnly() || bind.isOutgoingOnly())) ||

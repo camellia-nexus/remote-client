@@ -78,8 +78,19 @@ class ChatModel with ChangeNotifier {
     notifyListeners();
   }
 
+  bool _disposed = false;
+  bool get isDisposed => _disposed;
+  Timer? _focusTimer;
+  StreamSubscription<bool>? _middleBlockedSubscription;
+
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _focusTimer?.cancel();
+    _focusTimer = null;
+    _middleBlockedSubscription?.cancel();
+    _middleBlockedSubscription = null;
     textController.dispose();
     super.dispose();
   }
@@ -101,16 +112,19 @@ class ChatModel with ChangeNotifier {
   bool get isShowCMSidePage => _isShowCMSidePage;
 
   void setOverlayState(BlockableOverlayState blockableOverlayState) {
+    _middleBlockedSubscription?.cancel();
     _blockableOverlayState = blockableOverlayState;
 
-    _blockableOverlayState.addMiddleBlockedListener((v) {
-      if (!v) {
-        isWindowFocus.value = false;
-        if (isWindowFocus.value) {
-          isWindowFocus.toggle();
-        }
-      }
-    });
+    _middleBlockedSubscription = _blockableOverlayState
+        .addMiddleBlockedListener((v) {
+          if (_disposed) return;
+          if (!v) {
+            isWindowFocus.value = false;
+            if (isWindowFocus.value) {
+              isWindowFocus.toggle();
+            }
+          }
+        });
   }
 
   final WeakReference<FFI> parent;
@@ -153,26 +167,28 @@ class ChatModel with ChangeNotifier {
     final overlayState = _blockableOverlayState.state;
     if (overlayState == null) return;
 
-    final overlay = OverlayEntry(builder: (context) {
-      return DraggableFloatWidget(
-        config: DraggableFloatWidgetBaseConfig(
-          initPositionYInTop: false,
-          initPositionYMarginBorder: 100,
-          borderTopContainTopBar: true,
-        ),
-        child: FloatingActionButton(
-          onPressed: () {
-            if (chatWindowOverlayEntry == null) {
-              showChatWindowOverlay();
-            } else {
-              hideChatWindowOverlay();
-            }
-          },
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          child: SvgPicture.asset('assets/chat2.svg'),
-        ),
-      );
-    });
+    final overlay = OverlayEntry(
+      builder: (context) {
+        return DraggableFloatWidget(
+          config: DraggableFloatWidgetBaseConfig(
+            initPositionYInTop: false,
+            initPositionYMarginBorder: 100,
+            borderTopContainTopBar: true,
+          ),
+          child: FloatingActionButton(
+            onPressed: () {
+              if (chatWindowOverlayEntry == null) {
+                showChatWindowOverlay();
+              } else {
+                hideChatWindowOverlay();
+              }
+            },
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            child: SvgPicture.asset('assets/chat2.svg'),
+          ),
+        );
+      },
+    );
     overlayState.insert(overlay);
     chatIconOverlayEntry = overlay;
   }
@@ -197,8 +213,9 @@ class ChatModel with ChangeNotifier {
       gFFI.chatModel.changeCurrentKey(gFFI.chatModel.latestReceivedKey!);
       gFFI.chatModel.mobileClearClientUnread(gFFI.chatModel.currentKey.connId);
     }
-    final overlay = OverlayEntry(builder: (context) {
-      return Listener(
+    final overlay = OverlayEntry(
+      builder: (context) {
+        return Listener(
           onPointerDown: (_) {
             if (!isWindowFocus.value) {
               isWindowFocus.value = true;
@@ -206,11 +223,14 @@ class ChatModel with ChangeNotifier {
             }
           },
           child: DraggableChatWindow(
-              position: chatInitPos ?? chatWindowPosition,
-              width: 250,
-              height: 350,
-              chatModel: this));
-    });
+            position: chatInitPos ?? chatWindowPosition,
+            width: 250,
+            height: 350,
+            chatModel: this,
+          ),
+        );
+      },
+    );
     overlayState.insert(overlay);
     chatWindowOverlayEntry = overlay;
     requestChatInputFocus();
@@ -227,7 +247,7 @@ class ChatModel with ChangeNotifier {
 
   _isChatOverlayHide() =>
       ((!(isDesktop || isWebDesktop) && chatIconOverlayEntry == null) ||
-          chatWindowOverlayEntry == null);
+      chatWindowOverlayEntry == null);
 
   toggleChatOverlay({Offset? chatInitPos}) {
     if (_isChatOverlayHide()) {
@@ -289,19 +309,24 @@ class ChatModel with ChangeNotifier {
       notifyListeners();
       await windowManager.show();
       await windowManager.setSizeAlignment(
-          kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+        kConnectionManagerWindowSizeClosedChat,
+        Alignment.topRight,
+      );
     } else {
       final currentSelectedTab =
           gFFI.serverModel.tabController.state.value.selectedTabInfo;
       final client = parent.target?.serverModel.clients.firstWhereOrNull(
-          (client) => client.id.toString() == currentSelectedTab.key);
+        (client) => client.id.toString() == currentSelectedTab.key,
+      );
       if (client != null) {
         client.unreadChatMessageCount.value = 0;
       }
       requestChatInputFocus();
       await windowManager.show();
       await windowManager.setSizeAlignment(
-          kConnectionManagerWindowSizeOpenChat, Alignment.topRight);
+        kConnectionManagerWindowSizeOpenChat,
+        Alignment.topRight,
+      );
       _isShowCMSidePage = !_isShowCMSidePage;
       notifyListeners();
     }
@@ -319,10 +344,7 @@ class ChatModel with ChangeNotifier {
           ?.name;
     }
     if (!_messages.containsKey(key)) {
-      final chatUser = ChatUser(
-        id: key.peerId,
-        firstName: peerName,
-      );
+      final chatUser = ChatUser(id: key.peerId, firstName: peerName);
       _messages[key] = MessageBody(chatUser, []);
     } else {
       if (peerName != null && peerName.isNotEmpty) {
@@ -367,22 +389,21 @@ class ChatModel with ChangeNotifier {
     await showChatPage(messagekey);
     late final ChatUser chatUser;
     if (id == clientModeID) {
-      chatUser = ChatUser(
-        firstName: session.ffiModel.pi.username,
-        id: peerId,
-      );
+      chatUser = ChatUser(firstName: session.ffiModel.pi.username, id: peerId);
 
       if (isDesktop) {
         if (Get.isRegistered<DesktopTabController>()) {
           DesktopTabController tabController = Get.find<DesktopTabController>();
-          var index = tabController.state.value.tabs
-              .indexWhere((e) => e.key == session.id);
+          var index = tabController.state.value.tabs.indexWhere(
+            (e) => e.key == session.id,
+          );
           final notSelected =
               index >= 0 && tabController.state.value.selected != index;
           // minisized: top and switch tab
           // not minisized: add count
-          if (await WindowController.fromWindowId(stateGlobal.windowId)
-              .isMinimized()) {
+          if (await WindowController.fromWindowId(
+            stateGlobal.windowId,
+          ).isMinimized()) {
             windowOnTop(stateGlobal.windowId);
             if (notSelected) {
               tabController.jumpTo(index);
@@ -395,8 +416,9 @@ class ChatModel with ChangeNotifier {
         }
       }
     } else {
-      final client = session.serverModel.clients
-          .firstWhereOrNull((client) => client.id == id);
+      final client = session.serverModel.clients.firstWhereOrNull(
+        (client) => client.id == id,
+      );
       if (client == null) {
         debugPrint("Failed to receive msg, client is null");
         return;
@@ -420,8 +442,10 @@ class ChatModel with ChangeNotifier {
       }
       chatUser = ChatUser(id: client.peerId, firstName: client.name);
     }
-    insertMessage(messagekey,
-        ChatMessage(text: text, user: chatUser, createdAt: DateTime.now()));
+    insertMessage(
+      messagekey,
+      ChatMessage(text: text, user: chatUser, createdAt: DateTime.now()),
+    );
     if (id == clientModeID || _currentKey.peerId.isEmpty) {
       // client or invalid
       _currentKey = messagekey;
@@ -467,9 +491,9 @@ class ChatModel with ChangeNotifier {
   }
 
   updateConnIdOfKey(MessageKey key) {
-    if (_messages.keys
-            .toList()
-            .firstWhereOrNull((e) => e == key && e.connId != key.connId) !=
+    if (_messages.keys.toList().firstWhereOrNull(
+          (e) => e == key && e.connId != key.connId,
+        ) !=
         null) {
       final value = _messages.remove(key);
       if (value != null) {
@@ -482,22 +506,25 @@ class ChatModel with ChangeNotifier {
   }
 
   void mobileUpdateUnreadSum() {
-    if (!isMobile) return;
+    if (!isMobile || _disposed) return;
     var sum = 0;
     parent.target?.serverModel.clients
         .map((e) => sum += e.unreadChatMessageCount.value)
         .toList();
     Future.delayed(Duration.zero, () {
+      if (_disposed) return;
       mobileUnreadSum.value = sum;
     });
   }
 
   void mobileClearClientUnread(int id) {
-    if (!isMobile) return;
-    final client = parent.target?.serverModel.clients
-        .firstWhereOrNull((client) => client.id == id);
+    if (!isMobile || _disposed) return;
+    final client = parent.target?.serverModel.clients.firstWhereOrNull(
+      (client) => client.id == id,
+    );
     if (client != null) {
       Future.delayed(Duration.zero, () {
+        if (_disposed) return;
         client.unreadChatMessageCount.value = 0;
         mobileUpdateUnreadSum();
       });
@@ -507,7 +534,9 @@ class ChatModel with ChangeNotifier {
   close() {
     hideChatIconOverlay();
     hideChatWindowOverlay();
-    notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+    }
   }
 
   resetClientMode() {
@@ -515,7 +544,10 @@ class ChatModel with ChangeNotifier {
   }
 
   void requestChatInputFocus() {
-    Timer(Duration(milliseconds: 100), () {
+    if (_disposed) return;
+    _focusTimer?.cancel();
+    _focusTimer = Timer(const Duration(milliseconds: 100), () {
+      if (_disposed) return;
       if (inputNode.hasListeners && inputNode.canRequestFocus) {
         inputNode.requestFocus();
       }
@@ -558,5 +590,5 @@ enum VoiceCallStatus {
   waitingForResponse,
   connected,
   // Connection manager only.
-  incoming
+  incoming,
 }

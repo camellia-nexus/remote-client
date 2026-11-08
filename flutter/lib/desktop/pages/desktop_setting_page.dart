@@ -2669,6 +2669,12 @@ class _Printer extends StatefulWidget {
 
 class __PrinterState extends State<_Printer> {
   @override
+  void dispose() {
+    platformFFI.removeEventHandler('install-printer-res');
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListView(
       children: [outgoing(context), incoming(context)],
@@ -2701,6 +2707,7 @@ class __PrinterState extends State<_Printer> {
         'install-printer-res',
         'install-printer-res',
         (evt) async {
+          if (!mounted) return;
           if (evt['success'] as bool) {
             setState(() {});
           } else {

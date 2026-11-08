@@ -208,15 +208,20 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       var update = false;
 
       if (_hasIgnoreBattery) {
-        if (await checkAndUpdateIgnoreBatteryStatus()) {
+        final res = await checkAndUpdateIgnoreBatteryStatus();
+        if (!mounted) return;
+        if (res) {
           update = true;
         }
       }
 
-      if (await checkAndUpdateStartOnBoot()) {
+      final startOnBoot = await checkAndUpdateStartOnBoot();
+      if (!mounted) return;
+      if (startOnBoot) {
         update = true;
       }
 
@@ -224,8 +229,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       var enableStartOnBoot = await gFFI.invokeMethod(
         AndroidChannel.kGetStartOnBootOpt,
       );
+      if (!mounted) return;
       if (enableStartOnBoot) {
-        if (!await canStartOnBoot()) {
+        final canStart = await canStartOnBoot();
+        if (!mounted) return;
+        if (!canStart) {
           enableStartOnBoot = false;
           gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, false);
         }
@@ -236,9 +244,13 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         _enableStartOnBoot = enableStartOnBoot;
       }
 
+      final alertWindowCheck = await AndroidPermissionManager.check(
+        kSystemAlertWindow,
+      );
+      if (!mounted) return;
       var floatingWindowDisabled =
           bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) == "Y" ||
-          !await AndroidPermissionManager.check(kSystemAlertWindow);
+          !alertWindowCheck;
       if (floatingWindowDisabled != _floatingWindowDisabled) {
         update = true;
         _floatingWindowDisabled = floatingWindowDisabled;
@@ -255,24 +267,27 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       }
 
       final fingerprint = await bind.mainGetFingerprint();
+      if (!mounted) return;
       if (_fingerprint != fingerprint) {
         update = true;
         _fingerprint = fingerprint;
       }
 
       final buildDate = await bind.mainGetBuildDate();
+      if (!mounted) return;
       if (_buildDate != buildDate) {
         update = true;
         _buildDate = buildDate;
       }
 
       final isUsingPublicServer = await bind.mainIsUsingPublicServer();
+      if (!mounted) return;
       if (_isUsingPublicServer != isUsingPublicServer) {
         update = true;
         _isUsingPublicServer = isUsingPublicServer;
       }
 
-      if (update) {
+      if (update && mounted) {
         setState(() {});
       }
     });
@@ -290,6 +305,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       () async {
         final ibs = await checkAndUpdateIgnoreBatteryStatus();
         final sob = await checkAndUpdateStartOnBoot();
+        if (!mounted) return;
         if (ibs || sob) {
           setState(() {});
         }
@@ -1221,6 +1237,16 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
     var lang = bind.mainGetLocalOption(key: kCommConfKeyLang);
     dialogManager.show(
       (setState, close, context) {
+        bool isClosed = false;
+        Timer? closeTimer;
+        void safeClose() {
+          if (!isClosed) {
+            isClosed = true;
+            closeTimer?.cancel();
+            close();
+          }
+        }
+
         setLang(v) async {
           if (lang != v) {
             setState(() {
@@ -1229,7 +1255,8 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
             await bind.mainSetLocalOption(key: kCommConfKeyLang, value: v);
             bind.mainChangeLanguage(lang: v);
             reloadCurrentWindow();
-            Future.delayed(Duration(milliseconds: 200), close);
+            closeTimer?.cancel();
+            closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
           }
         }
 
@@ -1257,6 +1284,7 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
                   );
                 }).toList(),
           ),
+          onCancel: safeClose,
         );
       },
       backDismiss: true,
@@ -1272,13 +1300,24 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
 
   dialogManager.show(
     (setState, close, context) {
+      bool isClosed = false;
+      Timer? closeTimer;
+      void safeClose() {
+        if (!isClosed) {
+          isClosed = true;
+          closeTimer?.cancel();
+          close();
+        }
+      }
+
       setTheme(v) {
         if (themeMode != v) {
           setState(() {
             themeMode = v;
           });
           MyTheme.changeDarkMode(themeMode);
-          Future.delayed(Duration(milliseconds: 200), close);
+          closeTimer?.cancel();
+          closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
         }
       }
 
@@ -1306,6 +1345,7 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
             ),
           ],
         ),
+        onCancel: safeClose,
       );
     },
     backDismiss: true,

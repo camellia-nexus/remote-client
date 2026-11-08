@@ -23,8 +23,8 @@ final class RgbaFrame extends Struct {
 
 typedef F3 = Pointer<Uint8> Function(Pointer<Utf8>, int);
 typedef F3Dart = Pointer<Uint8> Function(Pointer<Utf8>, Int32);
-typedef FCopyRgbaNative = IntPtr Function(
-    Pointer<Utf8>, IntPtr, Pointer<Uint8>, IntPtr);
+typedef FCopyRgbaNative =
+    IntPtr Function(Pointer<Utf8>, IntPtr, Pointer<Uint8>, IntPtr);
 typedef FCopyRgba = int Function(Pointer<Utf8>, int, Pointer<Uint8>, int);
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
@@ -91,6 +91,10 @@ class PlatformFFI {
     if (handlers != null) {
       handlers.remove(handlerName);
     }
+  }
+
+  void removeEventHandler(String eventName, [String? handlerName]) {
+    unregisterEventHandler(eventName, handlerName ?? eventName);
   }
 
   String translate(String name, String locale) =>
@@ -173,7 +177,9 @@ class PlatformFFI {
     try {
       _session_get_rgba = dylib.lookupFunction<F3Dart, F3>("session_get_rgba");
       try {
-        _session_copy_rgba = dylib.lookupFunction<FCopyRgbaNative, FCopyRgba>("session_copy_rgba");
+        _session_copy_rgba = dylib.lookupFunction<FCopyRgbaNative, FCopyRgba>(
+          "session_copy_rgba",
+        );
       } catch (e) {
         debugPrint('session_copy_rgba lookup optional: $e');
       }

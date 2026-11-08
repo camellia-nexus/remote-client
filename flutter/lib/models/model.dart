@@ -4290,9 +4290,12 @@ class FFI {
   AbModel get abModel => isGlobal ? _abModel! : gFFI.abModel;
   GroupModel get groupModel => isGlobal ? _groupModel! : gFFI.groupModel;
   UserModel get userModel => isGlobal ? _userModel! : gFFI.userModel;
-  PeerTabModel get peerTabModel => isGlobal ? _peerTabModel! : gFFI.peerTabModel;
-  Peers get recentPeersModel => isGlobal ? _recentPeersModel! : gFFI.recentPeersModel;
-  Peers get favoritePeersModel => isGlobal ? _favoritePeersModel! : gFFI.favoritePeersModel;
+  PeerTabModel get peerTabModel =>
+      isGlobal ? _peerTabModel! : gFFI.peerTabModel;
+  Peers get recentPeersModel =>
+      isGlobal ? _recentPeersModel! : gFFI.recentPeersModel;
+  Peers get favoritePeersModel =>
+      isGlobal ? _favoritePeersModel! : gFFI.favoritePeersModel;
   Peers get lanPeersModel => isGlobal ? _lanPeersModel! : gFFI.lanPeersModel;
 
   // Terminal model registry for multiple terminals
@@ -4658,6 +4661,7 @@ class FFI {
     closed = true;
     ffiModel.resetReconnectRetry();
     chatModel.close();
+    chatModel.dispose();
     // Close all terminal models
     for (final model in _terminalModels.values) {
       model.dispose();
@@ -4683,6 +4687,7 @@ class FFI {
     // Dispose relative mouse mode resources to ensure cursor is restored
     inputModel.disposeRelativeMouseMode();
     inputModel.disposeSideButtonTracking();
+    inputModel.dispose();
     if (closeSession) {
       await bind.sessionClose(sessionId: sessionId);
     }

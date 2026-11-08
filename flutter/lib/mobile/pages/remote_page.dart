@@ -65,6 +65,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
+  Timer? _orientationTimer;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
 
@@ -185,6 +186,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _textController.dispose();
     _timer?.cancel();
     _timer = null;
+    _orientationTimer?.cancel();
+    _orientationTimer = null;
     _iosKeyboardWorkaroundTimer?.cancel();
     _iosKeyboardWorkaroundTimer = null;
     keyboardSubscription.cancel();
@@ -549,14 +552,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               child: OrientationBuilder(
                                 builder: (ctx, orientation) {
                                   if (_currentOrientation != orientation) {
-                                    Timer(
+                                    _currentOrientation = orientation;
+                                    _orientationTimer?.cancel();
+                                    _orientationTimer = Timer(
                                       const Duration(milliseconds: 200),
                                       () {
+                                        if (!mounted) return;
                                         gFFI.dialogManager
                                             .resetMobileActionsOverlay(
                                               ffi: gFFI,
                                             );
-                                        _currentOrientation = orientation;
                                         gFFI.canvasModel.updateViewStyle();
                                       },
                                     );

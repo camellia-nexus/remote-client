@@ -441,6 +441,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   final _toolbarSize = Rxn<Size>();
   final _toolbarKey = GlobalKey(debugLabel: 'remote_toolbar_root');
   final _dockingOptionsInitialized = false.obs;
+  bool _measureScheduled = false;
 
   int get windowId => stateGlobal.windowId;
 
@@ -502,6 +503,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     _loadDockingPreferences();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       // Initialize toolbar states (collapse, hide) from session options
       await widget.state.init(widget.ffi.sessionId);
     });
@@ -551,14 +553,18 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
       // Measure the live toolbar after every layout so the preview ghost can
       // match its actual footprint (collapsed handle vs expanded toolbar).
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_dragging.isTrue) return;
-        final ro = _toolbarKey.currentContext?.findRenderObject();
-        if (ro is RenderBox && ro.hasSize) {
-          final s = ro.size;
-          if (_toolbarSize.value != s) _toolbarSize.value = s;
-        }
-      });
+      if (!_measureScheduled) {
+        _measureScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _measureScheduled = false;
+          if (!mounted || _dragging.isTrue) return;
+          final ro = _toolbarKey.currentContext?.findRenderObject();
+          if (ro is RenderBox && ro.hasSize) {
+            final s = ro.size;
+            if (_toolbarSize.value != s) _toolbarSize.value = s;
+          }
+        });
+      }
 
       final toolbar = KeyedSubtree(
         key: _toolbarKey,
@@ -2429,9 +2435,19 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
     );
   }
 
+  Timer? _adjustWindowTimer;
+
+  @override
+  void dispose() {
+    _adjustWindowTimer?.cancel();
+    _adjustWindowTimer = null;
+    super.dispose();
+  }
+
   Future<void> _getLocalResolutionWayland() async {
     if (!isWayland) return _getLocalResolution();
     final window = await window_size.getWindowInfo();
+    if (!mounted) return;
     final screen = window.screen;
     if (screen != null) {
       setState(() {
@@ -2512,13 +2528,16 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
       width: w,
       height: h,
     );
-    Future.delayed(Duration(seconds: 3), () async {
+    _adjustWindowTimer?.cancel();
+    _adjustWindowTimer = Timer(const Duration(seconds: 3), () async {
+      if (!mounted) return;
       final rect = ffiModel.rect;
       if (rect == null) {
         return;
       }
       if (w == rect.width.toInt() && h == rect.height.toInt()) {
         if (await widget.screenAdjustor.isWindowCanBeAdjusted()) {
+          if (!mounted) return;
           widget.screenAdjustor.doAdjustWindow(context);
         }
       }

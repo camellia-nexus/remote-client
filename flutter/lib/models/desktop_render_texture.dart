@@ -11,12 +11,25 @@ import './platform_model.dart';
 import 'package:texture_rgba_renderer/texture_rgba_renderer.dart'
     if (dart.library.html) 'package:camellia_remote_app/web/texture_rgba_renderer.dart';
 
-class _PixelbufferTexture {
+class PixelbufferTexture {
   int _textureKey = -1;
   int _display = 0;
   SessionID? _sessionId;
   bool _destroying = false;
   int? _id;
+
+  @visibleForTesting
+  int get textureKey => _textureKey;
+  @visibleForTesting
+  set textureKey(int key) => _textureKey = key;
+  @visibleForTesting
+  bool get isDestroying => _destroying;
+  @visibleForTesting
+  set isDestroying(bool d) => _destroying = d;
+  @visibleForTesting
+  SessionID? get sessionId => _sessionId;
+  @visibleForTesting
+  set sessionId(SessionID? s) => _sessionId = s;
 
   final textureRenderer = TextureRgbaRenderer();
 
@@ -24,17 +37,33 @@ class _PixelbufferTexture {
 
   create(int d, SessionID sessionId, FFI ffi) {
     _display = d;
-    _textureKey = bind.getNextTextureKey();
+    final expectedKey = bind.getNextTextureKey();
+    _textureKey = expectedKey;
     _sessionId = sessionId;
 
-    textureRenderer.createTexture(_textureKey).then((id) async {
+    textureRenderer.createTexture(expectedKey).then((id) async {
+      if (_textureKey != expectedKey || _destroying || _sessionId == null) {
+        debugPrint(
+          "Discard stale/destroyed pixelbuffer texture: key:$expectedKey (current:$_textureKey, destroying:$_destroying)",
+        );
+        await textureRenderer.closeTexture(expectedKey);
+        return;
+      }
       _id = id;
       if (id != -1) {
         ffi.textureModel.setRgbaTextureId(display: d, id: id);
-        final ptr = await textureRenderer.getTexturePtr(_textureKey);
+        final ptr = await textureRenderer.getTexturePtr(expectedKey);
+        if (_textureKey != expectedKey || _destroying || _sessionId == null) {
+          debugPrint(
+            "Discard pixelbuffer texture after ptr fetch: key:$expectedKey",
+          );
+          await textureRenderer.closeTexture(expectedKey);
+          return;
+        }
         platformFFI.registerPixelbufferTexture(sessionId, display, ptr);
         debugPrint(
-            "create pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$id, texturePtr:$ptr");
+          "create pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$id, texturePtr:$ptr",
+        );
       }
     });
   }
@@ -51,10 +80,13 @@ class _PixelbufferTexture {
       _textureKey = -1;
       _destroying = false;
       debugPrint(
-          "destroy pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$_id");
+        "destroy pixelbuffer texture: peerId: ${ffi.id} display:$_display, textureId:$_id",
+      );
     }
   }
 }
+
+typedef _PixelbufferTexture = PixelbufferTexture;
 
 class _GpuTexture {
   int _textureId = -1;
@@ -76,22 +108,26 @@ class _GpuTexture {
       _sessionId = sessionId;
       _display = d;
 
-      gpuTextureRenderer.registerTexture().then((id) async {
-        _id = id;
-        if (id != null) {
-          _textureId = id;
-          ffi.textureModel.setGpuTextureId(display: d, id: id);
-          final output = await gpuTextureRenderer.output(id);
-          _output = output;
-          if (output != null) {
-            platformFFI.registerGpuTexture(sessionId, d, output);
+      gpuTextureRenderer.registerTexture().then(
+        (id) async {
+          _id = id;
+          if (id != null) {
+            _textureId = id;
+            ffi.textureModel.setGpuTextureId(display: d, id: id);
+            final output = await gpuTextureRenderer.output(id);
+            _output = output;
+            if (output != null) {
+              platformFFI.registerGpuTexture(sessionId, d, output);
+            }
+            debugPrint(
+              "create gpu texture: peerId: ${ffi.id} display:$_display, textureId:$id, output:$output",
+            );
           }
-          debugPrint(
-              "create gpu texture: peerId: ${ffi.id} display:$_display, textureId:$id, output:$output");
-        }
-      }, onError: (err) {
-        debugPrint("Failed to register gpu texture:$err");
-      });
+        },
+        onError: (err) {
+          debugPrint("Failed to register gpu texture:$err");
+        },
+      );
     }
   }
 
@@ -108,7 +144,8 @@ class _GpuTexture {
       _textureId = -1;
       _destroying = false;
       debugPrint(
-          "destroy gpu texture: peerId: ${ffi.id} display:$_display, textureId:$_id, output:$_output");
+        "destroy gpu texture: peerId: ${ffi.id} display:$_display, textureId:$_id, output:$_output",
+      );
     }
   }
 }
@@ -158,7 +195,8 @@ class TextureModel {
       final currentDisplay = CurrentDisplayState.find(ffi.id).value;
       if (currentDisplay != display) {
         debugPrint(
-            "setTextureType: currentDisplay=$currentDisplay, isGpuTexture=$gpuTexture");
+          "setTextureType: currentDisplay=$currentDisplay, isGpuTexture=$gpuTexture",
+        );
         ensureControl(currentDisplay);
         _control[currentDisplay]?.setTextureType(gpuTexture: gpuTexture);
       }

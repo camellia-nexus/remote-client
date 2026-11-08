@@ -40,8 +40,8 @@ class ViewCameraPage extends StatefulWidget {
     this.connToken,
     this.forceRelay,
     this.isSharedPassword,
-  })  : generation = initSharedStates(id),
-        super(key: key);
+  }) : generation = initSharedStates(id),
+       super(key: key);
 
   final String id;
   final SessionID? sessionId;
@@ -83,6 +83,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   bool _isWindowBlur = false;
   final _cursorOverImage = false.obs;
   final _uniqueKey = UniqueKey();
+  bool _layoutUpdatePending = false;
 
   var _blockableOverlayState = BlockableOverlayState();
 
@@ -110,9 +111,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
       showKBLayoutTypeChooserIfNeeded(
-          _ffi.ffiModel.pi.platform, _ffi.dialogManager);
-      _ffi.recordingModel
-          .updateStatus(bind.sessionGetIsRecording(sessionId: _ffi.sessionId));
+        _ffi.ffiModel.pi.platform,
+        _ffi.dialogManager,
+      );
+      _ffi.recordingModel.updateStatus(
+        bind.sessionGetIsRecording(sessionId: _ffi.sessionId),
+      );
     });
     _ffi.start(
       widget.id,
@@ -127,8 +131,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      _ffi.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      _ffi.dialogManager.showLoading(
+        translate('Connecting...'),
+        onCancel: closeConnection,
+      );
     });
     WakelockManager.enable(_uniqueKey);
 
@@ -271,41 +277,36 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   Widget emptyOverlay() => BlockableOverlay(
-        /// the Overlay key will be set with _blockableOverlayState in BlockableOverlay
-        /// see override build() in [BlockableOverlay]
-        state: _blockableOverlayState,
-        underlying: Container(
-          color: Colors.transparent,
-        ),
-      );
+    /// the Overlay key will be set with _blockableOverlayState in BlockableOverlay
+    /// see override build() in [BlockableOverlay]
+    state: _blockableOverlayState,
+    underlying: Container(color: Colors.transparent),
+  );
 
   Widget buildBody(BuildContext context) {
     remoteToolbar(BuildContext context) => RemoteToolbar(
-          id: widget.id,
-          ffi: _ffi,
-          state: widget.toolbarState,
-          onEnterOrLeaveImageSetter: (id, func) {
-            _instanceIdOnEnterOrLeaveImage4Toolbar = id;
-            _onEnterOrLeaveImage4Toolbar = func;
-          },
-          onEnterOrLeaveImageCleaner: (id) {
-            // If _instanceIdOnEnterOrLeaveImage4Toolbar != id
-            // it means `_onEnterOrLeaveImage4Toolbar` is not set or it has been changed to another toolbar.
-            if (_instanceIdOnEnterOrLeaveImage4Toolbar == id) {
-              _instanceIdOnEnterOrLeaveImage4Toolbar = null;
-              _onEnterOrLeaveImage4Toolbar = null;
-            }
-          },
-          setRemoteState: setState,
-        );
+      id: widget.id,
+      ffi: _ffi,
+      state: widget.toolbarState,
+      onEnterOrLeaveImageSetter: (id, func) {
+        _instanceIdOnEnterOrLeaveImage4Toolbar = id;
+        _onEnterOrLeaveImage4Toolbar = func;
+      },
+      onEnterOrLeaveImageCleaner: (id) {
+        // If _instanceIdOnEnterOrLeaveImage4Toolbar != id
+        // it means `_onEnterOrLeaveImage4Toolbar` is not set or it has been changed to another toolbar.
+        if (_instanceIdOnEnterOrLeaveImage4Toolbar == id) {
+          _instanceIdOnEnterOrLeaveImage4Toolbar = null;
+          _onEnterOrLeaveImage4Toolbar = null;
+        }
+      },
+      setRemoteState: setState,
+    );
 
     bodyWidget() {
       return Stack(
         children: [
-          Container(
-            color: kColorCanvas,
-            child: getBodyForDesktop(context),
-          ),
+          Container(color: kColorCanvas, child: getBodyForDesktop(context)),
           Stack(
             children: [
               _ffi.ffiModel.pi.isSet.isTrue &&
@@ -315,23 +316,30 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                       if (!_ffi.ffiModel.isPeerAndroid) {
                         return Offstage();
                       } else {
-                        return Obx(() => Offstage(
-                              offstage: _ffi.dialogManager
-                                  .mobileActionsOverlayVisible.isFalse,
-                              child: Overlay(initialEntries: [
+                        return Obx(
+                          () => Offstage(
+                            offstage: _ffi
+                                .dialogManager
+                                .mobileActionsOverlayVisible
+                                .isFalse,
+                            child: Overlay(
+                              initialEntries: [
                                 makeMobileActionsOverlayEntry(
                                   () => _ffi.dialogManager
                                       .setMobileActionsOverlayVisible(false),
                                   ffi: _ffi,
-                                )
-                              ]),
-                            ));
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
                       }
                     }(),
               // Use Overlay to enable rebuild every time on menu button click.
               _ffi.ffiModel.pi.isSet.isTrue
                   ? Overlay(
-                      initialEntries: [OverlayEntry(builder: remoteToolbar)])
+                      initialEntries: [OverlayEntry(builder: remoteToolbar)],
+                    )
                   : remoteToolbar(context),
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
@@ -343,7 +351,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: Obx(() {
-        final imageReady = _ffi.ffiModel.pi.isSet.isTrue &&
+        final imageReady =
+            _ffi.ffiModel.pi.isSet.isTrue &&
             _ffi.ffiModel.waitForFirstImage.isFalse;
         if (imageReady) {
           // If the privacy mode(disable physical displays) is switched,
@@ -375,17 +384,21 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   Widget build(BuildContext context) {
     super.build(context);
     return WillPopScope(
-        onWillPop: () async {
-          clientClose(sessionId, _ffi);
-          return false;
-        },
-        child: MultiProvider(providers: [
+      onWillPop: () async {
+        clientClose(sessionId, _ffi);
+        return false;
+      },
+      child: MultiProvider(
+        providers: [
           ChangeNotifierProvider.value(value: _ffi.ffiModel),
           ChangeNotifierProvider.value(value: _ffi.imageModel),
           ChangeNotifierProvider.value(value: _ffi.cursorModel),
           ChangeNotifierProvider.value(value: _ffi.canvasModel),
           ChangeNotifierProvider.value(value: _ffi.recordingModel),
-        ], child: buildBody(context)));
+        ],
+        child: buildBody(context),
+      ),
+    );
   }
 
   void enterView(PointerEnterEvent evt) {
@@ -455,7 +468,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         // ensure the grab-key thread is running when our users are clicking the remote canvas.
         if (_isWindowBlur) {
           debugPrint(
-              "Unexpected status: onPointerDown is triggered while the remote window is in blur status");
+            "Unexpected status: onPointerDown is triggered while the remote window is in blur status",
+          );
           _isWindowBlur = false;
         }
         if (!_rawKeyFocusNode.hasFocus) {
@@ -469,29 +483,47 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
   Widget getBodyForDesktop(BuildContext context) {
     var paints = <Widget>[
-      MouseRegion(onEnter: (evt) {
-        if (!isWeb) bind.hostStopSystemKeyPropagate(stopped: false);
-      }, onExit: (evt) {
-        if (!isWeb) bind.hostStopSystemKeyPropagate(stopped: true);
-      }, child: LayoutBuilder(builder: (context, constraints) {
-        final c = Provider.of<CanvasModel>(context, listen: false);
-        Future.delayed(Duration.zero, () => c.updateViewStyle());
-        final peerDisplay = CurrentDisplayState.find(widget.id);
-        return Obx(
-          () => _ffi.ffiModel.pi.isSet.isFalse
-              ? Container(color: Colors.transparent)
-              : Obx(() {
-                  _ffi.textureModel.updateCurrentDisplay(peerDisplay.value);
-                  return ImagePaint(
-                    id: widget.id,
-                    cursorOverImage: _cursorOverImage,
-                    listenerBuilder: (child) => _buildRawTouchAndPointerRegion(
-                        child, enterView, leaveView),
-                    ffi: _ffi,
-                  );
-                }),
-        );
-      }))
+      MouseRegion(
+        onEnter: (evt) {
+          if (!isWeb) bind.hostStopSystemKeyPropagate(stopped: false);
+        },
+        onExit: (evt) {
+          if (!isWeb) bind.hostStopSystemKeyPropagate(stopped: true);
+        },
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final c = Provider.of<CanvasModel>(context, listen: false);
+            if (!_layoutUpdatePending) {
+              _layoutUpdatePending = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _layoutUpdatePending = false;
+                if (mounted) {
+                  c.updateViewStyle();
+                }
+              });
+            }
+            final peerDisplay = CurrentDisplayState.find(widget.id);
+            return Obx(
+              () => _ffi.ffiModel.pi.isSet.isFalse
+                  ? Container(color: Colors.transparent)
+                  : Obx(() {
+                      _ffi.textureModel.updateCurrentDisplay(peerDisplay.value);
+                      return ImagePaint(
+                        id: widget.id,
+                        cursorOverImage: _cursorOverImage,
+                        listenerBuilder: (child) =>
+                            _buildRawTouchAndPointerRegion(
+                              child,
+                              enterView,
+                              leaveView,
+                            ),
+                        ffi: _ffi,
+                      );
+                    }),
+            );
+          },
+        ),
+      ),
     ];
 
     paints.add(
@@ -499,12 +531,13 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         top: 10,
         right: 10,
         child: _buildRawTouchAndPointerRegion(
-            QualityMonitor(_ffi.qualityMonitorModel), null, null),
+          QualityMonitor(_ffi.qualityMonitorModel),
+          null,
+          null,
+        ),
       ),
     );
-    return Stack(
-      children: paints,
-    );
+    return Stack(children: paints);
   }
 
   @override
@@ -517,13 +550,13 @@ class ImagePaint extends StatefulWidget {
   final RxBool cursorOverImage;
   final Widget Function(Widget)? listenerBuilder;
 
-  ImagePaint(
-      {Key? key,
-      required this.ffi,
-      required this.id,
-      required this.cursorOverImage,
-      this.listenerBuilder})
-      : super(key: key);
+  ImagePaint({
+    Key? key,
+    required this.ffi,
+    required this.id,
+    required this.cursorOverImage,
+    this.listenerBuilder,
+  }) : super(key: key);
 
   @override
   State<StatefulWidget> createState() => _ImagePaintState();
@@ -548,38 +581,45 @@ class _ImagePaintState extends State<ImagePaint> {
       final paintSize = Size(paintWidth, paintHeight);
       final paintWidget =
           m.useTextureRender || widget.ffi.ffiModel.pi.forceTextureRender
-              ? _BuildPaintTextureRender(
-                  c, s, Offset.zero, paintSize, isViewOriginal())
-              : _buildScrollbarNonTextureRender(m, paintSize, s);
+          ? _BuildPaintTextureRender(
+              c,
+              s,
+              Offset.zero,
+              paintSize,
+              isViewOriginal(),
+            )
+          : _buildScrollbarNonTextureRender(m, paintSize, s);
       return NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           c.updateScrollPercent();
           return false;
         },
         child: Container(
-            child: _buildCrossScrollbarFromLayout(
-          context,
-          _buildListener(paintWidget),
-          c.size,
-          paintSize,
-          c.scrollHorizontal,
-          c.scrollVertical,
-        )),
+          child: _buildCrossScrollbarFromLayout(
+            context,
+            _buildListener(paintWidget),
+            c.size,
+            paintSize,
+            c.scrollHorizontal,
+            c.scrollVertical,
+          ),
+        ),
       );
     } else {
       if (c.size.width > 0 && c.size.height > 0) {
         final paintWidget =
             m.useTextureRender || widget.ffi.ffiModel.pi.forceTextureRender
-                ? _BuildPaintTextureRender(
-                    c,
-                    s,
-                    Offset(
-                      isLinux ? c.x.toInt().toDouble() : c.x,
-                      isLinux ? c.y.toInt().toDouble() : c.y,
-                    ),
-                    c.size,
-                    isViewOriginal())
-                : _buildScrollAutoNonTextureRender(m, c, s);
+            ? _BuildPaintTextureRender(
+                c,
+                s,
+                Offset(
+                  isLinux ? c.x.toInt().toDouble() : c.x,
+                  isLinux ? c.y.toInt().toDouble() : c.y,
+                ),
+                c.size,
+                isViewOriginal(),
+              )
+            : _buildScrollAutoNonTextureRender(m, c, s);
         return Container(child: _buildListener(paintWidget));
       } else {
         return Container();
@@ -588,7 +628,10 @@ class _ImagePaintState extends State<ImagePaint> {
   }
 
   Widget _buildScrollbarNonTextureRender(
-      ImageModel m, Size imageSize, double s) {
+    ImageModel m,
+    Size imageSize,
+    double s,
+  ) {
     return CustomPaint(
       size: imageSize,
       painter: ImagePainter(image: m.image, x: 0, y: 0, scale: s),
@@ -596,7 +639,10 @@ class _ImagePaintState extends State<ImagePaint> {
   }
 
   Widget _buildScrollAutoNonTextureRender(
-      ImageModel m, CanvasModel c, double s) {
+    ImageModel m,
+    CanvasModel c,
+    double s,
+  ) {
     return CustomPaint(
       size: Size(c.size.width, c.size.height),
       painter: ImagePainter(image: m.image, x: c.x / s, y: c.y / s, scale: s),
@@ -604,7 +650,12 @@ class _ImagePaintState extends State<ImagePaint> {
   }
 
   Widget _BuildPaintTextureRender(
-      CanvasModel c, double s, Offset offset, Size size, bool isViewOriginal) {
+    CanvasModel c,
+    double s,
+    Offset offset,
+    Size size,
+    bool isViewOriginal,
+  ) {
     final ffiModel = c.parent.target!.ffiModel;
     final displays = ffiModel.pi.getCurDisplays();
     final children = <Widget>[];
@@ -614,21 +665,27 @@ class _ImagePaintState extends State<ImagePaint> {
     }
     final curDisplay = ffiModel.pi.currentDisplay;
     for (var i = 0; i < displays.length; i++) {
-      final textureId = widget.ffi.textureModel
-          .getTextureId(curDisplay == kAllDisplayValue ? i : curDisplay);
+      final textureId = widget.ffi.textureModel.getTextureId(
+        curDisplay == kAllDisplayValue ? i : curDisplay,
+      );
       if (true) {
         // both "textureId.value != -1" and "true" seems ok
-        children.add(Positioned(
-          left: (displays[i].x - rect.left) * s + offset.dx,
-          top: (displays[i].y - rect.top) * s + offset.dy,
-          width: displays[i].width * s,
-          height: displays[i].height * s,
-          child: Obx(() => Texture(
+        children.add(
+          Positioned(
+            left: (displays[i].x - rect.left) * s + offset.dx,
+            top: (displays[i].y - rect.top) * s + offset.dy,
+            width: displays[i].width * s,
+            height: displays[i].height * s,
+            child: Obx(
+              () => Texture(
                 textureId: textureId.value,
-                filterQuality:
-                    isViewOriginal ? FilterQuality.none : FilterQuality.low,
-              )),
-        ));
+                filterQuality: isViewOriginal
+                    ? FilterQuality.none
+                    : FilterQuality.low,
+              ),
+            ),
+          ),
+        );
       }
     }
     return SizedBox(
@@ -662,9 +719,7 @@ class _ImagePaintState extends State<ImagePaint> {
     } else {
       widget = Row(
         children: [
-          Container(
-            width: ((layoutSize.width - size.width) ~/ 2).toDouble(),
-          ),
+          Container(width: ((layoutSize.width - size.width) ~/ 2).toDouble()),
           widget,
         ],
       );

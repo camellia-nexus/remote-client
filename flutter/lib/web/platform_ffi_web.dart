@@ -17,16 +17,26 @@ typedef _DomListener = ({String type, web.EventListener callback});
 
 final List<_DomListener> mouseListeners = [];
 final List<_DomListener> keyListeners = [];
-const String _buildApiServer =
-    String.fromEnvironment('API_SERVER', defaultValue: '');
-const String _buildRendezvousServers =
-    String.fromEnvironment('RENDEZVOUS_SERVERS', defaultValue: '');
-const String _buildRsPubKey =
-    String.fromEnvironment('RS_PUB_KEY', defaultValue: '');
-const String _buildAppVersion =
-    String.fromEnvironment('APP_VERSION', defaultValue: '');
-const String _buildBuildDate =
-    String.fromEnvironment('BUILD_DATE', defaultValue: '');
+const String _buildApiServer = String.fromEnvironment(
+  'API_SERVER',
+  defaultValue: '',
+);
+const String _buildRendezvousServers = String.fromEnvironment(
+  'RENDEZVOUS_SERVERS',
+  defaultValue: '',
+);
+const String _buildRsPubKey = String.fromEnvironment(
+  'RS_PUB_KEY',
+  defaultValue: '',
+);
+const String _buildAppVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '',
+);
+const String _buildBuildDate = String.fromEnvironment(
+  'BUILD_DATE',
+  defaultValue: '',
+);
 
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
@@ -63,8 +73,11 @@ class PlatformFFI {
   }
 
   bool registerEventHandler(
-      String eventName, String handlerName, HandleEvent handler,
-      {bool replace = false}) {
+    String eventName,
+    String handlerName,
+    HandleEvent handler, {
+    bool replace = false,
+  }) {
     debugPrint('registerEventHandler $eventName $handlerName');
     var handlers = _eventHandlers[eventName];
     if (handlers == null) {
@@ -86,6 +99,10 @@ class PlatformFFI {
     if (handlers != null) {
       handlers.remove(handlerName);
     }
+  }
+
+  void removeEventHandler(String eventName, [String? handlerName]) {
+    unregisterEventHandler(eventName, handlerName ?? eventName);
   }
 
   Future<bool> tryHandle(Map<String, dynamic> evt) async {
@@ -251,8 +268,9 @@ class PlatformFFI {
 
     final carryLength = _detectUtf8IncompleteTail(merged);
     if (carryLength > 0) {
-      _terminalUtf8Carry[terminalId] =
-          merged.sublist(merged.length - carryLength);
+      _terminalUtf8Carry[terminalId] = merged.sublist(
+        merged.length - carryLength,
+      );
       merged = Uint8List.sublistView(merged, 0, merged.length - carryLength);
     } else {
       _terminalUtf8Carry.remove(terminalId);
@@ -376,10 +394,16 @@ class PlatformFFI {
       _ffiBind.sessionNextRgba(sessionId: sessionId, display: display);
   void registerPixelbufferTexture(SessionID sessionId, int display, int ptr) =>
       _ffiBind.sessionRegisterPixelbufferTexture(
-          sessionId: sessionId, display: display, ptr: ptr);
+        sessionId: sessionId,
+        display: display,
+        ptr: ptr,
+      );
   void registerGpuTexture(SessionID sessionId, int display, int ptr) =>
       _ffiBind.sessionRegisterGpuTexture(
-          sessionId: sessionId, display: display, ptr: ptr);
+        sessionId: sessionId,
+        display: display,
+        ptr: ptr,
+      );
 
   Future<void> init(String appType) async {
     final completer = Completer<void>();
@@ -466,11 +490,13 @@ class PlatformFFI {
         if (appVersion.isNotEmpty) 'APP_VERSION': appVersion,
         if (rendezvousServers.isNotEmpty)
           'RENDEZVOUS_SERVERS': rendezvousServers.join(','),
-      }
+      },
     };
 
-    js.context
-        .callMethod('setByName', ['bootstrap_config', jsonEncode(payload)]);
+    js.context.callMethod('setByName', [
+      'bootstrap_config',
+      jsonEncode(payload),
+    ]);
   }
 
   void setEventCallback(void Function(Map<String, dynamic>) fun) {
@@ -491,23 +517,24 @@ class PlatformFFI {
   void setRgbaCallback(void Function(int, Uint8List, int, int) fun) {
     js.context["onRgba"] =
         ((JSAny? display, JSAny? rgba, JSAny? width, JSAny? height) {
-      final displayNumber = (display?.dartify() as num?)?.toInt() ?? 0;
-      final rgbaData = rgba?.dartify();
-      if (rgbaData is Uint8List) {
-        final frameWidth = (width?.dartify() as num?)?.toInt() ?? 0;
-        final frameHeight = (height?.dartify() as num?)?.toInt() ?? 0;
-        fun(displayNumber, rgbaData, frameWidth, frameHeight);
-      }
-    }).toJS;
+          final displayNumber = (display?.dartify() as num?)?.toInt() ?? 0;
+          final rgbaData = rgba?.dartify();
+          if (rgbaData is Uint8List) {
+            final frameWidth = (width?.dartify() as num?)?.toInt() ?? 0;
+            final frameHeight = (height?.dartify() as num?)?.toInt() ?? 0;
+            fun(displayNumber, rgbaData, frameWidth, frameHeight);
+          }
+        }).toJS;
   }
 
   void setVideoFrameCallback(void Function(int, int, int) fun) {
-    js.context["onVideoFrame"] = ((JSAny? display, JSAny? width, JSAny? height) {
-      final displayNumber = (display?.dartify() as num?)?.toInt() ?? 0;
-      final frameWidth = (width?.dartify() as num?)?.toInt() ?? 0;
-      final frameHeight = (height?.dartify() as num?)?.toInt() ?? 0;
-      fun(displayNumber, frameWidth, frameHeight);
-    }).toJS;
+    js.context["onVideoFrame"] =
+        ((JSAny? display, JSAny? width, JSAny? height) {
+          final displayNumber = (display?.dartify() as num?)?.toInt() ?? 0;
+          final frameWidth = (width?.dartify() as num?)?.toInt() ?? 0;
+          final frameHeight = (height?.dartify() as num?)?.toInt() ?? 0;
+          fun(displayNumber, frameWidth, frameHeight);
+        }).toJS;
   }
 
   void clearVideoFrameCallback() {

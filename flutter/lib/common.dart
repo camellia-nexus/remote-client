@@ -1164,18 +1164,23 @@ class OverlayDialogManager {
   }
 
   void dismissAll() {
-    _dialogs.forEach((key, value) {
+    final copy = Map<String, Dialog>.from(_dialogs);
+    _dialogs.clear();
+    copy.forEach((key, value) {
       value.complete(null);
       BackButtonInterceptor.removeByName(key);
     });
-    _dialogs.clear();
   }
 
   void dismissByTag(String tag) {
-    _dialogs[tag]?.complete(null);
-    _dialogs.remove(tag);
-    BackButtonInterceptor.removeByName(tag);
+    final d = _dialogs.remove(tag);
+    if (d != null) {
+      d.complete(null);
+      BackButtonInterceptor.removeByName(tag);
+    }
   }
+
+  int get activeDialogCount => _dialogs.length;
 
   Future<T?> show<T>(
     DialogBuilder builder, {
@@ -3440,11 +3445,51 @@ Future<void> onActiveWindowChanged() async {
   }
 }
 
+class CancelablePeriodicTimer implements Timer {
+  final Duration duration;
+  final Future<void> Function() callback;
+  bool _cancelled = false;
+  Timer? _timer;
+  int _tick = 0;
+
+  CancelablePeriodicTimer(this.duration, this.callback) {
+    _schedule(Duration.zero);
+  }
+
+  void _schedule(Duration delay) {
+    if (_cancelled) return;
+    _timer = Timer(delay, _run);
+  }
+
+  Future<void> _run() async {
+    if (_cancelled) return;
+    _tick++;
+    try {
+      await callback();
+    } catch (e, stack) {
+      debugPrint("CancelablePeriodicTimer callback error: $e\n$stack");
+    }
+    if (!_cancelled) {
+      _schedule(duration);
+    }
+  }
+
+  @override
+  void cancel() {
+    _cancelled = true;
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  @override
+  bool get isActive => !_cancelled;
+
+  @override
+  int get tick => _tick;
+}
+
 Timer periodic_immediate(Duration duration, Future<void> Function() callback) {
-  Future.delayed(Duration.zero, callback);
-  return Timer.periodic(duration, (timer) async {
-    await callback();
-  });
+  return CancelablePeriodicTimer(duration, callback);
 }
 
 class ServerConfig {

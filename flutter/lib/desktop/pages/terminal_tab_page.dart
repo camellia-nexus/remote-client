@@ -410,61 +410,31 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    if (Get.isRegistered<DesktopTabController>()) {
+      Get.delete<DesktopTabController>();
+    }
     super.dispose();
   }
 
-  Future<void> _restoreSessions(String arguments) async {
-    Map<String, dynamic>? args;
-    try {
-      args = jsonDecode(arguments) as Map<String, dynamic>;
-    } catch (e) {
-      debugPrint("Error parsing JSON arguments in _restoreSessions: $e");
-      return;
-    }
-    final persistentSessions =
-        args['persistent_sessions'] as List<dynamic>? ?? [];
-    final sortedSessions = persistentSessions.whereType<int>().toList()..sort();
-    var peerId = args['peer_id'] as String? ?? '';
-    if (peerId.isEmpty) {
-      if (tabController.state.value.tabs.isEmpty ||
-          tabController.state.value.selected >=
-              tabController.state.value.tabs.length) {
-        debugPrint('[TerminalTabPage] Skip restore: no selected tab');
-        return;
-      }
-      final currentTab = tabController.state.value.selectedTabInfo;
-      final parsed = _parseTabKey(currentTab.key);
-      if (parsed == null) return;
-      peerId = parsed.$1;
-    }
-    final existingTerminalIds = tabController.state.value.tabs
-        .map((tab) => _parseTabKey(tab.key))
-        .where((parsed) => parsed != null && parsed.$1 == peerId)
-        .map((parsed) => parsed!.$2)
-        .toSet();
-    if (existingTerminalIds.isEmpty) {
-      debugPrint(
-        '[TerminalTabPage] Skip restore: no seed tab for peer $peerId',
+  final TerminalSessionRestoreCoordinator _restoreCoordinator =
+      TerminalSessionRestoreCoordinator();
+
+  @visibleForTesting
+  bool get isRestoringSessions => _restoreCoordinator.isRestoringSessions;
+
+  @visibleForTesting
+  Future<void> restoreSessionsForTesting(String arguments) =>
+      _restoreSessions(arguments);
+
+  Future<void> _restoreSessions(String arguments) =>
+      _restoreCoordinator.restoreSessions(
+        arguments: arguments,
+        isMounted: () => mounted,
+        tabController: tabController,
+        onAddTerminal: (peerId, terminalId) =>
+            _addNewTerminal(peerId, terminalId: terminalId),
+        parseTabKey: _parseTabKey,
       );
-      return;
-    }
-    for (final terminalId in sortedSessions) {
-      if (!existingTerminalIds.add(terminalId)) {
-        continue;
-      }
-      _addNewTerminal(peerId, terminalId: terminalId);
-      // A delay is required to ensure the UI has sufficient time to update
-      // before adding the next terminal. Without this delay, `_TerminalPageState::dispose()`
-      // may be called prematurely while the tab widget is still in the tab controller.
-      // This behavior is likely due to a race condition between the UI rendering lifecycle
-      // and the addition of new tabs. Attempts to use `_TerminalPageState::addPostFrameCallback()`
-      // to wait for the previous page to be ready were unsuccessful, as the observed call sequence is:
-      // `initState() 2 -> dispose() 2 -> postFrameCallback() 2`, followed by `initState() 3`.
-      // The `Future.delayed` approach mitigates this issue by introducing a buffer period,
-      // allowing the UI to stabilize before proceeding.
-      await Future.delayed(const Duration(milliseconds: 300));
-    }
-  }
 
   bool _handleKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent) {
@@ -680,6 +650,73 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         await _closeAllTabs();
       }
       return res;
+    }
+  }
+}
+
+class TerminalSessionRestoreCoordinator {
+  bool _restoringSessions = false;
+
+  bool get isRestoringSessions => _restoringSessions;
+
+  Future<void> restoreSessions({
+    required String arguments,
+    required bool Function() isMounted,
+    required DesktopTabController tabController,
+    required void Function(String peerId, int terminalId) onAddTerminal,
+    required (String, int)? Function(String tabKey) parseTabKey,
+    Future<void> Function(Duration duration)? delayOverride,
+  }) async {
+    if (!isMounted() || _restoringSessions) return;
+    _restoringSessions = true;
+    try {
+      Map<String, dynamic>? args;
+      try {
+        args = jsonDecode(arguments) as Map<String, dynamic>;
+      } catch (e) {
+        debugPrint("Error parsing JSON arguments in _restoreSessions: $e");
+        return;
+      }
+      final persistentSessions =
+          args['persistent_sessions'] as List<dynamic>? ?? [];
+      final sortedSessions = persistentSessions.whereType<int>().toList()
+        ..sort();
+      var peerId = args['peer_id'] as String? ?? '';
+      if (peerId.isEmpty) {
+        if (tabController.state.value.tabs.isEmpty ||
+            tabController.state.value.selected >=
+                tabController.state.value.tabs.length) {
+          debugPrint('[TerminalTabPage] Skip restore: no selected tab');
+          return;
+        }
+        final currentTab = tabController.state.value.selectedTabInfo;
+        final parsed = parseTabKey(currentTab.key);
+        if (parsed == null) return;
+        peerId = parsed.$1;
+      }
+      final existingTerminalIds = tabController.state.value.tabs
+          .map((tab) => parseTabKey(tab.key))
+          .where((parsed) => parsed != null && parsed.$1 == peerId)
+          .map((parsed) => parsed!.$2)
+          .toSet();
+      if (existingTerminalIds.isEmpty) {
+        debugPrint(
+          '[TerminalTabPage] Skip restore: no seed tab for peer $peerId',
+        );
+        return;
+      }
+      for (final terminalId in sortedSessions) {
+        if (!isMounted()) return;
+        if (!existingTerminalIds.add(terminalId)) {
+          continue;
+        }
+        onAddTerminal(peerId, terminalId);
+        final delayFunc = delayOverride ?? Future.delayed;
+        await delayFunc(const Duration(milliseconds: 300));
+        if (!isMounted()) return;
+      }
+    } finally {
+      _restoringSessions = false;
     }
   }
 }
