@@ -310,11 +310,8 @@ pub fn session_take_screenshot(session_id: SessionID, display: usize) {
     }
 }
 
-pub fn session_handle_screenshot(
-    #[allow(unused_variables)] session_id: SessionID,
-    action: String,
-) -> String {
-    crate::client::screenshot::handle_screenshot(action)
+pub fn session_handle_screenshot(session_id: SessionID, action: String) -> String {
+    crate::client::screenshot::handle_session_screenshot(&session_id.to_string(), action)
 }
 
 #[frb(sync)]

@@ -895,6 +895,10 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().is_restarting_remote_device()
     }
 
+    pub fn clear_restarting_remote_device(&self) {
+        self.lc.write().unwrap().clear_restarting_remote_device();
+    }
+
     #[inline]
     pub fn peer_platform(&self) -> String {
         self.lc.read().unwrap().info.platform.clone()

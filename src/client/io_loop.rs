@@ -2248,6 +2248,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     Some(misc::Union::CloseReason(c)) => {
                         self.sent_close_reason = true; // The controlled end will close, no need to send close reason
+                        self.handler.clear_restarting_remote_device();
                         self.handler.msgbox("error", "Connection Error", &c, "");
                         return false;
                     }
@@ -2450,7 +2451,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.set_platform_additions(&pi.platform_additions);
                 }
                 Some(message::Union::ScreenshotResponse(response)) => {
-                    crate::client::screenshot::set_screenshot(response.data);
+                    crate::client::screenshot::set_session_screenshot(&response.sid, response.data);
                     self.handler
                         .handle_screenshot_resp(response.sid, response.msg);
                 }
@@ -2568,6 +2569,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     },
                     "",
                 );
+                self.update_block_input_state(true);
             }
             _ => {}
         }

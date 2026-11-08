@@ -400,7 +400,11 @@ class AbModel {
   bool _inFlight = false;
   int _generation = 0;
 
-  bool get isPolling => _pollerTimer != null && _pollerTimer!.isActive && !_isStopped && !_disposed;
+  bool get isPolling =>
+      _pollerTimer != null &&
+      _pollerTimer!.isActive &&
+      !_isStopped &&
+      !_disposed;
   bool get isDisposed => _disposed;
 
   void startPoller() {
@@ -903,7 +907,17 @@ class AbModel {
   Future<bool> setTagColor(String tag, Color color) =>
       current.setTagColor(tag, color);
 
-  Future<bool> deleteTag(String tag) => current.deleteTag(tag);
+  Future<bool> deleteTag(String tag) async {
+    final book = current;
+    final epoch = _mutationViewEpoch;
+    final result = await book.deleteTag(tag);
+    if (result && epoch == _mutationViewEpoch && identical(book, current)) {
+      book.selectedTags.value = book.selectedTags
+          .where((t) => t != tag)
+          .toList();
+    }
+    return result;
+  }
 
   // #region sync from recent
   Future<void> _syncFromRecent({bool push = true}) async {

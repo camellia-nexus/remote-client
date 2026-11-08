@@ -2408,11 +2408,33 @@ trackpadSpeedDialog(SessionID sessionId, FFI ffi) async {
   );
 }
 
-void deleteConfirmDialog(Function onSubmit, String title) async {
+void deleteConfirmDialog(
+  FutureOr<dynamic> Function() onSubmit,
+  String title,
+) async {
+  bool isInProgress = false;
   gFFI.dialogManager.show((setState, close, context) {
     submit() async {
-      await onSubmit();
-      close();
+      if (isInProgress) return;
+      setState(() {
+        isInProgress = true;
+      });
+      try {
+        final res = await onSubmit();
+        if (res == false) {
+          setState(() {
+            isInProgress = false;
+          });
+          return;
+        }
+        close();
+      } catch (e) {
+        debugPrint('deleteConfirmDialog error: $e');
+        showToast(translate('Failed'));
+        setState(() {
+          isInProgress = false;
+        });
+      }
     }
 
     return CustomAlertDialog(
@@ -2438,7 +2460,11 @@ void deleteConfirmDialog(Function onSubmit, String title) async {
           onPressed: close,
           isOutline: true,
         ),
-        dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+        dialogButton(
+          "OK",
+          icon: Icon(Icons.done_rounded),
+          onPressed: isInProgress ? null : submit,
+        ),
       ],
       onSubmit: submit,
       onCancel: close,
@@ -2448,7 +2474,7 @@ void deleteConfirmDialog(Function onSubmit, String title) async {
 
 void editAbTagDialog(
   List<dynamic> currentTags,
-  Function(List<dynamic>) onSubmit,
+  FutureOr<dynamic> Function(List<dynamic>) onSubmit,
 ) {
   var isInProgress = false;
 
@@ -2457,11 +2483,26 @@ void editAbTagDialog(
 
   gFFI.dialogManager.show((setState, close, context) {
     submit() async {
+      if (isInProgress) return;
       setState(() {
         isInProgress = true;
       });
-      await onSubmit(selectedTag);
-      close();
+      try {
+        final res = await onSubmit(selectedTag);
+        if (res == false) {
+          setState(() {
+            isInProgress = false;
+          });
+          return;
+        }
+        close();
+      } catch (e) {
+        debugPrint('editAbTagDialog error: $e');
+        showToast(translate('Failed'));
+        setState(() {
+          isInProgress = false;
+        });
+      }
     }
 
     return CustomAlertDialog(
@@ -2496,7 +2537,7 @@ void editAbTagDialog(
       ),
       actions: [
         dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("OK", onPressed: submit),
+        dialogButton("OK", onPressed: isInProgress ? null : submit),
       ],
       onSubmit: submit,
       onCancel: close,
@@ -2510,12 +2551,37 @@ void editAbPeerNoteDialog(String id) {
   var controller = TextEditingController(text: currentNote);
 
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      controller.dispose();
+      close();
+    }
+
     submit() async {
+      if (isInProgress) return;
       setState(() {
         isInProgress = true;
       });
-      await gFFI.abModel.changeNote(id: id, note: controller.text);
-      close();
+      try {
+        final ok = await gFFI.abModel.changeNote(id: id, note: controller.text);
+        if (ok) {
+          showToast(translate('Successful'));
+          safeClose();
+        } else {
+          showToast(translate('Failed'));
+          setState(() {
+            isInProgress = false;
+          });
+        }
+      } catch (e) {
+        debugPrint('editAbPeerNoteDialog error: $e');
+        showToast(translate('Failed'));
+        setState(() {
+          isInProgress = false;
+        });
+      }
     }
 
     return CustomAlertDialog(
@@ -2536,11 +2602,11 @@ void editAbPeerNoteDialog(String id) {
         ],
       ),
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("OK", onPressed: submit),
+        dialogButton("Cancel", onPressed: safeClose, isOutline: true),
+        dialogButton("OK", onPressed: isInProgress ? null : submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }
@@ -2548,27 +2614,45 @@ void editAbPeerNoteDialog(String id) {
 void renameDialog({
   required String oldName,
   FormFieldValidator<String>? validator,
-  required ValueChanged<String> onSubmit,
+  required FutureOr<dynamic> Function(String) onSubmit,
   Function? onCancel,
 }) async {
   RxBool isInProgress = false.obs;
   var controller = TextEditingController(text: oldName);
   final formKey = GlobalKey<FormState>();
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      controller.dispose();
+      close();
+    }
+
     submit() async {
+      if (isInProgress.value) return;
       String text = controller.text.trim();
       if (validator != null && formKey.currentState?.validate() == false) {
         return;
       }
       isInProgress.value = true;
-      onSubmit(text);
-      close();
-      isInProgress.value = false;
+      try {
+        final res = await onSubmit(text);
+        if (res == false) {
+          isInProgress.value = false;
+          return;
+        }
+        safeClose();
+      } catch (e) {
+        debugPrint('renameDialog error: $e');
+        showToast(translate('Failed'));
+        isInProgress.value = false;
+      }
     }
 
     cancel() {
       onCancel?.call();
-      close();
+      safeClose();
     }
 
     return CustomAlertDialog(
@@ -2608,7 +2692,11 @@ void renameDialog({
           onPressed: cancel,
           isOutline: true,
         ),
-        dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+        dialogButton(
+          "OK",
+          icon: Icon(Icons.done_rounded),
+          onPressed: isInProgress.value ? null : submit,
+        ),
       ],
       onSubmit: submit,
       onCancel: cancel,

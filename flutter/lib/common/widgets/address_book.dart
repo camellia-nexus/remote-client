@@ -951,11 +951,20 @@ class AddressBookTag extends StatelessWidget {
             }
             return null;
           },
-          onSubmit: (String newName) {
+          onSubmit: (String newName) async {
             if (name != newName) {
-              gFFI.abModel.renameTag(name, newName);
+              final ok = await gFFI.abModel.renameTag(name, newName);
+              if (ok) {
+                showToast(translate('Successful'));
+                Future.delayed(Duration.zero, () => Get.back());
+                return true;
+              } else {
+                showToast(translate('Failed'));
+                return false;
+              }
             }
             Future.delayed(Duration.zero, () => Get.back());
+            return true;
           },
           onCancel: () {
             Future.delayed(Duration.zero, () => Get.back());
@@ -986,8 +995,13 @@ class AddressBookTag extends StatelessWidget {
           model.setTagColor(name, newColor);
         }
       }),
-      getEntry(translate("Delete"), () {
-        gFFI.abModel.deleteTag(name);
+      getEntry(translate("Delete"), () async {
+        final ok = await gFFI.abModel.deleteTag(name);
+        if (ok) {
+          showToast(translate('Successful'));
+        } else {
+          showToast(translate('Failed'));
+        }
         Future.delayed(Duration.zero, () => Get.back());
       }),
     ];

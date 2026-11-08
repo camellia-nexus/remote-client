@@ -1430,6 +1430,11 @@ impl Connection {
                         let (ok, msg) = crate::platform::block_input(true);
                         if ok {
                             block_input_mode = true;
+                            Self::send_block_input_error(
+                                &tx,
+                                back_notification::BlockInputState::BlkOnSucceeded,
+                                "".to_string(),
+                            );
                         } else {
                             Self::send_block_input_error(
                                 &tx,
@@ -1442,6 +1447,11 @@ impl Connection {
                         let (ok, msg) = crate::platform::block_input(false);
                         if ok {
                             block_input_mode = false;
+                            Self::send_block_input_error(
+                                &tx,
+                                back_notification::BlockInputState::BlkOffSucceeded,
+                                "".to_string(),
+                            );
                         } else {
                             Self::send_block_input_error(
                                 &tx,
@@ -4948,17 +4958,54 @@ impl Connection {
                     Some(misc::Union::RestartRemoteDevice(_)) => {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         if self.restart {
+                            let mut restart_err: Option<String> = None;
                             // force_reboot, not work on linux vm and macos 14
                             #[cfg(any(target_os = "linux", target_os = "windows"))]
                             match crate::platform::power::force_reboot() {
                                 Ok(_) => log::info!("Restart by the peer"),
-                                Err(e) => log::error!("Failed to restart: {}", e),
+                                Err(e) => {
+                                    log::error!("Failed to restart: {}", e);
+                                    restart_err = Some(e.to_string());
+                                }
                             }
                             #[cfg(any(target_os = "linux", target_os = "macos"))]
                             match crate::platform::power::reboot() {
                                 Ok(_) => log::info!("Restart by the peer"),
-                                Err(e) => log::error!("Failed to restart: {}", e),
+                                Err(e) => {
+                                    log::error!("Failed to restart: {}", e);
+                                    if restart_err.is_none() {
+                                        restart_err = Some(e.to_string());
+                                    }
+                                }
                             }
+                            if let Some(e) = restart_err {
+                                let mut misc = Misc::new();
+                                misc.set_close_reason(format!(
+                                    "Failed to restart remote device: {e}"
+                                ));
+                                let mut msg_out = Message::new();
+                                msg_out.set_misc(misc);
+                                self.send(msg_out).await;
+                            }
+                        } else {
+                            log::warn!("RestartRemoteDevice rejected: permission disabled");
+                            let mut misc = Misc::new();
+                            misc.set_close_reason(
+                                "Remote restart denied: no permission".to_string(),
+                            );
+                            let mut msg_out = Message::new();
+                            msg_out.set_misc(misc);
+                            self.send(msg_out).await;
+                        }
+                        #[cfg(any(target_os = "android", target_os = "ios"))]
+                        {
+                            let mut misc = Misc::new();
+                            misc.set_close_reason(
+                                "Remote restart not supported on mobile host".to_string(),
+                            );
+                            let mut msg_out = Message::new();
+                            msg_out.set_misc(misc);
+                            self.send(msg_out).await;
                         }
                     }
                     #[cfg(windows)]

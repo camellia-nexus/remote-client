@@ -606,7 +606,9 @@ class _PeerTabPageState extends State<PeerTabPage>
       context: context,
       toolTip: translate('Delete'),
       onTap: () {
-        final targetTab = model.selectionTab >= 0 ? model.selectionTab : model.currentTab;
+        final targetTab = model.selectionTab >= 0
+            ? model.selectionTab
+            : model.currentTab;
         if (targetTab == PeerTabIndex.group.index) return;
         final selectedSnapshot = List<Peer>.from(model.selectedPeers);
         if (selectedSnapshot.isEmpty) return;
@@ -614,7 +616,7 @@ class _PeerTabPageState extends State<PeerTabPage>
         onSubmit() async {
           if (model.currentTab != targetTab) {
             gFFI.peerTabModel.setMultiSelectionMode(false);
-            return;
+            return false;
           }
           final peers = selectedSnapshot;
           switch (targetTab) {
@@ -639,13 +641,25 @@ class _PeerTabPageState extends State<PeerTabPage>
               bind.mainLoadLanPeers();
               break;
             case 3:
-              await gFFI.abModel.deletePeers(peers.map((p) => p.id).toList());
+              final ok = await gFFI.abModel.deletePeers(
+                peers.map((p) => p.id).toList(),
+              );
+              if (ok) {
+                gFFI.peerTabModel.setMultiSelectionMode(false);
+                showToast(translate('Successful'));
+              } else {
+                showToast(translate('Failed'));
+                return false;
+              }
               break;
             default:
               break;
           }
-          gFFI.peerTabModel.setMultiSelectionMode(false);
-          if (targetTab != 3) showToast(translate('Successful'));
+          if (targetTab != 3) {
+            gFFI.peerTabModel.setMultiSelectionMode(false);
+            showToast(translate('Successful'));
+          }
+          return true;
         }
 
         deleteConfirmDialog(onSubmit, translate('Delete'));
@@ -713,12 +727,18 @@ class _PeerTabPageState extends State<PeerTabPage>
         onTap: () {
           editAbTagDialog(List.empty(), (selectedTags) async {
             final peers = List<Peer>.from(model.selectedPeers);
-            await gFFI.abModel.changeTagForPeers(
+            final ok = await gFFI.abModel.changeTagForPeers(
               peers.map((p) => p.id).toList(),
               selectedTags,
             );
-            model.setMultiSelectionMode(false);
-            showToast(translate('Successful'));
+            if (ok) {
+              model.setMultiSelectionMode(false);
+              showToast(translate('Successful'));
+              return true;
+            } else {
+              showToast(translate('Failed'));
+              return false;
+            }
           });
         },
         child: Icon(Icons.tag),

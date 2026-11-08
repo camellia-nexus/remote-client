@@ -848,14 +848,27 @@ abstract class BasePeerCard extends StatelessWidget {
           onSubmit: (String newName) async {
             if (newName != oldName) {
               if (tab == PeerTabIndex.ab) {
-                await gFFI.abModel.changeAlias(id: id, alias: newName);
-                await bind.mainSetPeerAlias(id: id, alias: newName);
+                final ok = await gFFI.abModel.changeAlias(
+                  id: id,
+                  alias: newName,
+                );
+                if (ok) {
+                  await bind.mainSetPeerAlias(id: id, alias: newName);
+                  showToast(translate('Successful'));
+                  _update();
+                  return true;
+                } else {
+                  showToast(translate('Failed'));
+                  return false;
+                }
               } else {
                 await bind.mainSetPeerAlias(id: id, alias: newName);
                 showToast(translate('Successful'));
                 _update();
+                return true;
               }
             }
+            return true;
           },
         );
       },
@@ -1303,7 +1316,14 @@ class AddressBookPeerCard extends BasePeerCard {
           Text(translate('Edit Tag'), style: style),
       proc: () {
         editAbTagDialog(gFFI.abModel.getPeerTags(id), (selectedTag) async {
-          await gFFI.abModel.changeTagForPeers([id], selectedTag);
+          final ok = await gFFI.abModel.changeTagForPeers([id], selectedTag);
+          if (ok) {
+            showToast(translate('Successful'));
+            return true;
+          } else {
+            showToast(translate('Failed'));
+            return false;
+          }
         });
       },
       padding: super.menuPadding,
