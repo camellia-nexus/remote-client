@@ -481,16 +481,21 @@ class _FileManagerViewState extends State<FileManagerView> {
   FFI get _ffi => widget._ffi;
   SelectedItems get selectedItems => controller.selectedItems;
 
+  StreamSubscription<FileDirectory>? _directorySubscription;
+
   @override
   void initState() {
     super.initState();
     // register location listener
     _locationNode.addListener(onLocationFocusChanged);
-    controller.directory.listen((e) => breadCrumbScrollToEnd());
+    _directorySubscription =
+        controller.directory.listen((e) => breadCrumbScrollToEnd());
   }
 
   @override
   void dispose() {
+    _directorySubscription?.cancel();
+    _directorySubscription = null;
     _locationNode.removeListener(onLocationFocusChanged);
     _locationNode.dispose();
     _keyboardNode.dispose();

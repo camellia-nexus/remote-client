@@ -58,6 +58,7 @@ lazy_static::lazy_static! {
         video_conn_count: 0,
     }));
     static ref ASYNC_JOB_STATUS : Arc<Mutex<String>> = Default::default();
+    static ref CHANGE_ID_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static ref TEMPORARY_PASSWD : Arc<Mutex<String>> = Arc::new(Mutex::new("".to_owned()));
     static ref IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS : Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 }
@@ -906,10 +907,11 @@ pub fn reset_async_job_status() {
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn change_id(id: String) {
+    let gen = CHANGE_ID_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     reset_async_job_status();
     let old_id = get_id();
     std::thread::spawn(move || {
-        change_id_shared(id, old_id);
+        change_id_shared_with_generation(id, old_id, gen);
     });
 }
 
@@ -1500,8 +1502,27 @@ const UNKNOWN_ERROR: &'static str = "Unknown error";
 #[inline]
 #[tokio::main(flavor = "current_thread")]
 pub async fn change_id_shared(id: String, old_id: String) -> String {
+    let gen = CHANGE_ID_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+    change_id_shared_inner(id, old_id, gen).await
+}
+
+#[inline]
+#[tokio::main(flavor = "current_thread")]
+pub async fn change_id_shared_with_generation(id: String, old_id: String, gen: u64) -> String {
+    change_id_shared_inner(id, old_id, gen).await
+}
+
+async fn change_id_shared_inner(id: String, old_id: String, gen: u64) -> String {
     let res = change_id_shared_(id, old_id).await.to_owned();
-    *ASYNC_JOB_STATUS.lock().unwrap() = res.clone();
+    if gen == CHANGE_ID_GENERATION.load(std::sync::atomic::Ordering::SeqCst) {
+        *ASYNC_JOB_STATUS.lock().unwrap() = res.clone();
+    } else {
+        log::info!(
+            "Discarding stale change_id result for generation {} (current: {})",
+            gen,
+            CHANGE_ID_GENERATION.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
     res
 }
 
@@ -1558,7 +1579,10 @@ pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
     let err = *err.lock().unwrap();
     if err.is_empty() {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        crate::ipc::set_config_async("id", id.to_owned()).await.ok();
+        if let Err(e) = crate::ipc::set_config_async("id", id.to_owned()).await {
+            log::error!("Failed to persist changed id to config: {e}");
+            return UNKNOWN_ERROR;
+        }
         #[cfg(any(target_os = "android", target_os = "ios"))]
         {
             Config::set_key_confirmed(false);

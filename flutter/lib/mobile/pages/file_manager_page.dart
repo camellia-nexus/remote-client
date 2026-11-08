@@ -481,10 +481,22 @@ class _FileManagerViewState extends State<FileManagerView> {
   FileController get controller => widget.controller;
   SelectedItems get _selectedItems => widget.controller.selectedItems;
 
+  StreamSubscription<FileDirectory>? _directorySubscription;
+
   @override
   void initState() {
     super.initState();
-    controller.directory.listen((e) => breadCrumbScrollToEnd());
+    _directorySubscription =
+        controller.directory.listen((e) => breadCrumbScrollToEnd());
+  }
+
+  @override
+  void dispose() {
+    _directorySubscription?.cancel();
+    _directorySubscription = null;
+    _breadCrumbScroller.dispose();
+    _listScrollController.dispose();
+    super.dispose();
   }
 
   @override

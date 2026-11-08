@@ -94,6 +94,7 @@ class FileModel {
 
   Future<void> close() async {
     await evtLoop.close();
+    fileFetcher.close();
     parent.target?.dialogManager.dismissAll();
     await localController.close();
     await remoteController.close();
@@ -1504,9 +1505,14 @@ class JobResultListener<T> {
 
 class FileFetcher {
   // Map<String,Completer<FileDirectory>> localTasks = {}; // now we only use read local dir sync
-  Map<String, Completer<FileDirectory>> remoteTasks = {};
-  Map<String, Completer<List<FileDirectory>>> remoteEmptyDirsTasks = {};
-  Map<int, Completer<FileDirectory>> readRecursiveTasks = {};
+  final Map<String, Completer<FileDirectory>> remoteTasks = {};
+  final Map<String, Completer<List<FileDirectory>>> remoteEmptyDirsTasks = {};
+  final Map<int, Completer<FileDirectory>> readRecursiveTasks = {};
+
+  final Map<String, Timer> _remoteTimers = {};
+  final Map<String, Timer> _remoteEmptyDirsTimers = {};
+  final Map<int, Timer> _readRecursiveTimers = {};
+  bool _closed = false;
 
   final GetSessionID getSessionID;
   SessionID get sessionId => getSessionID();
@@ -1517,58 +1523,90 @@ class FileFetcher {
     bool isLocal,
     String path,
   ) {
+    if (_closed) {
+      throw "FileFetcher is closed";
+    }
     // final jobs = isLocal?localJobs:remoteJobs; // maybe we will use read local dir async later
     final tasks = remoteEmptyDirsTasks; // bypass now
     if (tasks.containsKey(path)) {
-      throw "Failed to registerReadEmptyDirsTask, already have same read job";
+      _remoteEmptyDirsTimers.remove(path)?.cancel();
+      final old = tasks.remove(path);
+      if (old != null && !old.isCompleted) {
+        old.completeError("Superseded by newer readEmptyDirs task for $path");
+      }
     }
     final c = Completer<List<FileDirectory>>();
     tasks[path] = c;
 
-    Timer(Duration(seconds: 2), () {
-      tasks.remove(path);
-      if (c.isCompleted) return;
-      c.completeError("Failed to read empty dirs, timeout");
+    _remoteEmptyDirsTimers[path] = Timer(const Duration(seconds: 2), () {
+      _remoteEmptyDirsTimers.remove(path);
+      if (identical(tasks[path], c)) {
+        tasks.remove(path);
+      }
+      if (!c.isCompleted) {
+        c.completeError("Failed to read empty dirs, timeout");
+      }
     });
     return c.future;
   }
 
   Future<FileDirectory> registerReadTask(bool isLocal, String path) {
+    if (_closed) {
+      throw "FileFetcher is closed";
+    }
     // final jobs = isLocal?localJobs:remoteJobs; // maybe we will use read local dir async later
     final tasks = remoteTasks; // bypass now
     if (tasks.containsKey(path)) {
-      throw "Failed to registerReadTask, already have same read job";
+      _remoteTimers.remove(path)?.cancel();
+      final old = tasks.remove(path);
+      if (old != null && !old.isCompleted) {
+        old.completeError("Superseded by newer read task for $path");
+      }
     }
     final c = Completer<FileDirectory>();
     tasks[path] = c;
 
-    Timer(Duration(seconds: 2), () {
-      tasks.remove(path);
-      if (c.isCompleted) return;
-      c.completeError("Failed to read dir, timeout");
+    _remoteTimers[path] = Timer(const Duration(seconds: 2), () {
+      _remoteTimers.remove(path);
+      if (identical(tasks[path], c)) {
+        tasks.remove(path);
+      }
+      if (!c.isCompleted) {
+        c.completeError("Failed to read dir, timeout");
+      }
     });
     return c.future;
   }
 
   Future<FileDirectory> registerReadRecursiveTask(int actID) {
+    if (_closed) {
+      throw "FileFetcher is closed";
+    }
     final tasks = readRecursiveTasks;
     if (tasks.containsKey(actID)) {
-      throw "Failed to registerRemoveTask, already have same ReadRecursive job";
+      _readRecursiveTimers.remove(actID)?.cancel();
+      final old = tasks.remove(actID);
+      if (old != null && !old.isCompleted) {
+        old.completeError("Superseded by newer ReadRecursive task for $actID");
+      }
     }
     final c = Completer<FileDirectory>();
     tasks[actID] = c;
 
-    Timer(Duration(seconds: 2), () {
-      tasks.remove(actID);
-      if (c.isCompleted) return;
-      c.completeError("Failed to read dir, timeout");
+    _readRecursiveTimers[actID] = Timer(const Duration(seconds: 2), () {
+      _readRecursiveTimers.remove(actID);
+      if (identical(tasks[actID], c)) {
+        tasks.remove(actID);
+      }
+      if (!c.isCompleted) {
+        c.completeError("Failed to read dir, timeout");
+      }
     });
     return c.future;
   }
 
   tryCompleteEmptyDirsTask(String? msg, String? isLocalStr) {
-    if (msg == null || isLocalStr == null) return;
-    late final Map<String, Completer<List<FileDirectory>>> tasks;
+    if (msg == null || isLocalStr == null || _closed) return;
     try {
       final map = jsonDecode(msg);
       final String path = map["path"];
@@ -1577,8 +1615,8 @@ class FileFetcher {
           .map((fdJson) => FileDirectory.fromJson(fdJson))
           .toList();
 
-      tasks = remoteEmptyDirsTasks;
-      final completer = tasks.remove(path);
+      _remoteEmptyDirsTimers.remove(path)?.cancel();
+      final completer = remoteEmptyDirsTasks.remove(path);
 
       completer?.complete(fds);
     } catch (e) {
@@ -1587,21 +1625,20 @@ class FileFetcher {
   }
 
   tryCompleteTask(String? msg, String? isLocalStr) {
-    if (msg == null || isLocalStr == null) return;
-    late final Map<Object, Completer<FileDirectory>> tasks;
+    if (msg == null || isLocalStr == null || _closed) return;
     try {
       final fd = FileDirectory.fromJson(jsonDecode(msg));
       if (fd.id > 0) {
         // fd.id > 0 is result for read recursive
         // to-do later,will be better if every fetch use ID,so that there will only one task map for read and recursive read
-        tasks = readRecursiveTasks;
-        final completer = tasks.remove(fd.id);
+        _readRecursiveTimers.remove(fd.id)?.cancel();
+        final completer = readRecursiveTasks.remove(fd.id);
         completer?.complete(fd);
       } else if (fd.path.isNotEmpty) {
         // result for normal read dir
         // final jobs = isLocal?localJobs:remoteJobs; // maybe we will use read local dir async later
-        tasks = remoteTasks; // bypass now
-        final completer = tasks.remove(fd.path);
+        _remoteTimers.remove(fd.path)?.cancel();
+        final completer = remoteTasks.remove(fd.path);
         completer?.complete(fd);
       }
     } catch (e) {
@@ -1612,6 +1649,7 @@ class FileFetcher {
   // Complete a pending recursive read task with an error.
   // See FileModel.handleJobError() for why this is necessary.
   void tryCompleteRecursiveTaskWithError(int id, String error) {
+    _readRecursiveTimers.remove(id)?.cancel();
     final completer = readRecursiveTasks.remove(id);
     if (completer != null && !completer.isCompleted) {
       completer.completeError(error);
@@ -1623,11 +1661,56 @@ class FileFetcher {
     String error,
     bool emptyDirs,
   ) {
-    final tasks = emptyDirs ? remoteEmptyDirsTasks : remoteTasks;
-    final completer = tasks.remove(path);
-    if (completer != null && !completer.isCompleted) {
-      completer.completeError(error);
+    if (emptyDirs) {
+      _remoteEmptyDirsTimers.remove(path)?.cancel();
+      final completer = remoteEmptyDirsTasks.remove(path);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(error);
+      }
+    } else {
+      _remoteTimers.remove(path)?.cancel();
+      final completer = remoteTasks.remove(path);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(error);
+      }
     }
+  }
+
+  void close() {
+    _closed = true;
+    for (final timer in _remoteTimers.values) {
+      timer.cancel();
+    }
+    _remoteTimers.clear();
+    for (final timer in _remoteEmptyDirsTimers.values) {
+      timer.cancel();
+    }
+    _remoteEmptyDirsTimers.clear();
+    for (final timer in _readRecursiveTimers.values) {
+      timer.cancel();
+    }
+    _readRecursiveTimers.clear();
+
+    for (final c in remoteTasks.values) {
+      if (!c.isCompleted) {
+        c.completeError("FileFetcher closed");
+      }
+    }
+    remoteTasks.clear();
+
+    for (final c in remoteEmptyDirsTasks.values) {
+      if (!c.isCompleted) {
+        c.completeError("FileFetcher closed");
+      }
+    }
+    remoteEmptyDirsTasks.clear();
+
+    for (final c in readRecursiveTasks.values) {
+      if (!c.isCompleted) {
+        c.completeError("FileFetcher closed");
+      }
+    }
+    readRecursiveTasks.clear();
   }
 
   Future<List<FileDirectory>> readEmptyDirs(

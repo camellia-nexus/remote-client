@@ -78,6 +78,8 @@ void changeIdDialog() {
   var newId = "";
   var msg = "";
   var isInProgress = false;
+  var isCancelled = false;
+  var dialogGen = 0;
   TextEditingController controller = TextEditingController();
   final RxString rxId = controller.text.trim().obs;
 
@@ -88,7 +90,16 @@ void changeIdDialog() {
   ];
 
   gFFI.dialogManager.show((setState, close, context) {
+    void handleCancel() {
+      isCancelled = true;
+      close();
+      try {
+        controller.dispose();
+      } catch (_) {}
+    }
+
     submit() async {
+      if (isInProgress || isCancelled) return;
       debugPrint("onSubmit");
       newId = controller.text.trim();
 
@@ -102,28 +113,48 @@ void changeIdDialog() {
         return;
       }
 
+      final currentGen = ++dialogGen;
       setState(() {
         msg = "";
         isInProgress = true;
-        bind.mainChangeId(newId: newId);
       });
 
-      var status = await bind.mainGetAsyncStatus();
-      while (status == " ") {
-        await Future.delayed(const Duration(milliseconds: 100));
-        status = await bind.mainGetAsyncStatus();
+      try {
+        await bind.mainChangeId(newId: newId);
+        var status = await bind.mainGetAsyncStatus();
+        int pollCount = 0;
+        const maxPolls = 150; // 15 seconds bounded polling
+        while (status == " " &&
+            !isCancelled &&
+            currentGen == dialogGen &&
+            pollCount < maxPolls) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (isCancelled || currentGen != dialogGen) return;
+          status = await bind.mainGetAsyncStatus();
+          pollCount++;
+        }
+        if (isCancelled || currentGen != dialogGen) return;
+        if (pollCount >= maxPolls) {
+          status = 'Timeout';
+        }
+        if (status.isEmpty) {
+          // ok
+          handleCancel();
+          return;
+        }
+        setState(() {
+          isInProgress = false;
+          msg = (isDesktop || isWebDesktop)
+              ? '${translate('Prompt')}: ${translate(status)}'
+              : translate(status);
+        });
+      } catch (e) {
+        if (isCancelled || currentGen != dialogGen) return;
+        setState(() {
+          isInProgress = false;
+          msg = e.toString();
+        });
       }
-      if (status.isEmpty) {
-        // ok
-        close();
-        return;
-      }
-      setState(() {
-        isInProgress = false;
-        msg = (isDesktop || isWebDesktop)
-            ? '${translate('Prompt')}: ${translate(status)}'
-            : translate(status);
-      });
     }
 
     return CustomAlertDialog(
@@ -186,11 +217,11 @@ void changeIdDialog() {
         ],
       ),
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("OK", onPressed: submit),
+        dialogButton("Cancel", onPressed: handleCancel, isOutline: true),
+        dialogButton("OK", onPressed: isInProgress ? null : submit),
       ],
-      onSubmit: submit,
-      onCancel: close,
+      onSubmit: isInProgress ? null : submit,
+      onCancel: handleCancel,
     );
   });
 }

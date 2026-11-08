@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:draggable_float_widget/draggable_float_widget.dart';
 import 'package:flutter/material.dart';
@@ -32,11 +33,11 @@ class MessageKey {
   bool operator ==(other) {
     return other is MessageKey &&
         other.peerId == peerId &&
-        other.isOut == isOut;
+        other.connId == connId;
   }
 
   @override
-  int get hashCode => peerId.hashCode ^ isOut.hashCode;
+  int get hashCode => Object.hash(peerId, connId);
 }
 
 class MessageBody {
@@ -339,9 +340,11 @@ class ChatModel with ChangeNotifier {
     if (key.connId == clientModeID) {
       peerName = parent.target?.ffiModel.pi.username;
     } else {
-      peerName = parent.target?.serverModel.clients
-          .firstWhereOrNull((client) => client.peerId == key.peerId)
-          ?.name;
+      try {
+        peerName = parent.target?.serverModel.clients
+            .firstWhereOrNull((client) => client.peerId == key.peerId)
+            ?.name;
+      } catch (_) {}
     }
     if (!_messages.containsKey(key)) {
       final chatUser = ChatUser(id: key.peerId, firstName: peerName);
@@ -491,17 +494,40 @@ class ChatModel with ChangeNotifier {
   }
 
   updateConnIdOfKey(MessageKey key) {
-    if (_messages.keys.toList().firstWhereOrNull(
-          (e) => e == key && e.connId != key.connId,
-        ) !=
-        null) {
-      final value = _messages.remove(key);
+    // When a client reconnects or has a previous disconnected session from the same peer,
+    // migrate historical messages only from explicitly disconnected sessions, never from active connections.
+    final session = parent.target;
+    final Set<int> disconnectedClientIds = {};
+    try {
+      final serverModel = session?.serverModel;
+      if (serverModel != null) {
+        disconnectedClientIds.addAll(
+          serverModel.clients
+              .where((c) => c.disconnected)
+              .map((c) => c.id),
+        );
+      }
+    } catch (_) {}
+
+    final deadKey = _messages.keys.firstWhereOrNull(
+      (e) =>
+          e.peerId == key.peerId &&
+          e.connId != key.connId &&
+          disconnectedClientIds.contains(e.connId),
+    );
+
+    if (deadKey != null) {
+      final value = _messages.remove(deadKey);
       if (value != null) {
         _messages[key] = value;
       }
+      if (_currentKey == deadKey) {
+        _currentKey = key;
+      }
     }
-    if (_currentKey == key || _currentKey.peerId.isEmpty) {
-      _currentKey = key; // hash != assign
+
+    if (_currentKey.peerId.isEmpty) {
+      _currentKey = key;
     }
   }
 
