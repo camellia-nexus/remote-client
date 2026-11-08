@@ -3484,7 +3484,9 @@ Timer supervisedMacOSTerminate({
     }
     if (attempt >= maxAttempts) {
       t.cancel();
-      debugPrint("macOS terminate completed max attempts ($maxAttempts). Stopping periodic timer.");
+      debugPrint(
+        "macOS terminate completed max attempts ($maxAttempts). Stopping periodic timer.",
+      );
     }
   });
   return timer;
@@ -3709,16 +3711,20 @@ Future<bool> osxRequestAudio() async {
 Widget futureBuilder({
   required Future? future,
   required Widget Function(dynamic data) hasData,
+  Widget Function(Object? error)? onError,
 }) {
   return FutureBuilder(
     future: future,
     builder: (BuildContext context, AsyncSnapshot snapshot) {
       if (snapshot.hasData) {
         return hasData(snapshot.data!);
-      } else {
-        if (snapshot.hasError) {
-          debugPrint(snapshot.error.toString());
+      } else if (snapshot.hasError) {
+        debugPrint(snapshot.error.toString());
+        if (onError != null) {
+          return onError(snapshot.error);
         }
+        return Container();
+      } else {
         return Container();
       }
     },
@@ -4345,18 +4351,27 @@ Future<bool> setServerConfig(
   final oldApiServer = await bind.mainGetApiServer();
 
   // should set one by one
-  await bind.mainSetOption(
-    key: 'custom-rendezvous-server',
-    value: config.idServer,
-  );
-  await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
-  await bind.mainSetOption(key: 'api-server', value: config.apiServer);
-  await bind.mainSetOption(key: 'key', value: config.key);
+  try {
+    await bind.mainSetOption(
+      key: 'custom-rendezvous-server',
+      value: config.idServer,
+    );
+    await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
+    await bind.mainSetOption(key: 'api-server', value: config.apiServer);
+    await bind.mainSetOption(key: 'key', value: config.key);
+  } catch (e) {
+    debugPrint('Failed to set server config: $e');
+    return false;
+  }
   final newApiServer = await bind.mainGetApiServer();
   if (oldApiServer.isNotEmpty &&
       oldApiServer != newApiServer &&
       gFFI.userModel.isLogin) {
-    gFFI.userModel.logOut(apiServer: oldApiServer);
+    try {
+      await gFFI.userModel.logOut(apiServer: oldApiServer);
+    } catch (e) {
+      debugPrint('Logout on api server change encountered error: $e');
+    }
   }
   return true;
 }
@@ -4706,8 +4721,13 @@ get defaultOptionApproveMode => isCustomClient ? 'password-click' : '';
 
 bool whitelistNotEmpty() {
   // https://github.com/camellia-computing/remote-client/blob/main/README.md
-  final v = bind.mainGetOptionSync(key: kOptionWhitelist);
-  return v != '' && v != ',';
+  final v = bind.mainGetOptionSync(key: kOptionWhitelist).trim();
+  if (v.isEmpty || v == defaultOptionWhitelist) return false;
+  final entries = v
+      .split(RegExp(r'[\s,;\n]+'))
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty);
+  return entries.isNotEmpty;
 }
 
 // `setMovable()` is only supported on macOS.

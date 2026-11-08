@@ -236,6 +236,13 @@ void changeWhiteList({Function()? callback}) async {
   var isInProgress = false;
   final isOptFixed = isOptionFixed(kOptionWhitelist);
   gFFI.dialogManager.show((setState, close, context) {
+    void safeClose() {
+      try {
+        controller.dispose();
+      } catch (_) {}
+      close();
+    }
+
     return CustomAlertDialog(
       title: Text(translate("IP Whitelisting")),
       content: Column(
@@ -264,7 +271,7 @@ void changeWhiteList({Function()? callback}) async {
         ],
       ),
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("Cancel", onPressed: safeClose, isOutline: true),
         if (!isOptFixed)
           dialogButton(
             "Clear",
@@ -274,7 +281,7 @@ void changeWhiteList({Function()? callback}) async {
                 value: defaultOptionWhitelist,
               );
               callback?.call();
-              close();
+              safeClose();
             },
             isOutline: true,
           ),
@@ -296,21 +303,41 @@ void changeWhiteList({Function()? callback}) async {
                 );
                 // test ip
                 final ipMatch = RegExp(
-                  r"^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([1-9]|[1-2][0-9]|3[0-2])){0,1}$",
+                  r"^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([0-9]|[1-2][0-9]|3[0-2])){0,1}$",
                 );
                 final ipv6Match = RegExp(
-                  r"^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([1-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$",
+                  r"^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$",
                 );
                 for (final ip in ips) {
-                  if (!ipMatch.hasMatch(ip) && !ipv6Match.hasMatch(ip)) {
-                    msg = "${translate("Invalid IP")} $ip";
+                  final trimmedIp = ip.trim();
+                  if (trimmedIp.isEmpty) continue;
+                  final lower = trimmedIp.toLowerCase();
+                  if (lower == '0.0.0.0' ||
+                      lower == '0.0.0.0/32' ||
+                      lower == '::' ||
+                      lower == '::/128' ||
+                      lower == '0:0:0:0:0:0:0:0' ||
+                      lower == '0:0:0:0:0:0:0:0/128') {
+                    msg =
+                        "${translate("Invalid IP")}: $trimmedIp (${translate("Unspecified IP address not allowed")})";
+                    setState(() {
+                      isInProgress = false;
+                    });
+                    return;
+                  }
+                  if (!ipMatch.hasMatch(trimmedIp) &&
+                      !ipv6Match.hasMatch(trimmedIp)) {
+                    msg = "${translate("Invalid IP")} $trimmedIp";
                     setState(() {
                       isInProgress = false;
                     });
                     return;
                   }
                 }
-                newWhiteList = ips.join(',');
+                newWhiteList = ips
+                    .map((x) => x.trim())
+                    .where((x) => x.isNotEmpty)
+                    .join(',');
               }
               if (newWhiteList.trim().isEmpty) {
                 newWhiteList = defaultOptionWhitelist;
@@ -320,133 +347,145 @@ void changeWhiteList({Function()? callback}) async {
                 value: newWhiteList,
               );
               callback?.call();
-              close();
+              safeClose();
             },
           ),
       ],
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }
 
-Future<String> changeDirectAccessPort(
+Future<String?> changeDirectAccessPort(
   String currentIP,
   String currentPort,
 ) async {
   final controller = TextEditingController(text: currentPort);
-  await gFFI.dialogManager.show((setState, close, context) {
-    return CustomAlertDialog(
-      title: Text(translate("Change Local Port")),
-      content: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 8.0),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  maxLines: null,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: '21118',
-                    isCollapsed: true,
-                    prefix: Text('$currentIP : '),
-                    suffix: IconButton(
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.clear, size: 16),
-                      onPressed: () => controller.clear(),
-                    ),
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(
-                      RegExp(
-                        r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
+  String? committed;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      return CustomAlertDialog(
+        title: Text(translate("Change Local Port")),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 8.0),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    maxLines: null,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      hintText: '21118',
+                      isCollapsed: true,
+                      prefix: Text('$currentIP : '),
+                      suffix: IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.clear, size: 16),
+                        onPressed: () => controller.clear(),
                       ),
                     ),
-                  ],
-                  controller: controller,
-                  autofocus: true,
-                ).workaroundFreezeLinuxMint(),
-              ),
-            ],
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(
+                        RegExp(
+                          r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
+                        ),
+                      ),
+                    ],
+                    controller: controller,
+                    autofocus: true,
+                  ).workaroundFreezeLinuxMint(),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          dialogButton("Cancel", onPressed: close, isOutline: true),
+          dialogButton(
+            "OK",
+            onPressed: () async {
+              final newPort = controller.text.trim();
+              await bind.mainSetOption(
+                key: kOptionDirectAccessPort,
+                value: newPort,
+              );
+              committed = newPort;
+              close();
+            },
           ),
         ],
-      ),
-      actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton(
-          "OK",
-          onPressed: () async {
-            await bind.mainSetOption(
-              key: kOptionDirectAccessPort,
-              value: controller.text,
-            );
-            close();
-          },
-        ),
-      ],
-      onCancel: close,
-    );
-  });
-  return controller.text;
+        onCancel: close,
+      );
+    });
+  } finally {
+    controller.dispose();
+  }
+  return committed;
 }
 
-Future<String> changeAutoDisconnectTimeout(String old) async {
+Future<String?> changeAutoDisconnectTimeout(String old) async {
   final controller = TextEditingController(text: old);
-  await gFFI.dialogManager.show((setState, close, context) {
-    return CustomAlertDialog(
-      title: Text(translate("Timeout in minutes")),
-      content: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 8.0),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  maxLines: null,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    hintText: '10',
-                    isCollapsed: true,
-                    suffix: IconButton(
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.clear, size: 16),
-                      onPressed: () => controller.clear(),
-                    ),
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(
-                      RegExp(
-                        r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
+  String? committed;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      return CustomAlertDialog(
+        title: Text(translate("Timeout in minutes")),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 8.0),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    maxLines: null,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      hintText: '10',
+                      isCollapsed: true,
+                      suffix: IconButton(
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.clear, size: 16),
+                        onPressed: () => controller.clear(),
                       ),
                     ),
-                  ],
-                  controller: controller,
-                  autofocus: true,
-                ).workaroundFreezeLinuxMint(),
-              ),
-            ],
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(
+                        RegExp(r'^(0|[1-9]\d{0,3})$'),
+                      ),
+                    ],
+                    controller: controller,
+                    autofocus: true,
+                  ).workaroundFreezeLinuxMint(),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          dialogButton("Cancel", onPressed: close, isOutline: true),
+          dialogButton(
+            "OK",
+            onPressed: () async {
+              final newTimeout = controller.text.trim();
+              await bind.mainSetOption(
+                key: kOptionAutoDisconnectTimeout,
+                value: newTimeout,
+              );
+              committed = newTimeout;
+              close();
+            },
           ),
         ],
-      ),
-      actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton(
-          "OK",
-          onPressed: () async {
-            await bind.mainSetOption(
-              key: kOptionAutoDisconnectTimeout,
-              value: controller.text,
-            );
-            close();
-          },
-        ),
-      ],
-      onCancel: close,
-    );
-  });
-  return controller.text;
+        onCancel: close,
+      );
+    });
+  } finally {
+    controller.dispose();
+  }
+  return committed;
 }
 
 class DialogTextField extends StatelessWidget {
@@ -2087,16 +2126,17 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
       if (text.isNotEmpty) {
         bool updateSuccess = false;
         try {
-          updateSuccess = await updateAuditNoteByGuid(
-            bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
-            text,
-          ).timeout(
-            const Duration(seconds: 6),
-            onTimeout: () {
-              debugPrint('updateAuditNoteByGuid timeout after 6s');
-              return false;
-            },
-          );
+          updateSuccess =
+              await updateAuditNoteByGuid(
+                bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
+                text,
+              ).timeout(
+                const Duration(seconds: 6),
+                onTimeout: () {
+                  debugPrint('updateAuditNoteByGuid timeout after 6s');
+                  return false;
+                },
+              );
         } catch (e) {
           debugPrint('Error updating audit note: $e');
           updateSuccess = false;
@@ -3268,7 +3308,8 @@ void confrimDeleteTrustedDevicesDialog(
       // preventing accidental clear-all when background expiration or changes occurred.
       final selectedHexSet = selectedDevices.map(hwidToHex).toSet();
       final currentHexSet = trustedDevices.map((d) => d.hwidHex).toSet();
-      final isExactAllSelected = currentHexSet.isNotEmpty &&
+      final isExactAllSelected =
+          currentHexSet.isNotEmpty &&
           currentHexSet.length == selectedHexSet.length &&
           currentHexSet.every(selectedHexSet.contains);
 
@@ -3442,61 +3483,62 @@ class _TrustedDevicesTableViewState extends State<_TrustedDevicesTableView> {
   @override
   Widget build(BuildContext context) {
     return FittedBox(
-      child: Obx(
-        () {
-          final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
-          return DataTable(
-            columns: [
-              DataColumn(
-                label: Checkbox(
-                  value: selectAll.value,
-                  onChanged: (value) {
-                    if (value == true) {
-                      widget.selectedDevices.clear();
-                      widget.selectedDevices
-                          .addAll(widget.devices.map((e) => e.hwid));
-                    } else {
-                      widget.selectedDevices.clear();
-                    }
-                  },
-                ),
+      child: Obx(() {
+        final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
+        return DataTable(
+          columns: [
+            DataColumn(
+              label: Checkbox(
+                value: selectAll.value,
+                onChanged: (value) {
+                  if (value == true) {
+                    widget.selectedDevices.clear();
+                    widget.selectedDevices.addAll(
+                      widget.devices.map((e) => e.hwid),
+                    );
+                  } else {
+                    widget.selectedDevices.clear();
+                  }
+                },
               ),
-              DataColumn(label: Text(translate('Platform'))),
-              DataColumn(label: Text(translate('ID'))),
-              DataColumn(label: Text(translate('Username'))),
-              DataColumn(label: Text(translate('Days remaining'))),
-            ],
-            rows: widget.devices.map((device) {
-              final isChecked = selectedHexSet.contains(device.hwidHex);
-              return DataRow(
-                cells: [
-                  DataCell(
-                    Checkbox(
-                      value: isChecked,
-                      onChanged: (value) {
-                        if (value == null) return;
-                        if (value) {
-                          if (!widget.selectedDevices
-                              .any((h) => hwidEquals(h, device.hwid))) {
-                            widget.selectedDevices.add(device.hwid);
-                          }
-                        } else {
-                          widget.selectedDevices
-                              .removeWhere((h) => hwidEquals(h, device.hwid));
+            ),
+            DataColumn(label: Text(translate('Platform'))),
+            DataColumn(label: Text(translate('ID'))),
+            DataColumn(label: Text(translate('Username'))),
+            DataColumn(label: Text(translate('Days remaining'))),
+          ],
+          rows: widget.devices.map((device) {
+            final isChecked = selectedHexSet.contains(device.hwidHex);
+            return DataRow(
+              cells: [
+                DataCell(
+                  Checkbox(
+                    value: isChecked,
+                    onChanged: (value) {
+                      if (value == null) return;
+                      if (value) {
+                        if (!widget.selectedDevices.any(
+                          (h) => hwidEquals(h, device.hwid),
+                        )) {
+                          widget.selectedDevices.add(device.hwid);
                         }
-                      },
-                    ),
+                      } else {
+                        widget.selectedDevices.removeWhere(
+                          (h) => hwidEquals(h, device.hwid),
+                        );
+                      }
+                    },
                   ),
-                  DataCell(Text(device.platform)),
-                  DataCell(Text(device.id)),
-                  DataCell(Text(device.name)),
-                  DataCell(Text(device.daysRemaining())),
-                ],
-              );
-            }).toList(),
-          );
-        },
-      ),
+                ),
+                DataCell(Text(device.platform)),
+                DataCell(Text(device.id)),
+                DataCell(Text(device.name)),
+                DataCell(Text(device.daysRemaining())),
+              ],
+            );
+          }).toList(),
+        );
+      }),
     );
   }
 }

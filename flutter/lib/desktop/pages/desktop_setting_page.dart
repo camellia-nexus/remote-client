@@ -1008,13 +1008,53 @@ class _GeneralState extends State<_General> {
   Widget language() {
     return futureBuilder(
       future: () async {
-        String langs = await bind.mainGetLangs();
-        return {'langs': langs};
+        try {
+          String langs = await bind.mainGetLangs();
+          return {'langs': langs};
+        } catch (e) {
+          return {'error': e.toString()};
+        }
       }(),
       hasData: (res) {
-        Map<String, String> data = res as Map<String, String>;
-        List<dynamic> langsList = jsonDecode(data['langs']!);
-        Map<String, String> langsMap = {for (var v in langsList) v[0]: v[1]};
+        Map<String, dynamic> data = res as Map<String, dynamic>;
+        if (data.containsKey('error')) {
+          return Padding(
+            padding: const EdgeInsets.only(left: _kContentHMargin),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${translate("Failed to load language list")}: ${data['error']}',
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.refresh, size: 18),
+                  tooltip: translate('Retry'),
+                  onPressed: () {
+                    setState(() {});
+                  },
+                ),
+              ],
+            ),
+          );
+        }
+        List<dynamic> langsList = [];
+        try {
+          final decoded = jsonDecode(data['langs'] as String);
+          if (decoded is List) {
+            langsList = decoded;
+          }
+        } catch (e) {
+          debugPrint('JSON decode failed for langs: $e');
+        }
+        Map<String, String> langsMap = {};
+        for (var v in langsList) {
+          if (v is List && v.length >= 2) {
+            langsMap[v[0].toString()] = v[1].toString();
+          }
+        }
         List<String> keys = langsMap.keys.toList();
         List<String> values = langsMap.values.toList();
         keys.insert(0, defaultOptionLang);
@@ -1058,7 +1098,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   final TextEditingController _directIpController = TextEditingController();
   final RxBool _directIpApplyEnabled = false.obs;
 
-  final TextEditingController _autoDisconnectController = TextEditingController();
+  final TextEditingController _autoDisconnectController =
+      TextEditingController();
   final RxBool _autoDisconnectApplyEnabled = false.obs;
 
   @override
@@ -1897,7 +1938,10 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 Obx(
                   () => ElevatedButton(
                     onPressed:
-                        _autoDisconnectApplyEnabled.value && enabled && !locked && !isOptFixed
+                        _autoDisconnectApplyEnabled.value &&
+                            enabled &&
+                            !locked &&
+                            !isOptFixed
                         ? () async {
                             _autoDisconnectApplyEnabled.value = false;
                             await bind.mainSetOption(
@@ -1967,6 +2011,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
   bool locked = !isWeb && bind.mainIsInstalled();
+  final Set<String> _pendingSwitchKeys = {};
 
   @override
   Widget build(BuildContext context) {
@@ -2062,11 +2107,22 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
       tooltipMessage: tooltipMessage,
       trailing: Switch(
         value: mainGetBoolOptionSync(optionKey),
-        onChanged: locked || isOptionFixed(optionKey)
+        onChanged:
+            locked ||
+                isOptionFixed(optionKey) ||
+                _pendingSwitchKeys.contains(optionKey)
             ? null
-            : (value) {
-                mainSetBoolOption(optionKey, value);
+            : (value) async {
+                _pendingSwitchKeys.add(optionKey);
                 setState(() {});
+                try {
+                  await mainSetBoolOption(optionKey, value);
+                } finally {
+                  _pendingSwitchKeys.remove(optionKey);
+                  if (mounted) {
+                    setState(() {});
+                  }
+                }
               },
       ),
     );
@@ -3475,7 +3531,8 @@ class _CountDownButtonState extends State<_CountDownButton> {
 
 //#region dialogs
 
-const String kStoredPasswordSentinel = '\u0000\u0000STORED_PASSWORD\u0000\u0000';
+const String kStoredPasswordSentinel =
+    '\u0000\u0000STORED_PASSWORD\u0000\u0000';
 
 void changeSocks5Proxy() async {
   var socks = await bind.mainGetSocks();

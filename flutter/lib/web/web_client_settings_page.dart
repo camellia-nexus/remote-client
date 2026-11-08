@@ -20,6 +20,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
 
   final List<({String key, String label})> _langs = [];
   bool _langsLoaded = false;
+  String? _langsError;
 
   @override
   void initState() {
@@ -30,6 +31,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
 
   Future<void> _loadLanguages() async {
     try {
+      _langsError = null;
       final langsJson = await bind.mainGetLangs();
       final parsed = jsonDecode(langsJson) as List<dynamic>;
       _langs.clear();
@@ -45,7 +47,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
       if (mounted) {
         setState(() {});
       }
-    } catch (_) {
+    } catch (e) {
+      _langsError = e.toString();
       _langsLoaded = true;
       if (mounted) {
         setState(() {});
@@ -82,24 +85,45 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     }
   }
 
-  Future<ServerConfig> _loadServerConfig() async {
+  Future<ServerConfig?> _loadServerConfig() async {
     try {
-      final options =
-          jsonDecode(await bind.mainGetOptions()) as Map<String, dynamic>;
+      final rawOptions = await bind.mainGetOptions();
+      final options = jsonDecode(rawOptions);
+      if (options is! Map<String, dynamic>) {
+        return null;
+      }
       return ServerConfig.fromOptions(options);
     } catch (_) {
-      return ServerConfig(
-        idServer: '',
-        relayServer: '',
-        apiServer: '',
-        key: '',
-      );
+      return null;
     }
   }
 
   void _openServerSettings() async {
     final serverConfig = await _loadServerConfig();
     if (!mounted) return;
+    if (serverConfig == null) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(translate('ID/Relay Server')),
+          content: Text(translate('Failed to load server configuration')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(translate('Cancel')),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _openServerSettings();
+              },
+              child: Text(translate('Retry')),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
 
     final idCtrl = TextEditingController(text: serverConfig.idServer);
     final relayCtrl = TextEditingController(text: serverConfig.relayServer);
@@ -212,7 +236,11 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                           hint: 'https://api.example.com',
                         ),
                         const SizedBox(height: 10),
-                        buildField(label: 'Key', controller: keyCtrl, error: ''),
+                        buildField(
+                          label: 'Key',
+                          controller: keyCtrl,
+                          error: '',
+                        ),
                         if (isInProgress) ...[
                           const SizedBox(height: 12),
                           const LinearProgressIndicator(),
@@ -279,23 +307,62 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     required ValueChanged<String?>? onChanged,
     String? subtitle,
   }) {
-    return ListTile(
-      leading: Icon(icon),
-      title: Text(translate(title)),
-      subtitle: subtitle == null ? null : Text(subtitle),
-      trailing: SizedBox(
-        width: 220,
-        child: DropdownButtonFormField<String>(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final dropdownField = DropdownButtonFormField<String>(
           initialValue: value,
           items: items,
           isDense: true,
+          isExpanded: true,
           onChanged: onChanged,
           decoration: const InputDecoration(
             isDense: true,
             contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           ),
-        ),
-      ),
+        );
+
+        if (constraints.maxWidth < 420) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, size: 24),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            translate(title),
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          if (subtitle != null)
+                            Text(
+                              subtitle,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                dropdownField,
+              ],
+            ),
+          );
+        }
+
+        return ListTile(
+          leading: Icon(icon),
+          title: Text(translate(title)),
+          subtitle: subtitle == null ? null : Text(subtitle),
+          trailing: SizedBox(width: 220, child: dropdownField),
+        );
+      },
     );
   }
 
@@ -383,6 +450,20 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                         );
                         reloadCurrentWindow();
                       },
+              )
+            else if (_langsLoaded && _langsError != null)
+              ListTile(
+                leading: const Icon(Icons.language),
+                title: Text(translate('Language')),
+                subtitle: Text(
+                  '${translate("Failed to load language list")}: $_langsError',
+                  style: const TextStyle(color: Colors.red),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: translate('Retry'),
+                  onPressed: _loadLanguages,
+                ),
               ),
           ]),
           const SizedBox(height: 12),

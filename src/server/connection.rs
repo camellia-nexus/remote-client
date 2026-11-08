@@ -572,6 +572,20 @@ const SEND_TIMEOUT_OTHER: u64 = SEND_TIMEOUT_VIDEO * 10;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 pub const INPUT_CHANNEL_CAPACITY: usize = 256;
 
+pub fn is_ip_allowed_by_whitelist(whitelist_str: &str, ip: std::net::IpAddr) -> bool {
+    let whitelist: Vec<&str> = whitelist_str
+        .split(',')
+        .map(|x| x.trim())
+        .filter(|x| !x.is_empty())
+        .collect();
+    if whitelist.is_empty() {
+        return true;
+    }
+    whitelist
+        .iter()
+        .any(|entry| IpCidr::from_str(entry).map_or(false, |cidr| cidr.contains(ip)))
+}
+
 impl Connection {
     pub async fn start(
         addr: SocketAddr,
@@ -2142,23 +2156,8 @@ impl Connection {
     }
 
     async fn check_whitelist(&mut self, addr: &SocketAddr) -> bool {
-        let whitelist: Vec<String> = Config::get_option("whitelist")
-            .split(",")
-            .filter(|x| !x.is_empty())
-            .map(|x| x.to_owned())
-            .collect();
-        if !whitelist.is_empty()
-            && whitelist
-                .iter()
-                .filter(|x| x == &"0.0.0.0")
-                .next()
-                .is_none()
-            && whitelist
-                .iter()
-                .filter(|x| IpCidr::from_str(x).map_or(false, |y| y.contains(addr.ip())))
-                .next()
-                .is_none()
-        {
+        let whitelist_opt = Config::get_option("whitelist");
+        if !is_ip_allowed_by_whitelist(&whitelist_opt, addr.ip()) {
             self.send_login_error("Your ip is blocked by the peer")
                 .await;
             self.post_alarm_audit(
@@ -9497,5 +9496,57 @@ mod test {
             ip,
             AlarmAuditType::ExceedThirtyAttempts
         ));
+    }
+
+    #[test]
+    fn test_ip_whitelist_auth_007() {
+        use std::net::IpAddr;
+        use std::str::FromStr;
+
+        let ip_local = IpAddr::from_str("192.168.1.50").unwrap();
+        let ip_other = IpAddr::from_str("192.168.1.51").unwrap();
+        let ip_corp = IpAddr::from_str("10.0.0.42").unwrap();
+        let ip_corp_out = IpAddr::from_str("10.1.0.42").unwrap();
+        let ip_v6_match = IpAddr::from_str("2001:db8::1").unwrap();
+        let ip_v6_nomatch = IpAddr::from_str("2001:db9::1").unwrap();
+
+        // 1. Empty or comma-only disables whitelist (all allowed)
+        assert!(is_ip_allowed_by_whitelist("", ip_local));
+        assert!(is_ip_allowed_by_whitelist(",", ip_local));
+        assert!(is_ip_allowed_by_whitelist(" , , ", ip_local));
+
+        // 2. Specific IPv4 address
+        let whitelist_single = "192.168.1.50";
+        assert!(is_ip_allowed_by_whitelist(whitelist_single, ip_local));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_single, ip_other));
+
+        // 3. IPv4 CIDR subnet
+        let whitelist_cidr = "10.0.0.0/24";
+        assert!(is_ip_allowed_by_whitelist(whitelist_cidr, ip_corp));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_cidr, ip_corp_out));
+
+        // 4. IPv6 CIDR subnet
+        let whitelist_v6 = "2001:db8::/32";
+        assert!(is_ip_allowed_by_whitelist(whitelist_v6, ip_v6_match));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_v6, ip_v6_nomatch));
+
+        // 5. Bare 0.0.0.0 must NOT act as an allow-all sentinel (AUTH-007)
+        let whitelist_bare_zero = "0.0.0.0";
+        assert!(!is_ip_allowed_by_whitelist(whitelist_bare_zero, ip_local));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_bare_zero, ip_other));
+
+        // 6. Mixed list containing 0.0.0.0 must enforce other entries and not allow-all
+        let whitelist_mixed = "192.168.1.50, 0.0.0.0";
+        assert!(is_ip_allowed_by_whitelist(whitelist_mixed, ip_local));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_mixed, ip_other));
+
+        // 7. Whitespace handling and multiple valid entries
+        let whitelist_multi = " 192.168.1.50 ,  10.0.0.0/24 , 2001:db8::/32 ";
+        assert!(is_ip_allowed_by_whitelist(whitelist_multi, ip_local));
+        assert!(is_ip_allowed_by_whitelist(whitelist_multi, ip_corp));
+        assert!(is_ip_allowed_by_whitelist(whitelist_multi, ip_v6_match));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_multi, ip_other));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_multi, ip_corp_out));
+        assert!(!is_ip_allowed_by_whitelist(whitelist_multi, ip_v6_nomatch));
     }
 }

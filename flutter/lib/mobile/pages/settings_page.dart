@@ -414,10 +414,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           onToggle: isOptionFixed(kOptionEnableTrustedDevices)
               ? null
               : (v) async {
-                  mainSetBoolOption(kOptionEnableTrustedDevices, v);
-                  setState(() {
-                    _enableTrustedDevices = v;
-                  });
+                  await mainSetBoolOption(kOptionEnableTrustedDevices, v);
+                  if (mounted) {
+                    setState(() {
+                      _enableTrustedDevices = v;
+                    });
+                  }
                 },
         ),
       if (enable2fa && _enableTrustedDevices)
@@ -543,9 +545,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                           _localIP,
                           _directAccessPort,
                         );
-                        setState(() {
-                          _directAccessPort = port;
-                        });
+                        if (port != null && mounted) {
+                          setState(() {
+                            _directAccessPort = port;
+                          });
+                        }
                       },
               ),
             ),
@@ -555,16 +559,17 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         onToggle: isOptionFixed(kOptionEnableDirectServer)
             ? null
             : (_) async {
-                _enableDirectIPAccess = !_enableDirectIPAccess;
-                String value = bool2option(
-                  kOptionEnableDirectServer,
-                  _enableDirectIPAccess,
-                );
+                final newValue = !_enableDirectIPAccess;
+                String value = bool2option(kOptionEnableDirectServer, newValue);
                 await bind.mainSetOption(
                   key: kOptionEnableDirectServer,
                   value: value,
                 );
-                setState(() {});
+                if (mounted) {
+                  setState(() {
+                    _enableDirectIPAccess = newValue;
+                  });
+                }
               },
       ),
       SettingsTile.switchTile(
@@ -598,9 +603,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                         final timeout = await changeAutoDisconnectTimeout(
                           _autoDisconnectTimeout,
                         );
-                        setState(() {
-                          _autoDisconnectTimeout = timeout;
-                        });
+                        if (timeout != null && mounted) {
+                          setState(() {
+                            _autoDisconnectTimeout = timeout;
+                          });
+                        }
                       },
               ),
             ),
@@ -610,16 +617,20 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         onToggle: isOptionFixed(kOptionAllowAutoDisconnect)
             ? null
             : (_) async {
-                _allowAutoDisconnect = !_allowAutoDisconnect;
+                final newValue = !_allowAutoDisconnect;
                 String value = bool2option(
                   kOptionAllowAutoDisconnect,
-                  _allowAutoDisconnect,
+                  newValue,
                 );
                 await bind.mainSetOption(
                   key: kOptionAllowAutoDisconnect,
                   value: value,
                 );
-                setState(() {});
+                if (mounted) {
+                  setState(() {
+                    _allowAutoDisconnect = newValue;
+                  });
+                }
               },
       ),
     ];
@@ -1232,67 +1243,96 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 }
 
 void showLanguageSettings(OverlayDialogManager dialogManager) async {
+  List<dynamic> validLangs = [];
   try {
-    final langs = json.decode(await bind.mainGetLangs()) as List<dynamic>;
-    var lang = bind.mainGetLocalOption(key: kCommConfKeyLang);
+    final rawLangs = await bind.mainGetLangs();
+    final decoded = json.decode(rawLangs);
+    if (decoded is List) {
+      validLangs = decoded.where((e) => e is List && e.length >= 2).toList();
+    } else {
+      throw FormatException('Invalid language list format');
+    }
+  } catch (e) {
+    debugPrint("Failed to load languages: $e");
     dialogManager.show(
       (setState, close, context) {
-        bool isClosed = false;
-        Timer? closeTimer;
-        void safeClose() {
-          if (!isClosed) {
-            isClosed = true;
-            closeTimer?.cancel();
-            close();
-          }
-        }
-
-        setLang(v) async {
-          if (lang != v) {
-            setState(() {
-              lang = v;
-            });
-            await bind.mainSetLocalOption(key: kCommConfKeyLang, value: v);
-            bind.mainChangeLanguage(lang: v);
-            reloadCurrentWindow();
-            closeTimer?.cancel();
-            closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
-          }
-        }
-
-        final isOptFixed = isOptionFixed(kCommConfKeyLang);
         return CustomAlertDialog(
-          content: Column(
-            children:
-                [
-                  getRadio(
-                    Text(translate('Default')),
-                    defaultOptionLang,
-                    lang,
-                    isOptFixed ? null : setLang,
-                  ),
-                  Divider(color: MyTheme.border),
-                ] +
-                langs.map((e) {
-                  final key = e[0] as String;
-                  final name = e[1] as String;
-                  return getRadio(
-                    Text(translate(name)),
-                    key,
-                    lang,
-                    isOptFixed ? null : setLang,
-                  );
-                }).toList(),
-          ),
-          onCancel: safeClose,
+          title: Text(translate('Language')),
+          content: Text('${translate("Failed to load language list")}: $e'),
+          actions: [
+            dialogButton("Cancel", onPressed: close, isOutline: true),
+            dialogButton(
+              "Retry",
+              onPressed: () {
+                close();
+                showLanguageSettings(dialogManager);
+              },
+            ),
+          ],
         );
       },
       backDismiss: true,
       clickMaskDismiss: true,
     );
-  } catch (e) {
-    //
+    return;
   }
+
+  var lang = bind.mainGetLocalOption(key: kCommConfKeyLang);
+  dialogManager.show(
+    (setState, close, context) {
+      bool isClosed = false;
+      Timer? closeTimer;
+      void safeClose() {
+        if (!isClosed) {
+          isClosed = true;
+          closeTimer?.cancel();
+          close();
+        }
+      }
+
+      setLang(v) async {
+        if (lang != v) {
+          setState(() {
+            lang = v;
+          });
+          await bind.mainSetLocalOption(key: kCommConfKeyLang, value: v);
+          bind.mainChangeLanguage(lang: v);
+          reloadCurrentWindow();
+          closeTimer?.cancel();
+          closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
+        }
+      }
+
+      final isOptFixed = isOptionFixed(kCommConfKeyLang);
+      return CustomAlertDialog(
+        content: Column(
+          children:
+              [
+                getRadio(
+                  Text(translate('Default')),
+                  defaultOptionLang,
+                  lang,
+                  isOptFixed ? null : setLang,
+                ),
+                Divider(color: MyTheme.border),
+              ] +
+              validLangs.map((e) {
+                final key = e[0].toString();
+                final name = e[1].toString();
+                return getRadio(
+                  Text(translate(name)),
+                  key,
+                  lang,
+                  isOptFixed ? null : setLang,
+                );
+              }).toList(),
+        ),
+        onCancel: safeClose,
+      );
+    },
+    backDismiss: true,
+    clickMaskDismiss: true,
+  );
 }
 
 void showThemeSettings(OverlayDialogManager dialogManager) async {
@@ -1636,14 +1676,20 @@ SettingsTile _getPopupDialogRadioEntry({
   void showDialog() async {
     gFFI.dialogManager.show(
       (setState, close, context) {
+        var isSubmitting = false;
         final onChanged = asyncSetter == null
             ? null
             : (String? value) async {
-                if (value == null) return;
-                await asyncSetter(value);
-                init();
-                if (value != notCloseValue) {
-                  close();
+                if (value == null || isSubmitting) return;
+                isSubmitting = true;
+                try {
+                  await asyncSetter(value);
+                  init();
+                  if (value != notCloseValue) {
+                    close();
+                  }
+                } finally {
+                  isSubmitting = false;
                 }
               };
 
