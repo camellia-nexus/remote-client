@@ -54,14 +54,33 @@ Future<void> main(List<String> args) async {
     }
     // main window
     if (args.isNotEmpty && args.first == 'multi_window') {
-      kWindowId = int.parse(args[1]);
+      if (args.length < 3) {
+        debugPrint(
+          "Invalid multi_window arguments count: expected >= 3, got ${args.length}",
+        );
+        runMainApp(true);
+        return;
+      }
+      final parsedWindowId = int.tryParse(args[1]);
+      if (parsedWindowId == null) {
+        debugPrint("Invalid multi_window windowId: ${args[1]}");
+        runMainApp(true);
+        return;
+      }
+      kWindowId = parsedWindowId;
       stateGlobal.setWindowId(kWindowId!);
       if (!isMacOS) {
         WindowController.fromWindowId(kWindowId!).showTitleBar(false);
       }
-      final argument = args[2].isEmpty
-          ? <String, dynamic>{}
-          : jsonDecode(args[2]) as Map<String, dynamic>;
+      Map<String, dynamic> argument;
+      try {
+        argument = args[2].isEmpty
+            ? <String, dynamic>{}
+            : (jsonDecode(args[2]) as Map<String, dynamic>);
+      } catch (e) {
+        debugPrint("Invalid multi_window argument payload: $e");
+        argument = <String, dynamic>{};
+      }
       int type = argument['type'] ?? -1;
       // to-do: No need to parse window id ?
       // Because stateGlobal.windowId is a global value.
@@ -155,7 +174,8 @@ void runMainApp(bool startService) async {
     // Check the startup argument, if we successfully handle the argument, we keep the main window hidden.
     final handledByUniLinks = await initUniLinks();
     debugPrint("handled by uni links: $handledByUniLinks");
-    if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
+    final handledByBootArgs = await handleUriLink(cmdArgs: kBootArgs);
+    if (handledByUniLinks || handledByBootArgs) {
       windowManager.hide();
     } else {
       windowManager.show();

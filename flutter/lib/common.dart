@@ -2701,7 +2701,7 @@ Future<bool> initUniLinks() async {
       webInitialLink = initialLink;
       return false;
     } else {
-      return handleUriLink(uriString: initialLink);
+      return await handleUriLink(uriString: initialLink);
     }
   } catch (err) {
     debugPrintStack(label: "$err");
@@ -2751,12 +2751,16 @@ enum UriLinkType {
 }
 
 // uri link handler
-bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
+Future<bool> handleUriLink({
+  List<String>? cmdArgs,
+  Uri? uri,
+  String? uriString,
+}) async {
   List<String>? args;
-  if (cmdArgs != null && cmdArgs.isNotEmpty) {
+  if (cmdArgs != null) {
     args = cmdArgs;
     // camellia-remote <URI link>
-    if (args[0].startsWith(bind.mainUriPrefixSync())) {
+    if (args.isNotEmpty && args[0].startsWith(bind.mainUriPrefixSync())) {
       final uri = Uri.tryParse(args[0]);
       if (uri != null) {
         args = urlLinkToCmdArgs(uri);
@@ -2790,64 +2794,91 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
       case '--connect':
       case '--play':
         type = UriLinkType.remoteDesktop;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--file-transfer':
         type = UriLinkType.fileTransfer;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--view-camera':
         type = UriLinkType.viewCamera;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--port-forward':
         type = UriLinkType.portForward;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--rdp':
         type = UriLinkType.rdp;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--terminal':
         type = UriLinkType.terminal;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--terminal-admin':
         type = UriLinkType.terminal;
         isTerminalRunAsAdmin = true;
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           id = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid target ID for ${args[i]}");
+          return false;
         }
         break;
       case '--password':
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           password = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid password value for ${args[i]}");
+          return false;
         }
         break;
       case '--switch_uuid':
-        if (i + 1 < args.length) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
           switchUuid = args[i + 1];
           i++;
+        } else {
+          debugPrint("Missing or invalid switch_uuid value for ${args[i]}");
+          return false;
         }
         break;
       case '--relay':
@@ -2858,68 +2889,59 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
     }
   }
   if (type != null && id != null) {
-    switch (type) {
-      case UriLinkType.remoteDesktop:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newRemoteDesktop(
-            id!,
+    try {
+      switch (type) {
+        case UriLinkType.remoteDesktop:
+          await rustDeskWinManager.newRemoteDesktop(
+            id,
             password: password,
             switchUuid: switchUuid,
             forceRelay: forceRelay,
           );
-        });
-        break;
-      case UriLinkType.fileTransfer:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newFileTransfer(
-            id!,
+          return true;
+        case UriLinkType.fileTransfer:
+          await rustDeskWinManager.newFileTransfer(
+            id,
             password: password,
             forceRelay: forceRelay,
           );
-        });
-        break;
-      case UriLinkType.viewCamera:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newViewCamera(
-            id!,
+          return true;
+        case UriLinkType.viewCamera:
+          await rustDeskWinManager.newViewCamera(
+            id,
             password: password,
             forceRelay: forceRelay,
           );
-        });
-        break;
-      case UriLinkType.portForward:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newPortForward(
-            id!,
+          return true;
+        case UriLinkType.portForward:
+          await rustDeskWinManager.newPortForward(
+            id,
             false,
             password: password,
             forceRelay: forceRelay,
           );
-        });
-        break;
-      case UriLinkType.rdp:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newPortForward(
-            id!,
+          return true;
+        case UriLinkType.rdp:
+          await rustDeskWinManager.newPortForward(
+            id,
             true,
             password: password,
             forceRelay: forceRelay,
           );
-        });
-        break;
-      case UriLinkType.terminal:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newTerminal(
-            id!,
+          return true;
+        case UriLinkType.terminal:
+          await rustDeskWinManager.newTerminal(
+            id,
             password: password,
             forceRelay: forceRelay,
             isTerminalRunAsAdmin: isTerminalRunAsAdmin,
           );
-        });
-        break;
+          return true;
+      }
+    } catch (e) {
+      debugPrint("Failed to launch session for URI link: $e");
+      return false;
     }
-
-    return true;
   }
 
   return false;

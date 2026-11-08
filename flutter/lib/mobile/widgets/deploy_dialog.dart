@@ -34,6 +34,17 @@ void showDeployDialog() {
   var errorText = "";
   var isInProgress = false;
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      tokenController.clear();
+      idController.clear();
+      tokenController.dispose();
+      idController.dispose();
+      close();
+    }
+
     submit() async {
       if (isInProgress) return;
       final token = tokenController.text.trim();
@@ -59,7 +70,7 @@ void showDeployDialog() {
         return;
       }
       if (res.isEmpty) {
-        close();
+        safeClose();
         await gFFI.serverModel.fetchID();
         showToast(translate("Successful"));
       } else {
@@ -104,11 +115,11 @@ void showDeployDialog() {
       ),
       actions: [
         dialogButton("Cancel",
-            onPressed: isInProgress ? null : close, isOutline: true),
+            onPressed: isInProgress ? null : safeClose, isOutline: true),
         dialogButton("OK", onPressed: isInProgress ? null : submit),
       ],
       onSubmit: submit,
-      onCancel: isInProgress ? null : close,
+      onCancel: isInProgress ? null : safeClose,
     );
   }, tag: _deployDialogTag);
 }

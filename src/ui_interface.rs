@@ -549,6 +549,8 @@ pub fn install_options() -> String {
     return "{}".to_owned();
 }
 
+pub const STORED_PASSWORD_SENTINEL: &str = "\u{0}\u{0}STORED_PASSWORD\u{0}\u{0}";
+
 #[inline]
 pub fn get_socks() -> Vec<String> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -561,14 +563,26 @@ pub fn get_socks() -> Vec<String> {
             let mut v = Vec::new();
             v.push(s.proxy);
             v.push(s.username);
-            v.push(s.password);
+            // CRED-007: Do not export plaintext proxy password to UI / IPC frames.
+            // If proxy password is configured, return sentinel to denote presence
+            // without leaking credentials.
+            if s.password.is_empty() {
+                v.push("".to_string());
+            } else {
+                v.push(STORED_PASSWORD_SENTINEL.to_string());
+            }
             v
         }
     }
 }
 
 #[inline]
-pub fn set_socks(proxy: String, username: String, password: String) {
+pub fn set_socks(proxy: String, username: String, mut password: String) {
+    if password == STORED_PASSWORD_SENTINEL {
+        if let Some(old) = Config::get_socks() {
+            password = old.password;
+        }
+    }
     let socks = config::Socks5Server {
         proxy,
         username,

@@ -99,7 +99,7 @@ class _ScanPageState extends State<ScanPage> {
         var reader = QRCodeReader();
         var result = reader.decode(bitmap);
         if (result.text.startsWith(bind.mainUriPrefixSync())) {
-          handleUriLink(uriString: result.text);
+          await handleUriLink(uriString: result.text);
         } else {
           showServerSettingFromQr(result.text);
         }

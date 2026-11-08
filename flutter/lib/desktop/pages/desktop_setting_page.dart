@@ -3451,6 +3451,8 @@ class _CountDownButtonState extends State<_CountDownButton> {
 
 //#region dialogs
 
+const String kStoredPasswordSentinel = '\u0000\u0000STORED_PASSWORD\u0000\u0000';
+
 void changeSocks5Proxy() async {
   var socks = await bind.mainGetSocks();
 
@@ -3475,7 +3477,21 @@ void changeSocks5Proxy() async {
 
   var isInProgress = false;
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      proxyController.clear();
+      userController.clear();
+      pwdController.clear();
+      proxyController.dispose();
+      userController.dispose();
+      pwdController.dispose();
+      close();
+    }
+
     submit() async {
+      if (isInProgress) return;
       setState(() {
         proxyMsg = '';
         isInProgress = true;
@@ -3513,7 +3529,7 @@ void changeSocks5Proxy() async {
         username: username,
         password: password,
       );
-      close();
+      safeClose();
     }
 
     return CustomAlertDialog(
@@ -3604,6 +3620,9 @@ void changeSocks5Proxy() async {
                       obscureText: obscure.value,
                       decoration: InputDecoration(
                         labelText: isMobile ? translate('Password') : null,
+                        hintText: password == kStoredPasswordSentinel
+                            ? translate('Unchanged')
+                            : null,
                         suffixIcon: IconButton(
                           onPressed: () => obscure.value = !obscure.value,
                           icon: Icon(
@@ -3628,11 +3647,11 @@ void changeSocks5Proxy() async {
         ),
       ),
       actions: [
-        dialogButton('Cancel', onPressed: close, isOutline: true),
+        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
         if (!isOptFixed) dialogButton('OK', onPressed: submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }

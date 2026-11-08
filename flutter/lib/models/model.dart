@@ -900,10 +900,10 @@ class FfiModel with ChangeNotifier {
     }
   }
 
-  onUrlSchemeReceived(Map<String, dynamic> evt) {
+  onUrlSchemeReceived(Map<String, dynamic> evt) async {
     final url = evt['url'].toString().trim();
     if (url.startsWith(bind.mainUriPrefixSync()) &&
-        handleUriLink(uriString: url)) {
+        await handleUriLink(uriString: url)) {
       return;
     }
     switch (url) {

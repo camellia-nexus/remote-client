@@ -1771,6 +1771,17 @@ showSetOSAccount(
   final hasSavedPassword = bind.sessionHasOsPassword(sessionId: sessionId);
   usernameController.text = username;
   dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      usernameController.clear();
+      passwdController.clear();
+      usernameController.dispose();
+      passwdController.dispose();
+      close();
+    }
+
     submit() {
       final username = usernameController.text.trim();
       final password = passwdController.text.trim();
@@ -1786,7 +1797,7 @@ showSetOSAccount(
           value: password,
         );
       }
-      close();
+      safeClose();
     }
 
     descWidget(String text) {
@@ -1835,13 +1846,13 @@ showSetOSAccount(
         dialogButton(
           "Cancel",
           icon: Icon(Icons.close_rounded),
-          onPressed: close,
+          onPressed: safeClose,
           isOutline: true,
         ),
         dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }
@@ -2525,6 +2536,15 @@ void changeBot({Function()? callback}) async {
   bool loading = false;
   final controller = TextEditingController();
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      controller.clear();
+      controller.dispose();
+      close();
+    }
+
     onVerify() async {
       final token = controller.text.trim();
       if (token == "") return;
@@ -2534,7 +2554,7 @@ void changeBot({Function()? callback}) async {
       final error = await bind.mainVerifyBot(token: token);
       if (error == "") {
         callback?.call();
-        close();
+        safeClose();
       } else {
         errorText = translate(error);
         loading = false;
@@ -2566,12 +2586,12 @@ void changeBot({Function()? callback}) async {
         ],
       ),
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("Cancel", onPressed: safeClose, isOutline: true),
         loading
             ? CircularProgressIndicator()
             : dialogButton("OK", onPressed: onVerify),
       ],
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }
@@ -3052,6 +3072,17 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
   String? confirmationErrorText;
   final maxLength = bind.mainMaxEncryptLen();
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      pinController.clear();
+      confirmController.clear();
+      pinController.dispose();
+      confirmController.dispose();
+      close();
+    }
+
     submit() async {
       pinErrorText = null;
       confirmationErrorText = null;
@@ -3073,7 +3104,7 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
         return;
       }
       callback.call();
-      close();
+      safeClose();
     }
 
     return CustomAlertDialog(
@@ -3097,11 +3128,15 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
         ],
       ).marginOnly(bottom: 12),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
+        dialogButton(
+          translate("Cancel"),
+          onPressed: safeClose,
+          isOutline: true,
+        ),
         dialogButton(translate("OK"), onPressed: submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }
@@ -3110,6 +3145,15 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
   final controller = TextEditingController();
   String? errorText;
   gFFI.dialogManager.show((setState, close, context) {
+    var isClosed = false;
+    safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      controller.clear();
+      controller.dispose();
+      close();
+    }
+
     submit() async {
       final pin = controller.text.trim();
       if (correctPin != pin) {
@@ -3119,7 +3163,7 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
         return;
       }
       passCallback.call();
-      close();
+      safeClose();
     }
 
     return CustomAlertDialog(
@@ -3136,11 +3180,15 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
         ],
       ).marginOnly(bottom: 12),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
+        dialogButton(
+          translate("Cancel"),
+          onPressed: safeClose,
+          isOutline: true,
+        ),
         dialogButton(translate("OK"), onPressed: submit),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
   });
 }

@@ -920,13 +920,24 @@ async fn handle(data: Data, stream: &mut Connection) {
         }
         Data::Socks(s) => match s {
             None => {
-                allow_err!(stream.send(&Data::Socks(Config::get_socks())).await);
+                let mut safe_socks = Config::get_socks();
+                if let Some(ref mut conf) = safe_socks {
+                    if !conf.password.is_empty() {
+                        conf.password = crate::ui_interface::STORED_PASSWORD_SENTINEL.to_string();
+                    }
+                }
+                allow_err!(stream.send(&Data::Socks(safe_socks)).await);
             }
-            Some(data) => {
+            Some(mut data) => {
                 let _nat = CheckTestNatType::new();
                 if data.proxy.is_empty() {
                     Config::set_socks(None);
                 } else {
+                    if data.password == crate::ui_interface::STORED_PASSWORD_SENTINEL {
+                        if let Some(old) = Config::get_socks() {
+                            data.password = old.password;
+                        }
+                    }
                     Config::set_socks(Some(data));
                 }
                 RendezvousMediator::restart();
@@ -935,10 +946,16 @@ async fn handle(data: Data, stream: &mut Connection) {
         },
         Data::SocksWs(s) => match s {
             None => {
+                let mut safe_socks = Config::get_socks();
+                if let Some(ref mut conf) = safe_socks {
+                    if !conf.password.is_empty() {
+                        conf.password = crate::ui_interface::STORED_PASSWORD_SENTINEL.to_string();
+                    }
+                }
                 allow_err!(
                     stream
                         .send(&Data::SocksWs(Some(Box::new((
-                            Config::get_socks(),
+                            safe_socks,
                             Config::get_option(OPTION_ALLOW_WEBSOCKET)
                         )))))
                         .await
@@ -1962,8 +1979,13 @@ pub async fn get_socks() -> Option<config::Socks5Server> {
 }
 
 #[tokio::main(flavor = "current_thread")]
-pub async fn set_socks(value: config::Socks5Server) -> ResultType<()> {
+pub async fn set_socks(mut value: config::Socks5Server) -> ResultType<()> {
     let _nat = CheckTestNatType::new();
+    if value.password == crate::ui_interface::STORED_PASSWORD_SENTINEL {
+        if let Some(old) = Config::get_socks() {
+            value.password = old.password;
+        }
+    }
     Config::set_socks(if value.proxy.is_empty() {
         None
     } else {
