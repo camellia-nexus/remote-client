@@ -533,6 +533,12 @@ class _CheckedPopupMenuItemState<T>
   }
 
   @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget buildChild() {
     return ListTile(
       enabled: widget.enabled,

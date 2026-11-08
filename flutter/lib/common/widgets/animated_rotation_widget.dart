@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -19,17 +20,37 @@ class AnimatedRotationWidget extends StatefulWidget {
 
 class AnimatedRotationWidgetState extends State<AnimatedRotationWidget> {
   double turns = 0.0;
+  StreamSubscription<bool>? _spinSub;
 
   @override
   void initState() {
     super.initState();
-    widget.spinning?.listen((v) {
+    _subscribeSpin();
+  }
+
+  void _subscribeSpin() {
+    _spinSub?.cancel();
+    _spinSub = widget.spinning?.listen((v) {
       if (v && mounted) {
         setState(() {
           turns += 1;
         });
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant AnimatedRotationWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.spinning != widget.spinning) {
+      _subscribeSpin();
+    }
+  }
+
+  @override
+  void dispose() {
+    _spinSub?.cancel();
+    super.dispose();
   }
 
   @override

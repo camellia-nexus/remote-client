@@ -1055,6 +1055,30 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   bool get wantKeepAlive => true;
   bool locked = bind.mainIsInstalled();
 
+  final TextEditingController _directIpController = TextEditingController();
+  final RxBool _directIpApplyEnabled = false.obs;
+
+  final TextEditingController _autoDisconnectController = TextEditingController();
+  final RxBool _autoDisconnectApplyEnabled = false.obs;
+
+  @override
+  void initState() {
+    super.initState();
+    _directIpController.text = bind.mainGetOptionSync(
+      key: kOptionDirectAccessPort,
+    );
+    _autoDisconnectController.text = bind.mainGetOptionSync(
+      key: kOptionAutoDisconnectTimeout,
+    );
+  }
+
+  @override
+  void dispose() {
+    _directIpController.dispose();
+    _autoDisconnectController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -1633,9 +1657,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   List<Widget> directIp(BuildContext context) {
-    TextEditingController controller = TextEditingController();
     update(bool v) => setState(() {});
-    RxBool applyEnabled = false.obs;
     return [
       _OptionCheckBox(
         context,
@@ -1651,10 +1673,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             kOptionEnableDirectServer,
             bind.mainGetOptionSync(key: kOptionEnableDirectServer),
           );
-          if (!enabled) applyEnabled.value = false;
-          controller.text = bind.mainGetOptionSync(
-            key: kOptionDirectAccessPort,
-          );
+          if (!enabled) _directIpApplyEnabled.value = false;
+          if (!_directIpApplyEnabled.value) {
+            _directIpController.text = bind.mainGetOptionSync(
+              key: kOptionDirectAccessPort,
+            );
+          }
           final isOptFixed = isOptionFixed(kOptionDirectAccessPort);
           return Offstage(
             offstage: !enabled,
@@ -1666,9 +1690,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   SizedBox(
                     width: 95,
                     child: TextField(
-                      controller: controller,
+                      controller: _directIpController,
                       enabled: enabled && !locked && !isOptFixed,
-                      onChanged: (_) => applyEnabled.value = true,
+                      onChanged: (_) => _directIpApplyEnabled.value = true,
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(
                           RegExp(
@@ -1688,15 +1712,15 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   Obx(
                     () => ElevatedButton(
                       onPressed:
-                          applyEnabled.value &&
+                          _directIpApplyEnabled.value &&
                               enabled &&
                               !locked &&
                               !isOptFixed
                           ? () async {
-                              applyEnabled.value = false;
+                              _directIpApplyEnabled.value = false;
                               await bind.mainSetOption(
                                 key: kOptionDirectAccessPort,
-                                value: controller.text,
+                                value: _directIpController.text,
                               );
                             }
                           : null,
@@ -1820,9 +1844,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   List<Widget> autoDisconnect(BuildContext context) {
-    TextEditingController controller = TextEditingController();
     update(bool v) => setState(() {});
-    RxBool applyEnabled = false.obs;
     return [
       _OptionCheckBox(
         context,
@@ -1836,10 +1858,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
           kOptionAllowAutoDisconnect,
           bind.mainGetOptionSync(key: kOptionAllowAutoDisconnect),
         );
-        if (!enabled) applyEnabled.value = false;
-        controller.text = bind.mainGetOptionSync(
-          key: kOptionAutoDisconnectTimeout,
-        );
+        if (!enabled) _autoDisconnectApplyEnabled.value = false;
+        if (!_autoDisconnectApplyEnabled.value) {
+          _autoDisconnectController.text = bind.mainGetOptionSync(
+            key: kOptionAutoDisconnectTimeout,
+          );
+        }
         final isOptFixed = isOptionFixed(kOptionAutoDisconnectTimeout);
         return Offstage(
           offstage: !enabled,
@@ -1851,9 +1875,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 SizedBox(
                   width: 95,
                   child: TextField(
-                    controller: controller,
+                    controller: _autoDisconnectController,
                     enabled: enabled && !locked && !isOptFixed,
-                    onChanged: (_) => applyEnabled.value = true,
+                    onChanged: (_) => _autoDisconnectApplyEnabled.value = true,
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(
                         RegExp(
@@ -1873,12 +1897,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 Obx(
                   () => ElevatedButton(
                     onPressed:
-                        applyEnabled.value && enabled && !locked && !isOptFixed
+                        _autoDisconnectApplyEnabled.value && enabled && !locked && !isOptFixed
                         ? () async {
-                            applyEnabled.value = false;
+                            _autoDisconnectApplyEnabled.value = false;
                             await bind.mainSetOption(
                               key: kOptionAutoDisconnectTimeout,
-                              value: controller.text,
+                              value: _autoDisconnectController.text,
                             );
                           }
                         : null,

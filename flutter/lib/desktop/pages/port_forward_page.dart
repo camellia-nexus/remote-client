@@ -90,6 +90,9 @@ class _PortForwardPageState extends State<PortForwardPage>
 
   @override
   void dispose() {
+    localPortController.dispose();
+    remoteHostController.dispose();
+    remotePortController.dispose();
     _ffi.close();
     _ffi.dialogManager.dismissAll();
     deleteIfMatching<FFI>('pf_${widget.id}', _ffi);

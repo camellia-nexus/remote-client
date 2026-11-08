@@ -802,41 +802,42 @@ class _FileManagerViewState extends State<FileManagerView> {
                     ),
                     MenuButton(
                       tooltip: translate('Create Folder'),
-                      onPressed: () {
+                      onPressed: () async {
                         final name = TextEditingController();
                         String? errorText;
-                        _ffi.dialogManager.show((setState, close, context) {
-                          name.addListener(() {
-                            if (errorText != null) {
-                              setState(() {
-                                errorText = null;
-                              });
-                            }
-                          });
-                          submit() {
-                            if (name.value.text.isNotEmpty) {
-                              if (!PathUtil.validName(
-                                name.value.text,
-                                controller.options.value.isWindows,
-                              )) {
-                                setState(() {
-                                  errorText = translate("Invalid folder name");
-                                });
-                                return;
-                              }
-                              controller.createDir(
-                                PathUtil.join(
-                                  controller.directory.value.path,
+                        void onTextChanged() {
+                          if (errorText != null) {
+                            errorText = null;
+                          }
+                        }
+
+                        name.addListener(onTextChanged);
+                        try {
+                          await _ffi.dialogManager.show((setState, close, context) {
+                            submit() {
+                              if (name.value.text.isNotEmpty) {
+                                if (!PathUtil.validName(
                                   name.value.text,
                                   controller.options.value.isWindows,
-                                ),
-                              );
-                              close();
+                                )) {
+                                  setState(() {
+                                    errorText = translate("Invalid folder name");
+                                  });
+                                  return;
+                                }
+                                controller.createDir(
+                                  PathUtil.join(
+                                    controller.directory.value.path,
+                                    name.value.text,
+                                    controller.options.value.isWindows,
+                                  ),
+                                );
+                                close();
+                              }
                             }
-                          }
 
-                          cancel() => close(false);
-                          return CustomAlertDialog(
+                            cancel() => close(false);
+                            return CustomAlertDialog(
                             title: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
@@ -881,7 +882,11 @@ class _FileManagerViewState extends State<FileManagerView> {
                             onCancel: cancel,
                           );
                         });
-                      },
+                      } finally {
+                        name.removeListener(onTextChanged);
+                        name.dispose();
+                      }
+                    },
                       child: SvgPicture.asset(
                         "assets/folder_new.svg",
                         colorFilter: svgColor(

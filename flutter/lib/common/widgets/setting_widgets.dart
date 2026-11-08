@@ -6,36 +6,89 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:get/get.dart';
 
-customImageQualityWidget(
-    {required double initQuality,
-    required double initFps,
-    required Function(double)? setQuality,
-    required Function(double)? setFps,
-    required bool showFps,
-    required bool showMoreQuality}) {
-  if (initQuality < kMinQuality ||
-      initQuality > (showMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
-    initQuality = kDefaultQuality;
-  }
-  if (initFps < kMinFps || initFps > kMaxFps) {
-    initFps = kDefaultFps;
-  }
-  final qualityValue = initQuality.obs;
-  final fpsValue = initFps.obs;
-
-  final RxBool moreQualityChecked = RxBool(qualityValue.value > kMaxQuality);
-  final debouncerQuality = Debouncer<double>(
-    Duration(milliseconds: 1000),
-    onChanged: setQuality,
-    initialValue: qualityValue.value,
+Widget customImageQualityWidget({
+  required double initQuality,
+  required double initFps,
+  required Function(double)? setQuality,
+  required Function(double)? setFps,
+  required bool showFps,
+  required bool showMoreQuality,
+}) {
+  return CustomImageQualityWidget(
+    initQuality: initQuality,
+    initFps: initFps,
+    setQuality: setQuality,
+    setFps: setFps,
+    showFps: showFps,
+    showMoreQuality: showMoreQuality,
   );
-  final debouncerFps = Debouncer<double>(
-    Duration(milliseconds: 1000),
-    onChanged: setFps,
-    initialValue: fpsValue.value,
-  );
+}
 
-  onMoreChanged(bool? value) {
+class CustomImageQualityWidget extends StatefulWidget {
+  final double initQuality;
+  final double initFps;
+  final Function(double)? setQuality;
+  final Function(double)? setFps;
+  final bool showFps;
+  final bool showMoreQuality;
+
+  const CustomImageQualityWidget({
+    Key? key,
+    required this.initQuality,
+    required this.initFps,
+    required this.setQuality,
+    required this.setFps,
+    required this.showFps,
+    required this.showMoreQuality,
+  }) : super(key: key);
+
+  @override
+  State<CustomImageQualityWidget> createState() =>
+      _CustomImageQualityWidgetState();
+}
+
+class _CustomImageQualityWidgetState extends State<CustomImageQualityWidget> {
+  late final RxDouble qualityValue;
+  late final RxDouble fpsValue;
+  late final RxBool moreQualityChecked;
+  late final Debouncer<double> debouncerQuality;
+  late final Debouncer<double> debouncerFps;
+
+  @override
+  void initState() {
+    super.initState();
+    double q = widget.initQuality;
+    if (q < kMinQuality ||
+        q > (widget.showMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
+      q = kDefaultQuality;
+    }
+    double f = widget.initFps;
+    if (f < kMinFps || f > kMaxFps) {
+      f = kDefaultFps;
+    }
+    qualityValue = q.obs;
+    fpsValue = f.obs;
+    moreQualityChecked = RxBool(qualityValue.value > kMaxQuality);
+    debouncerQuality = Debouncer<double>(
+      Duration(milliseconds: 1000),
+      onChanged: widget.setQuality,
+      initialValue: qualityValue.value,
+    );
+    debouncerFps = Debouncer<double>(
+      Duration(milliseconds: 1000),
+      onChanged: widget.setFps,
+      initialValue: fpsValue.value,
+    );
+  }
+
+  @override
+  void dispose() {
+    debouncerQuality.cancel();
+    debouncerFps.cancel();
+    super.dispose();
+  }
+
+  void onMoreChanged(bool? value) {
     if (value == null) return;
     moreQualityChecked.value = value;
     if (!value && qualityValue.value > 100) {
@@ -44,107 +97,112 @@ customImageQualityWidget(
     debouncerQuality.value = qualityValue.value;
   }
 
-  return Column(
-    children: [
-      Obx(() => Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: Slider(
-                  value: qualityValue.value,
-                  min: kMinQuality,
-                  max: moreQualityChecked.value ? kMaxMoreQuality : kMaxQuality,
-                  divisions: moreQualityChecked.value
-                      ? ((kMaxMoreQuality - kMinQuality) / 10).round()
-                      : ((kMaxQuality - kMinQuality) / 5).round(),
-                  onChanged: setQuality == null
-                      ? null
-                      : (double value) async {
-                          qualityValue.value = value;
-                          debouncerQuality.value = value;
-                        },
-                ),
-              ),
-              Expanded(
-                  flex: 1,
-                  child: Text(
-                    '${qualityValue.value.round()}%',
-                    style: const TextStyle(fontSize: 15),
-                  )),
-              Expanded(
-                  flex: isMobile ? 2 : 1,
-                  child: Text(
-                    translate('Bitrate'),
-                    style: const TextStyle(fontSize: 15),
-                  )),
-              // mobile doesn't have enough space
-              if (showMoreQuality && !isMobile)
-                Expanded(
-                    flex: 1,
-                    child: Row(
-                      children: [
-                        Checkbox(
-                          value: moreQualityChecked.value,
-                          onChanged: onMoreChanged,
-                        ),
-                        Expanded(
-                          child: Text(translate('More')),
-                        )
-                      ],
-                    ))
-            ],
-          )),
-      if (showMoreQuality && isMobile)
-        Obx(() => Row(
-              children: [
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Checkbox(
-                      value: moreQualityChecked.value,
-                      onChanged: onMoreChanged,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Text(translate('More')),
-                )
-              ],
-            )),
-      if (showFps)
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
         Obx(() => Row(
               children: [
                 Expanded(
                   flex: 3,
                   child: Slider(
-                    value: fpsValue.value,
-                    min: kMinFps,
-                    max: kMaxFps,
-                    divisions: ((kMaxFps - kMinFps) / 5).round(),
-                    onChanged: setFps == null
+                    value: qualityValue.value,
+                    min: kMinQuality,
+                    max: moreQualityChecked.value
+                        ? kMaxMoreQuality
+                        : kMaxQuality,
+                    divisions: moreQualityChecked.value
+                        ? ((kMaxMoreQuality - kMinQuality) / 10).round()
+                        : ((kMaxQuality - kMinQuality) / 5).round(),
+                    onChanged: widget.setQuality == null
                         ? null
                         : (double value) async {
-                            fpsValue.value = value;
-                            debouncerFps.value = value;
+                            qualityValue.value = value;
+                            debouncerQuality.value = value;
                           },
                   ),
                 ),
                 Expanded(
                     flex: 1,
                     child: Text(
-                      '${fpsValue.value.round()}',
+                      '${qualityValue.value.round()}%',
                       style: const TextStyle(fontSize: 15),
                     )),
                 Expanded(
-                    flex: 2,
+                    flex: isMobile ? 2 : 1,
                     child: Text(
-                      translate('FPS'),
+                      translate('Bitrate'),
                       style: const TextStyle(fontSize: 15),
-                    ))
+                    )),
+                // mobile doesn't have enough space
+                if (widget.showMoreQuality && !isMobile)
+                  Expanded(
+                      flex: 1,
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: moreQualityChecked.value,
+                            onChanged: onMoreChanged,
+                          ),
+                          Expanded(
+                            child: Text(translate('More')),
+                          )
+                        ],
+                      ))
               ],
             )),
-    ],
-  );
+        if (widget.showMoreQuality && isMobile)
+          Obx(() => Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Checkbox(
+                        value: moreQualityChecked.value,
+                        onChanged: onMoreChanged,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(translate('More')),
+                  )
+                ],
+              )),
+        if (widget.showFps)
+          Obx(() => Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Slider(
+                      value: fpsValue.value,
+                      min: kMinFps,
+                      max: kMaxFps,
+                      divisions: ((kMaxFps - kMinFps) / 5).round(),
+                      onChanged: widget.setFps == null
+                          ? null
+                          : (double value) async {
+                              fpsValue.value = value;
+                              debouncerFps.value = value;
+                            },
+                    ),
+                  ),
+                  Expanded(
+                      flex: 1,
+                      child: Text(
+                        '${fpsValue.value.round()}',
+                        style: const TextStyle(fontSize: 15),
+                      )),
+                  Expanded(
+                      flex: 2,
+                      child: Text(
+                        translate('FPS'),
+                        style: const TextStyle(fontSize: 15),
+                      ))
+                ],
+              )),
+      ],
+    );
+  }
 }
 
 customImageQualitySetting() {
@@ -286,6 +344,13 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
       onChanged: widget.onDebouncer,
       initialValue: widget.value.value,
     );
+  }
+
+  @override
+  void dispose() {
+    debouncerSpeed.cancel();
+    _controller.dispose();
+    super.dispose();
   }
 
   @override

@@ -1547,8 +1547,22 @@ class _ManageTrustedDevices extends StatefulWidget {
 }
 
 class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
-  RxList<TrustedDevice> trustedDevices = RxList.empty(growable: true);
-  RxList<Uint8List> selectedDevices = RxList.empty();
+  final RxList<TrustedDevice> trustedDevices = RxList.empty(growable: true);
+  final RxList<Uint8List> selectedDevices = RxList.empty();
+  late Future<List<TrustedDevice>> _devicesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDevices();
+  }
+
+  void _loadDevices() {
+    _devicesFuture = TrustedDevice.get().then((devices) {
+      trustedDevices.assignAll(devices);
+      return devices;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1572,8 +1586,8 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
           ),
         ],
       ),
-      body: FutureBuilder(
-        future: TrustedDevice.get(),
+      body: FutureBuilder<List<TrustedDevice>>(
+        future: _devicesFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return Center(child: CircularProgressIndicator());
@@ -1581,8 +1595,6 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           }
-          final devices = snapshot.data as List<TrustedDevice>;
-          trustedDevices = devices.obs;
           return trustedDevicesTable(trustedDevices, selectedDevices);
         },
       ),

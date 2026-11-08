@@ -935,69 +935,74 @@ class FileController {
   Future<void> renameAction(Entry item, bool isLocal) async {
     final textEditingController = TextEditingController(text: item.name);
     String? errorText;
-    dialogManager?.show((setState, close, context) {
-      textEditingController.addListener(() {
-        if (errorText != null) {
-          setState(() {
-            errorText = null;
-          });
-        }
-      });
-      submit() async {
-        final newName = textEditingController.text;
-        if (newName.isEmpty || newName == item.name) {
-          close();
-          return;
-        }
-        if (directory.value.entries.any((e) => e.name == newName)) {
-          setState(() {
-            errorText = translate("Already exists");
-          });
-          return;
-        }
-        if (!PathUtil.validName(newName, options.value.isWindows)) {
-          setState(() {
-            if (item.isDirectory) {
-              errorText = translate("Invalid folder name");
-            } else {
-              errorText = translate("Invalid file name");
-            }
-          });
-          return;
-        }
-        await bind.sessionRenameFile(
-          sessionId: sessionId,
-          actId: JobController.jobID.next(),
-          path: item.path,
-          newName: newName,
-          isRemote: !isLocal,
-        );
-        close();
+    void onTextChanged() {
+      if (errorText != null) {
+        errorText = null;
       }
+    }
 
-      return CustomAlertDialog(
-        content: Column(
-          children: [
-            DialogTextField(
-              title: '${translate('Rename')} ${item.name}',
-              controller: textEditingController,
-              errorText: errorText,
-            ),
-          ],
-        ),
-        actions: [
-          dialogButton(
-            "Cancel",
-            icon: Icon(Icons.close_rounded),
-            onPressed: close,
-            isOutline: true,
+    textEditingController.addListener(onTextChanged);
+    try {
+      await dialogManager?.show((setState, close, context) {
+        submit() async {
+          final newName = textEditingController.text;
+          if (newName.isEmpty || newName == item.name) {
+            close();
+            return;
+          }
+          if (directory.value.entries.any((e) => e.name == newName)) {
+            setState(() {
+              errorText = translate("Already exists");
+            });
+            return;
+          }
+          if (!PathUtil.validName(newName, options.value.isWindows)) {
+            setState(() {
+              if (item.isDirectory) {
+                errorText = translate("Invalid folder name");
+              } else {
+                errorText = translate("Invalid file name");
+              }
+            });
+            return;
+          }
+          await bind.sessionRenameFile(
+            sessionId: sessionId,
+            actId: JobController.jobID.next(),
+            path: item.path,
+            newName: newName,
+            isRemote: !isLocal,
+          );
+          close();
+        }
+
+        return CustomAlertDialog(
+          content: Column(
+            children: [
+              DialogTextField(
+                title: '${translate('Rename')} ${item.name}',
+                controller: textEditingController,
+                errorText: errorText,
+              ),
+            ],
           ),
-          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
-        ],
-        onSubmit: submit,
-        onCancel: close,
-      );
-    });
+          actions: [
+            dialogButton(
+              "Cancel",
+              icon: Icon(Icons.close_rounded),
+              onPressed: close,
+              isOutline: true,
+            ),
+            dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+          ],
+          onSubmit: submit,
+          onCancel: close,
+        );
+      });
+    } finally {
+      textEditingController.removeListener(onTextChanged);
+      textEditingController.dispose();
+    }
   }
 }
 

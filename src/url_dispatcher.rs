@@ -25,6 +25,7 @@ struct DispatcherInner {
     last_fallback_spawn: Option<Instant>,
     worker_running: bool,
     generation: u64,
+    paused: bool,
 }
 
 struct UrlDispatcher {
@@ -41,6 +42,7 @@ camellia_remote_protocol::lazy_static::lazy_static! {
             last_fallback_spawn: None,
             worker_running: false,
             generation: 1,
+            paused: false,
         }),
         cvar: Condvar::new(),
         stop_worker: AtomicBool::new(false),
@@ -83,8 +85,10 @@ pub fn enqueue_url(url: String) -> bool {
     }
 
     state.queue.push_back(url);
-    ensure_worker_running(&mut state, dispatcher);
-    dispatcher.cvar.notify_one();
+    if !state.paused {
+        ensure_worker_running(&mut state, dispatcher);
+        dispatcher.cvar.notify_one();
+    }
     true
 }
 
@@ -118,6 +122,17 @@ pub fn bump_generation() -> u64 {
     state.generation
 }
 
+/// Pause or resume worker processing (used to ensure deterministic testing of queue capacity).
+pub fn set_paused_for_test(paused: bool) {
+    let dispatcher = &DISPATCHER;
+    let mut state = dispatcher.state.lock().unwrap();
+    state.paused = paused;
+    if !paused {
+        ensure_worker_running(&mut state, dispatcher);
+        dispatcher.cvar.notify_one();
+    }
+}
+
 fn ensure_worker_running(state: &mut DispatcherInner, dispatcher: &Arc<UrlDispatcher>) {
     if !state.worker_running {
         state.worker_running = true;
@@ -136,7 +151,9 @@ fn worker_loop(dispatcher: Arc<UrlDispatcher>) {
     loop {
         let url = {
             let mut state = dispatcher.state.lock().unwrap();
-            while state.queue.is_empty() && !dispatcher.stop_worker.load(Ordering::SeqCst) {
+            while (state.queue.is_empty() || state.paused)
+                && !dispatcher.stop_worker.load(Ordering::SeqCst)
+            {
                 // Wait with a 30-second idle timeout to exit gracefully when inactive
                 let (next_state, timeout_result) = dispatcher
                     .cvar
@@ -156,7 +173,11 @@ fn worker_loop(dispatcher: Arc<UrlDispatcher>) {
                 return;
             }
 
-            state.queue.pop_front()
+            if state.paused {
+                None
+            } else {
+                state.queue.pop_front()
+            }
         };
 
         if let Some(url) = url {

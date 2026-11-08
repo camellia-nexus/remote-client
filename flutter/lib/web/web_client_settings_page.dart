@@ -113,128 +113,134 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     final errMsgs = [idErr, relayErr, apiErr];
     var isInProgress = false;
 
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            Future<void> submit() async {
-              setDialogState(() {
-                isInProgress = true;
-              });
-              final ok = await setServerConfig(
-                null,
-                errMsgs,
-                ServerConfig(
-                  idServer: idCtrl.text.trim(),
-                  relayServer: relayCtrl.text.trim(),
-                  apiServer: apiCtrl.text.trim(),
-                  key: keyCtrl.text.trim(),
-                ),
-              );
-              if (!dialogContext.mounted) {
-                return;
-              }
-              setDialogState(() {
-                isInProgress = false;
-              });
-              if (ok) {
-                Navigator.of(dialogContext).pop();
-                showToast(translate('Successful'));
-                if (mounted) {
-                  setState(() {});
-                }
-              } else {
-                setDialogState(() {});
-                showToast(translate('Failed'));
-              }
-            }
-
-            Widget buildField({
-              required String label,
-              required TextEditingController controller,
-              required String error,
-              String? hint,
-            }) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              Future<void> submit() async {
+                setDialogState(() {
+                  isInProgress = true;
+                });
+                final ok = await setServerConfig(
+                  null,
+                  errMsgs,
+                  ServerConfig(
+                    idServer: idCtrl.text.trim(),
+                    relayServer: relayCtrl.text.trim(),
+                    apiServer: apiCtrl.text.trim(),
+                    key: keyCtrl.text.trim(),
                   ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: controller,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      hintText: hint,
-                      errorText: error.isEmpty ? null : error,
-                      border: const OutlineInputBorder(),
+                );
+                if (!dialogContext.mounted) {
+                  return;
+                }
+                setDialogState(() {
+                  isInProgress = false;
+                });
+                if (ok) {
+                  Navigator.of(dialogContext).pop();
+                  showToast(translate('Successful'));
+                  if (mounted) {
+                    setState(() {});
+                  }
+                } else {
+                  setDialogState(() {});
+                  showToast(translate('Failed'));
+                }
+              }
+
+              Widget buildField({
+                required String label,
+                required TextEditingController controller,
+                required String error,
+                String? hint,
+              }) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: controller,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: hint,
+                        errorText: error.isEmpty ? null : error,
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                );
+              }
+
+              return AlertDialog(
+                title: Row(
+                  children: [
+                    Expanded(child: Text(translate('ID/Relay Server'))),
+                    ...ServerConfigImportExportWidgets(controllers, errMsgs),
+                  ],
+                ),
+                content: SizedBox(
+                  width: 580,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        buildField(
+                          label: translate('ID Server'),
+                          controller: idCtrl,
+                          error: idErr.value,
+                          hint: 'host[:port]',
+                        ),
+                        const SizedBox(height: 10),
+                        buildField(
+                          label: translate('Relay Server'),
+                          controller: relayCtrl,
+                          error: relayErr.value,
+                          hint: 'host[:port]',
+                        ),
+                        const SizedBox(height: 10),
+                        buildField(
+                          label: translate('API Server'),
+                          controller: apiCtrl,
+                          error: apiErr.value,
+                          hint: 'https://api.example.com',
+                        ),
+                        const SizedBox(height: 10),
+                        buildField(label: 'Key', controller: keyCtrl, error: ''),
+                        if (isInProgress) ...[
+                          const SizedBox(height: 12),
+                          const LinearProgressIndicator(),
+                        ],
+                      ],
                     ),
                   ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: Text(translate('Cancel')),
+                  ),
+                  FilledButton(
+                    onPressed: isInProgress ? null : submit,
+                    child: Text(translate('OK')),
+                  ),
                 ],
               );
-            }
-
-            return AlertDialog(
-              title: Row(
-                children: [
-                  Expanded(child: Text(translate('ID/Relay Server'))),
-                  ...ServerConfigImportExportWidgets(controllers, errMsgs),
-                ],
-              ),
-              content: SizedBox(
-                width: 580,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      buildField(
-                        label: translate('ID Server'),
-                        controller: idCtrl,
-                        error: idErr.value,
-                        hint: 'host[:port]',
-                      ),
-                      const SizedBox(height: 10),
-                      buildField(
-                        label: translate('Relay Server'),
-                        controller: relayCtrl,
-                        error: relayErr.value,
-                        hint: 'host[:port]',
-                      ),
-                      const SizedBox(height: 10),
-                      buildField(
-                        label: translate('API Server'),
-                        controller: apiCtrl,
-                        error: apiErr.value,
-                        hint: 'https://api.example.com',
-                      ),
-                      const SizedBox(height: 10),
-                      buildField(label: 'Key', controller: keyCtrl, error: ''),
-                      if (isInProgress) ...[
-                        const SizedBox(height: 12),
-                        const LinearProgressIndicator(),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: Text(translate('Cancel')),
-                ),
-                FilledButton(
-                  onPressed: isInProgress ? null : submit,
-                  child: Text(translate('OK')),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+            },
+          );
+        },
+      );
+    } finally {
+      for (final c in controllers) {
+        c.dispose();
+      }
+    }
   }
 
   String _otherLabel(String raw) {

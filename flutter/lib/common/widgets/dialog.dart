@@ -718,6 +718,8 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
   Timer? _timerReRequestFocus;
   SimpleWrapper<String?> errorText = SimpleWrapper(null);
   String _preText = '';
+  VoidCallback? _controllerListener;
+  VoidCallback? _focusListener;
 
   @override
   void initState() {
@@ -727,21 +729,22 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
         Duration(milliseconds: 50),
         () => _focusNode.requestFocus(),
       );
+    }
 
-      if (widget.onChanged != null) {
-        widget.controller.addListener(() {
-          final text = widget.controller.text.trim();
-          if (text == _preText) return;
-          widget.onChanged!(setState, errorText);
-          _preText = text;
-        });
-      }
+    if (widget.onChanged != null) {
+      _controllerListener = () {
+        final text = widget.controller.text.trim();
+        if (text == _preText) return;
+        widget.onChanged!(setState, errorText);
+        _preText = text;
+      };
+      widget.controller.addListener(_controllerListener!);
     }
 
     // software secure keyboard will take the focus since flutter 3.13
     // request focus again when android account password obtain focus
     if (isAndroid && widget.reRequestFocus) {
-      _focusNode.addListener(() {
+      _focusListener = () {
         if (_focusNode.hasFocus) {
           _timerReRequestFocus?.cancel();
           _timerReRequestFocus = Timer(
@@ -749,7 +752,19 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
             () => _focusNode.requestFocus(),
           );
         }
-      });
+      };
+      _focusNode.addListener(_focusListener!);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DialogVerificationCodeField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      if (_controllerListener != null) {
+        oldWidget.controller.removeListener(_controllerListener!);
+        widget.controller.addListener(_controllerListener!);
+      }
     }
   }
 
@@ -757,6 +772,12 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
   void dispose() {
     _timer?.cancel();
     _timerReRequestFocus?.cancel();
+    if (_controllerListener != null) {
+      widget.controller.removeListener(_controllerListener!);
+    }
+    if (_focusListener != null) {
+      _focusNode.removeListener(_focusListener!);
+    }
     _focusNode.unfocus();
     _focusNode.dispose();
     super.dispose();
@@ -1986,6 +2007,42 @@ Future<bool> showConnEndAuditDialogCloseCanceled({
 }
 
 // return value:
+Future<bool> updateAuditNoteByGuid(String auditGuid, String note) async {
+  debugPrint(
+    'Updating audit note for GUID: $auditGuid, note length: ${note.length}',
+  );
+  try {
+    final apiServer = await bind.mainGetApiServer();
+    if (apiServer.isEmpty) {
+      debugPrint('API server is empty, cannot update audit note');
+      return false;
+    }
+    final url = '$apiServer/api/audit';
+    var headers = getHttpHeaders();
+    headers['Content-Type'] = "application/json";
+    final body = jsonEncode({'guid': auditGuid, 'note': note});
+
+    final response = await http.put(
+      Uri.parse(url),
+      headers: headers,
+      body: body,
+    );
+
+    if (response.statusCode == 200) {
+      debugPrint('Successfully updated audit note for GUID: $auditGuid');
+      return true;
+    } else {
+      debugPrint(
+        'Failed to update audit note. Status: ${response.statusCode}, Body length: ${response.body.length}',
+      );
+      return false;
+    }
+  } catch (e) {
+    debugPrint('Error updating audit note: $e');
+    return false;
+  }
+}
+
 //  true: return
 //  false / null: go on
 Future<bool?> _showConnEndAuditDialogCloseCanceled({
@@ -2001,39 +2058,6 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
   }
   ffi.dialogManager.dismissAll();
 
-  Future<void> updateAuditNoteByGuid(String auditGuid, String note) async {
-    debugPrint(
-      'Updating audit note for GUID: $auditGuid, note length: ${note.length}',
-    );
-    try {
-      final apiServer = await bind.mainGetApiServer();
-      if (apiServer.isEmpty) {
-        debugPrint('API server is empty, cannot update audit note');
-        return;
-      }
-      final url = '$apiServer/api/audit';
-      var headers = getHttpHeaders();
-      headers['Content-Type'] = "application/json";
-      final body = jsonEncode({'guid': auditGuid, 'note': note});
-
-      final response = await http.put(
-        Uri.parse(url),
-        headers: headers,
-        body: body,
-      );
-
-      if (response.statusCode == 200) {
-        debugPrint('Successfully updated audit note for GUID: $auditGuid');
-      } else {
-        debugPrint(
-          'Failed to update audit note. Status: ${response.statusCode}, Body length: ${response.body.length}',
-        );
-      }
-    } catch (e) {
-      debugPrint('Error updating audit note: $e');
-    }
-  }
-
   final controller = TextEditingController();
   bool askForNote = mainGetLocalBoolOptionSync(
     kOptionAllowAskForNoteAtEndOfConnection,
@@ -2042,26 +2066,48 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
   bool isInProgress = false;
 
   return await ffi.dialogManager.show<bool>((setState, close, context) {
-    cancel() {
-      close(true);
+    var isClosed = false;
+    safeClose(bool? result) {
+      if (isClosed) return;
+      isClosed = true;
+      controller.dispose();
+      close(result);
     }
 
-    set() async {
-      if (isInProgress) return;
+    cancel() {
+      safeClose(true);
+    }
+
+    Future<bool> set() async {
+      if (isInProgress) return false;
       setState(() {
         isInProgress = true;
       });
       var text = controller.text;
       if (text.isNotEmpty) {
-        await updateAuditNoteByGuid(
-          bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
-          text,
-        ).timeout(
-          const Duration(seconds: 6),
-          onTimeout: () {
-            debugPrint('updateAuditNoteByGuid timeout after 6s');
-          },
-        );
+        bool updateSuccess = false;
+        try {
+          updateSuccess = await updateAuditNoteByGuid(
+            bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
+            text,
+          ).timeout(
+            const Duration(seconds: 6),
+            onTimeout: () {
+              debugPrint('updateAuditNoteByGuid timeout after 6s');
+              return false;
+            },
+          );
+        } catch (e) {
+          debugPrint('Error updating audit note: $e');
+          updateSuccess = false;
+        }
+        if (!updateSuccess) {
+          setState(() {
+            isInProgress = false;
+          });
+          showToast(translate('Failed to update audit note'));
+          return false;
+        }
       }
       // Save the "ask for note" preference
       if (!isOptFixed) {
@@ -2070,11 +2116,13 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
           askForNote,
         );
       }
+      return true;
     }
 
     submit() async {
-      await set();
-      close(false);
+      if (await set()) {
+        safeClose(false);
+      }
     }
 
     final buttons = [
@@ -2085,9 +2133,10 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
         dialogButton(
           'Retry',
           onPressed: () async {
-            await set();
-            close(true);
-            ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
+            if (await set()) {
+              safeClose(true);
+              ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
+            }
           },
         ),
       );
@@ -2096,9 +2145,10 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
           dialogButton(
             'Connect via relay',
             onPressed: () async {
-              await set();
-              close(true);
-              ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
+              if (await set()) {
+                safeClose(true);
+                ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
+              }
             },
           ),
         );
@@ -3193,6 +3243,18 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
   });
 }
 
+bool hwidEquals(Uint8List a, Uint8List b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+String hwidToHex(Uint8List hwid) =>
+    hwid.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
 void confrimDeleteTrustedDevicesDialog(
   RxList<TrustedDevice> trustedDevices,
   RxList<Uint8List> selectedDevices,
@@ -3202,7 +3264,15 @@ void confrimDeleteTrustedDevicesDialog(
     '${translate('Confirm Delete')}?',
     () async {
       if (selectedDevices.isEmpty) return;
-      if (selectedDevices.length == trustedDevices.length) {
+      // STATE-022: Verify exact set equality by byte content, not mere length equality,
+      // preventing accidental clear-all when background expiration or changes occurred.
+      final selectedHexSet = selectedDevices.map(hwidToHex).toSet();
+      final currentHexSet = trustedDevices.map((d) => d.hwidHex).toSet();
+      final isExactAllSelected = currentHexSet.isNotEmpty &&
+          currentHexSet.length == selectedHexSet.length &&
+          currentHexSet.every(selectedHexSet.contains);
+
+      if (isExactAllSelected) {
         await bind.mainClearTrustedDevices();
         trustedDevices.clear();
         selectedDevices.clear();
@@ -3211,8 +3281,9 @@ void confrimDeleteTrustedDevicesDialog(
           selectedDevices.map((e) => e.toList()).toList(),
         );
         await bind.mainRemoveTrustedDevices(json: json);
+        // STATE-022: Match by byte content / hwidHex, NOT object identity
         trustedDevices.removeWhere((element) {
-          return selectedDevices.contains(element.hwid);
+          return selectedHexSet.contains(element.hwidHex);
         });
         selectedDevices.clear();
       }
@@ -3259,15 +3330,27 @@ class TrustedDevice {
   late final String id;
   late final String name;
   late final String platform;
+  late final String hwidHex;
 
   TrustedDevice.fromJson(Map<String, dynamic> json) {
     final hwidList = json['hwid'] as List<dynamic>;
     hwid = Uint8List.fromList(hwidList.cast<int>());
+    hwidHex = hwidToHex(hwid);
     time = json['time'];
     id = json['id'];
     name = json['name'];
     platform = json['platform'];
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TrustedDevice &&
+          runtimeType == other.runtimeType &&
+          hwidHex == other.hwidHex;
+
+  @override
+  int get hashCode => hwidHex.hashCode;
 
   String daysRemaining() {
     final expiry = time + 90 * 24 * 60 * 60 * 1000;
@@ -3302,69 +3385,118 @@ Widget trustedDevicesTable(
   RxList<TrustedDevice> devices,
   RxList<Uint8List> selectedDevices,
 ) {
-  RxBool selectAll = false.obs;
-  setSelectAll() {
-    if (selectedDevices.isNotEmpty &&
-        selectedDevices.length == devices.length) {
+  return _TrustedDevicesTableView(
+    devices: devices,
+    selectedDevices: selectedDevices,
+  );
+}
+
+class _TrustedDevicesTableView extends StatefulWidget {
+  final RxList<TrustedDevice> devices;
+  final RxList<Uint8List> selectedDevices;
+
+  const _TrustedDevicesTableView({
+    Key? key,
+    required this.devices,
+    required this.selectedDevices,
+  }) : super(key: key);
+
+  @override
+  State<_TrustedDevicesTableView> createState() =>
+      _TrustedDevicesTableViewState();
+}
+
+class _TrustedDevicesTableViewState extends State<_TrustedDevicesTableView> {
+  final RxBool selectAll = false.obs;
+  Worker? _workerDevices;
+  Worker? _workerSelected;
+
+  void setSelectAll() {
+    if (!mounted) return;
+    final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
+    final currentHexSet = widget.devices.map((d) => d.hwidHex).toSet();
+    if (currentHexSet.isNotEmpty &&
+        currentHexSet.length == selectedHexSet.length &&
+        currentHexSet.every(selectedHexSet.contains)) {
       selectAll.value = true;
     } else {
       selectAll.value = false;
     }
   }
 
-  devices.listen((_) {
+  @override
+  void initState() {
+    super.initState();
+    _workerDevices = ever(widget.devices, (_) => setSelectAll());
+    _workerSelected = ever(widget.selectedDevices, (_) => setSelectAll());
     setSelectAll();
-  });
-  selectedDevices.listen((_) {
-    setSelectAll();
-  });
-  return FittedBox(
-    child: Obx(
-      () => DataTable(
-        columns: [
-          DataColumn(
-            label: Checkbox(
-              value: selectAll.value,
-              onChanged: (value) {
-                if (value == true) {
-                  selectedDevices.clear();
-                  selectedDevices.addAll(devices.map((e) => e.hwid));
-                } else {
-                  selectedDevices.clear();
-                }
-              },
-            ),
-          ),
-          DataColumn(label: Text(translate('Platform'))),
-          DataColumn(label: Text(translate('ID'))),
-          DataColumn(label: Text(translate('Username'))),
-          DataColumn(label: Text(translate('Days remaining'))),
-        ],
-        rows: devices.map((device) {
-          return DataRow(
-            cells: [
-              DataCell(
-                Checkbox(
-                  value: selectedDevices.contains(device.hwid),
+  }
+
+  @override
+  void dispose() {
+    _workerDevices?.dispose();
+    _workerSelected?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      child: Obx(
+        () {
+          final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
+          return DataTable(
+            columns: [
+              DataColumn(
+                label: Checkbox(
+                  value: selectAll.value,
                   onChanged: (value) {
-                    if (value == null) return;
-                    if (value) {
-                      selectedDevices.remove(device.hwid);
-                      selectedDevices.add(device.hwid);
+                    if (value == true) {
+                      widget.selectedDevices.clear();
+                      widget.selectedDevices
+                          .addAll(widget.devices.map((e) => e.hwid));
                     } else {
-                      selectedDevices.remove(device.hwid);
+                      widget.selectedDevices.clear();
                     }
                   },
                 ),
               ),
-              DataCell(Text(device.platform)),
-              DataCell(Text(device.id)),
-              DataCell(Text(device.name)),
-              DataCell(Text(device.daysRemaining())),
+              DataColumn(label: Text(translate('Platform'))),
+              DataColumn(label: Text(translate('ID'))),
+              DataColumn(label: Text(translate('Username'))),
+              DataColumn(label: Text(translate('Days remaining'))),
             ],
+            rows: widget.devices.map((device) {
+              final isChecked = selectedHexSet.contains(device.hwidHex);
+              return DataRow(
+                cells: [
+                  DataCell(
+                    Checkbox(
+                      value: isChecked,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        if (value) {
+                          if (!widget.selectedDevices
+                              .any((h) => hwidEquals(h, device.hwid))) {
+                            widget.selectedDevices.add(device.hwid);
+                          }
+                        } else {
+                          widget.selectedDevices
+                              .removeWhere((h) => hwidEquals(h, device.hwid));
+                        }
+                      },
+                    ),
+                  ),
+                  DataCell(Text(device.platform)),
+                  DataCell(Text(device.id)),
+                  DataCell(Text(device.name)),
+                  DataCell(Text(device.daysRemaining())),
+                ],
+              );
+            }).toList(),
           );
-        }).toList(),
+        },
       ),
-    ),
-  );
+    );
+  }
 }

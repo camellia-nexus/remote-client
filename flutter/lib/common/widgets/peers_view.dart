@@ -362,11 +362,7 @@ class _PeersViewState extends State<_PeersView>
   }
 
   Future<List<Peer>>? matchPeers(
-      String searchText, String sortedBy, List<Peer> peers) async {
-    if (widget.peerFilter != null) {
-      peers = peers.where((peer) => widget.peerFilter!(peer)).toList();
-    }
-
+      String searchText, String sortedBy, List<Peer> peers) {
     // fallback to id sorting
     if (!PeerSortType.values.contains(sortedBy)) {
       sortedBy = PeerSortType.remoteId;
@@ -375,42 +371,75 @@ class _PeersViewState extends State<_PeersView>
         v: sortedBy,
       );
     }
-
-    if (widget.peers.loadEvent != LoadEvent.recent) {
-      switch (sortedBy) {
-        case PeerSortType.remoteId:
-          peers.sort((p1, p2) => p1.getId().compareTo(p2.getId()));
-          break;
-        case PeerSortType.remoteHost:
-          peers.sort((p1, p2) =>
-              p1.hostname.toLowerCase().compareTo(p2.hostname.toLowerCase()));
-          break;
-        case PeerSortType.username:
-          peers.sort((p1, p2) =>
-              p1.username.toLowerCase().compareTo(p2.username.toLowerCase()));
-          break;
-        case PeerSortType.status:
-          peers.sort((p1, p2) => p1.online ? -1 : 1);
-          break;
-      }
-    }
-
-    searchText = searchText.trim();
-    if (searchText.isEmpty) {
-      return peers;
-    }
-    searchText = searchText.toLowerCase();
-    final matches = await Future.wait(
-        peers.map((peer) => matchPeer(searchText, peer, widget.peerTabIndex)));
-    final filteredList = List<Peer>.empty(growable: true);
-    for (var i = 0; i < peers.length; i++) {
-      if (matches[i]) {
-        filteredList.add(peers[i]);
-      }
-    }
-
-    return filteredList;
+    return matchPeersStatic(
+      searchText: searchText,
+      sortedBy: sortedBy,
+      peers: peers,
+      peerFilter: widget.peerFilter,
+      isRecent: widget.peers.loadEvent == LoadEvent.recent,
+      peerTabIndex: widget.peerTabIndex,
+    );
   }
+}
+
+Future<List<Peer>> matchPeersStatic({
+  required String searchText,
+  required String sortedBy,
+  required List<Peer> peers,
+  PeerFilter? peerFilter,
+  bool isRecent = false,
+  PeerTabIndex peerTabIndex = PeerTabIndex.recent,
+}) async {
+  // UI-001: Create an isolated snapshot copy to avoid in-place mutation of authoritative list
+  List<Peer> workingPeers = List<Peer>.from(peers);
+  if (peerFilter != null) {
+    workingPeers = workingPeers.where((peer) => peerFilter(peer)).toList();
+  }
+
+  if (!PeerSortType.values.contains(sortedBy)) {
+    sortedBy = PeerSortType.remoteId;
+  }
+
+  if (!isRecent) {
+    switch (sortedBy) {
+      case PeerSortType.remoteId:
+        workingPeers.sort((p1, p2) => p1.getId().compareTo(p2.getId()));
+        break;
+      case PeerSortType.remoteHost:
+        workingPeers.sort((p1, p2) =>
+            p1.hostname.toLowerCase().compareTo(p2.hostname.toLowerCase()));
+        break;
+      case PeerSortType.username:
+        workingPeers.sort((p1, p2) =>
+            p1.username.toLowerCase().compareTo(p2.username.toLowerCase()));
+        break;
+      case PeerSortType.status:
+        // UI-001: Obey antisymmetry/transitivity contract; secondary key ensures total order
+        workingPeers.sort((p1, p2) {
+          if (p1.online != p2.online) {
+            return p1.online ? -1 : 1;
+          }
+          return p1.getId().compareTo(p2.getId());
+        });
+        break;
+    }
+  }
+
+  searchText = searchText.trim();
+  if (searchText.isEmpty) {
+    return workingPeers;
+  }
+  searchText = searchText.toLowerCase();
+  final matches = await Future.wait(workingPeers
+      .map((peer) => matchPeer(searchText, peer, peerTabIndex)));
+  final filteredList = List<Peer>.empty(growable: true);
+  for (var i = 0; i < workingPeers.length; i++) {
+    if (matches[i]) {
+      filteredList.add(workingPeers[i]);
+    }
+  }
+
+  return filteredList;
 }
 
 abstract class BasePeersView extends StatelessWidget {

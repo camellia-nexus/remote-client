@@ -116,6 +116,7 @@ fn test_res045_child_supervisor_generation_and_stop() {
 #[test]
 fn test_res044_url_dispatcher_enqueue_and_capacity_bound() {
     let _lock = acquire_batch25_test_lock();
+    url_dispatcher::set_paused_for_test(true);
     url_dispatcher::clear_queue();
 
     // Enqueue valid URLs up to capacity
@@ -134,6 +135,7 @@ fn test_res044_url_dispatcher_enqueue_and_capacity_bound() {
     );
 
     url_dispatcher::clear_queue();
+    url_dispatcher::set_paused_for_test(false);
     assert_eq!(url_dispatcher::queue_len(), 0);
 }
 

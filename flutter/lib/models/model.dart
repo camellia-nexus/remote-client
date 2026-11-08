@@ -3212,6 +3212,9 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  bool _disposed = false;
+  bool get isDisposed => _disposed;
+
   clear() {
     _x = 0;
     _y = 0;
@@ -3221,6 +3224,23 @@ class CanvasModel with ChangeNotifier {
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = null;
     _scaleBeforeMobileSoftKeyboard = null;
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) {
+      super.notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    clear();
+    _horizontal.dispose();
+    _vertical.dispose();
+    super.dispose();
   }
 
   updateScrollPercent() {
@@ -4768,6 +4788,7 @@ class FFI {
     cursorModel.clear();
     ffiModel.clear();
     canvasModel.clear();
+    canvasModel.dispose();
     inputModel.resetModifiers();
     // Dispose relative mouse mode resources to ensure cursor is restored
     inputModel.disposeRelativeMouseMode();

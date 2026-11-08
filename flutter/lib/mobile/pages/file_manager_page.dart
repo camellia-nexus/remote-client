@@ -214,7 +214,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
                 ),
               ];
             },
-            onSelected: (v) {
+            onSelected: (v) async {
               if (v == "refresh") {
                 currentFileController.refresh();
               } else if (v == "select") {
@@ -225,63 +225,68 @@ class _FileManagerPageState extends State<FileManagerPage> {
               } else if (v == "folder") {
                 final name = TextEditingController();
                 String? errorText;
-                gFFI.dialogManager.show((setState, close, context) {
-                  name.addListener(() {
-                    if (errorText != null) {
-                      setState(() {
-                        errorText = null;
-                      });
-                    }
-                  });
-                  return CustomAlertDialog(
-                    title: Text(translate("Create Folder")),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextFormField(
-                          decoration: InputDecoration(
-                            labelText: translate(
-                              "Please enter the folder name",
-                            ),
-                            errorText: errorText,
-                          ),
-                          controller: name,
-                        ).workaroundFreezeLinuxMint(),
-                      ],
-                    ),
-                    actions: [
-                      dialogButton(
-                        "Cancel",
-                        onPressed: () => close(false),
-                        isOutline: true,
-                      ),
-                      dialogButton(
-                        "OK",
-                        onPressed: () {
-                          if (name.value.text.isNotEmpty) {
-                            if (!PathUtil.validName(
-                              name.value.text,
-                              currentFileController.options.value.isWindows,
-                            )) {
-                              setState(() {
-                                errorText = translate("Invalid folder name");
-                              });
-                              return;
-                            }
-                            currentFileController.createDir(
-                              PathUtil.join(
-                                currentDir.path,
-                                name.value.text,
-                                currentOptions.isWindows,
+                void onTextChanged() {
+                  if (errorText != null) {
+                    errorText = null;
+                  }
+                }
+
+                name.addListener(onTextChanged);
+                try {
+                  await gFFI.dialogManager.show((setState, close, context) {
+                    return CustomAlertDialog(
+                      title: Text(translate("Create Folder")),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextFormField(
+                            decoration: InputDecoration(
+                              labelText: translate(
+                                "Please enter the folder name",
                               ),
-                            );
-                            close();
-                          }
-                        },
+                              errorText: errorText,
+                            ),
+                            controller: name,
+                          ).workaroundFreezeLinuxMint(),
+                        ],
                       ),
-                    ],
-                  );
-                });
+                      actions: [
+                        dialogButton(
+                          "Cancel",
+                          onPressed: () => close(false),
+                          isOutline: true,
+                        ),
+                        dialogButton(
+                          "OK",
+                          onPressed: () {
+                            if (name.value.text.isNotEmpty) {
+                              if (!PathUtil.validName(
+                                name.value.text,
+                                currentFileController.options.value.isWindows,
+                              )) {
+                                setState(() {
+                                  errorText = translate("Invalid folder name");
+                                });
+                                return;
+                              }
+                              currentFileController.createDir(
+                                PathUtil.join(
+                                  currentDir.path,
+                                  name.value.text,
+                                  currentOptions.isWindows,
+                                ),
+                              );
+                              close();
+                            }
+                          },
+                        ),
+                      ],
+                    );
+                  });
+                } finally {
+                  name.removeListener(onTextChanged);
+                  name.dispose();
+                }
               } else if (v == "hidden") {
                 currentFileController.toggleShowHidden();
               }

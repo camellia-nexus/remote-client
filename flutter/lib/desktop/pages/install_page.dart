@@ -92,6 +92,7 @@ class _InstallPageBodyState extends State<_InstallPageBody>
   @override
   void dispose() {
     windowManager.removeListener(this);
+    controller.dispose();
     super.dispose();
   }
 
