@@ -1,7 +1,3 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -250,13 +246,12 @@ void main() {
     testWidgets('AnimatedRotationWidget cancels spin subscription on dispose',
         (WidgetTester tester) async {
       final spinning = false.obs;
-      bool pressed = false;
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: AnimatedRotationWidget(
             spinning: spinning,
-            onPressed: () => pressed = true,
+            onPressed: () {},
             child: const Icon(Icons.refresh),
           ),
         ),
