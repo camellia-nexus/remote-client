@@ -324,7 +324,9 @@ class DesktopTab extends StatefulWidget {
 class _DesktopTabState extends State<DesktopTab>
     with MultiWindowListener, WindowListener {
   Timer? _macOSCheckRestoreTimer;
+  Timer? _macOSFollowupCloseTimer;
   int _macOSCheckRestoreCounter = 0;
+  int _macOSCloseGeneration = 0;
 
   bool get showLogo => widget.showLogo;
   bool get showTitle => widget.showTitle;
@@ -391,7 +393,11 @@ class _DesktopTabState extends State<DesktopTab>
   void dispose() {
     DesktopMultiWindow.removeListener(this);
     windowManager.removeListener(this);
+    _macOSCloseGeneration++;
     _macOSCheckRestoreTimer?.cancel();
+    _macOSCheckRestoreTimer = null;
+    _macOSFollowupCloseTimer?.cancel();
+    _macOSFollowupCloseTimer = null;
     super.dispose();
   }
 
@@ -484,15 +490,34 @@ class _DesktopTabState extends State<DesktopTab>
       Future<bool> Function() checkFullscreen,
       Future<void> Function() closeFunc,
     ) async {
+      _macOSCheckRestoreTimer?.cancel();
+      _macOSFollowupCloseTimer?.cancel();
+      final myGen = ++_macOSCloseGeneration;
       _macOSCheckRestoreCounter = 0;
       _macOSCheckRestoreTimer = Timer.periodic(Duration(milliseconds: 30), (
         timer,
       ) async {
+        if (myGen != _macOSCloseGeneration || !mounted) {
+          timer.cancel();
+          return;
+        }
         _macOSCheckRestoreCounter++;
-        if (!await checkFullscreen() || _macOSCheckRestoreCounter >= 30) {
-          _macOSCheckRestoreTimer?.cancel();
-          _macOSCheckRestoreTimer = null;
-          Timer(Duration(milliseconds: 700), () async => await closeFunc());
+        final isFs = await checkFullscreen();
+        if (myGen != _macOSCloseGeneration || !mounted) {
+          timer.cancel();
+          return;
+        }
+        if (!isFs || _macOSCheckRestoreCounter >= 30) {
+          timer.cancel();
+          if (_macOSCheckRestoreTimer == timer) {
+            _macOSCheckRestoreTimer = null;
+          }
+          _macOSFollowupCloseTimer?.cancel();
+          _macOSFollowupCloseTimer = Timer(Duration(milliseconds: 700), () async {
+            if (myGen == _macOSCloseGeneration && mounted) {
+              await closeFunc();
+            }
+          });
         }
       });
     }

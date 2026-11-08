@@ -423,11 +423,11 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'set_multiple_windows_session') {
         handleMultipleWindowsSession(evt, sessionId, peerId);
       } else if (name == 'peer_info') {
-        handlePeerInfo(evt, peerId, false);
+        await handlePeerInfo(evt, peerId, false);
       } else if (name == 'sync_peer_info') {
-        handleSyncPeerInfo(evt, sessionId, peerId);
+        await handleSyncPeerInfo(evt, sessionId, peerId);
       } else if (name == 'sync_platform_additions') {
-        handlePlatformAdditions(evt, sessionId, peerId);
+        await handlePlatformAdditions(evt, sessionId, peerId);
       } else if (name == 'connection_ready') {
         setConnectionType(
           peerId,
@@ -453,12 +453,12 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'permission') {
         updatePermission(evt, peerId);
       } else if (name == 'chat_client_mode') {
-        parent.target?.chatModel.receive(
+        await parent.target?.chatModel.receive(
           ChatModel.clientModeID,
           evt['text'] ?? '',
         );
       } else if (name == 'chat_server_mode') {
-        parent.target?.chatModel.receive(
+        await parent.target?.chatModel.receive(
           int.parse(evt['id'] as String),
           evt['text'] ?? '',
         );
@@ -498,7 +498,7 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'update_block_input_state') {
         updateBlockInputState(evt, peerId);
       } else if (name == 'update_privacy_mode') {
-        updatePrivacyMode(evt, sessionId, peerId);
+        await updatePrivacyMode(evt, sessionId, peerId);
       } else if (name == 'show_elevation') {
         final show = evt['show'].toString() == 'true';
         parent.target?.serverModel.setShowElevation(show);
@@ -4260,6 +4260,9 @@ class FFI {
   var closed = false;
   final bool isGlobal;
   int sessionGeneration = 1;
+  StreamSubscription<EventToUI>? _sessionEventSubscription;
+  final List<EventToUI> _sessionEventQueue = [];
+  bool _isProcessingSessionEvent = false;
 
   /// dialogManager use late to ensure init after main page binding [globalKey]
   late final dialogManager = OverlayDialogManager();
@@ -4358,7 +4361,7 @@ class FFI {
   }
 
   /// Start with the given [id]. Only transfer file if [isFileTransfer], only view camera if [isViewCamera], only port forward if [isPortForward].
-  void start(
+  String start(
     String id, {
     bool isFileTransfer = false,
     bool isViewCamera = false,
@@ -4377,6 +4380,11 @@ class FFI {
     bool skipMobileReset = false,
   }) {
     closed = false;
+    _sessionEventSubscription?.cancel();
+    _sessionEventSubscription = null;
+    _sessionEventQueue.clear();
+    _isProcessingSessionEvent = false;
+
     ffiModel.resetReconnectRetry();
     if (isMobile && !skipMobileReset) mobileReset();
     assert(
@@ -4408,7 +4416,6 @@ class FFI {
     // If tabWindowId != null, this session is a "tab -> window" one.
     // Else this session is a new one.
     if (isNewPeer) {
-      // ignore: unused_local_variable
       final addRes = bind.sessionAddSync(
         sessionId: sessionId,
         id: id,
@@ -4424,12 +4431,24 @@ class FFI {
         connToken: connToken,
         isTerminalAdmin: isTerminalRunAsAdmin,
       );
+      if (addRes.isNotEmpty) {
+        debugPrint('Failed to add session $id: $addRes');
+        closed = true;
+        ffiModel.handleMsgBox({
+          'type': 'error',
+          'title': 'Connection Error',
+          'text': addRes,
+          'link': '',
+        }, sessionId, id);
+        return addRes;
+      }
     } else if (display != null) {
       if (displays == null) {
         debugPrint(
           'Unreachable, failed to add existed session to $id, the displays is null while display is $display',
         );
-        return;
+        closed = true;
+        return 'The displays is null';
       }
       final addRes = bind.sessionAddExistedSync(
         id: id,
@@ -4441,7 +4460,14 @@ class FFI {
         debugPrint(
           'Unreachable, failed to add existed session to $id, $addRes',
         );
-        return;
+        closed = true;
+        ffiModel.handleMsgBox({
+          'type': 'error',
+          'title': 'Connection Error',
+          'text': addRes,
+          'link': '',
+        }, sessionId, id);
+        return addRes;
       }
       ffiModel.pi.currentDisplay = display;
     }
@@ -4462,16 +4488,28 @@ class FFI {
     // Though the stream is returned immediately, the stream may not be ready.
     // Any operations that depend on the stream should be carefully handled.
     late final Stream<EventToUI> stream;
-    if (isNewPeer || display == null || displays == null) {
-      stream = bind.sessionStart(sessionId: sessionId, id: id);
-    } else {
-      // We have to put displays in `sessionStart()` to make sure the stream is ready
-      // and then the displays' capturing requests can be sent.
-      stream = bind.sessionStartWithDisplays(
-        sessionId: sessionId,
-        id: id,
-        displays: Int32List.fromList(displays),
-      );
+    try {
+      if (isNewPeer || display == null || displays == null) {
+        stream = bind.sessionStart(sessionId: sessionId, id: id);
+      } else {
+        // We have to put displays in `sessionStart()` to make sure the stream is ready
+        // and then the displays' capturing requests can be sent.
+        stream = bind.sessionStartWithDisplays(
+          sessionId: sessionId,
+          id: id,
+          displays: Int32List.fromList(displays),
+        );
+      }
+    } catch (e) {
+      debugPrint('Failed to start session stream: $e');
+      closed = true;
+      ffiModel.handleMsgBox({
+        'type': 'error',
+        'title': 'Connection Error',
+        'text': 'Failed to start session stream: $e',
+        'link': '',
+      }, sessionId, id);
+      return 'Failed to start session stream: $e';
     }
 
     if (isWeb) {
@@ -4497,7 +4535,7 @@ class FFI {
         imageModel.webOnRgba(display, data, width, height);
       });
       this.id = id;
-      return;
+      return '';
     }
 
     final cb = ffiModel.startEventListener(sessionId, id);
@@ -4506,39 +4544,81 @@ class FFI {
     final hasGpuTextureRender = bind.mainHasGpuTextureRender();
     final SimpleWrapper<bool> isToNewWindowNotified = SimpleWrapper(false);
     // Preserved for the rgba data.
-    stream.listen((message) {
-      if (closed) return;
-      if (tabWindowId != null && !isToNewWindowNotified.value) {
-        // Session is read to be moved to a new window.
-        // Get the cached data and handle the cached data.
-        Future.delayed(Duration.zero, () async {
-          final args = jsonEncode({'id': id, 'close': display == null});
-          final cachedData = await DesktopMultiWindow.invokeMethod(
-            tabWindowId,
-            kWindowEventGetCachedSessionData,
-            args,
-          );
-          if (cachedData == null) {
-            // unreachable
-            debugPrint('Unreachable, the cached data is empty.');
-            return;
+    _sessionEventSubscription = stream.listen(
+      (message) {
+        if (closed) return;
+        _sessionEventQueue.add(message);
+        _drainSessionEventQueue(
+          cb,
+          isToNewWindowNotified,
+          tabWindowId,
+          display,
+          hasGpuTextureRender,
+        );
+      },
+      onError: (err) {
+        debugPrint('Session event stream error for $id: $err');
+        closed = true;
+      },
+      onDone: () {
+        debugPrint('Session event stream done for $id');
+        closed = true;
+      },
+    );
+    // every instance will bind a stream
+    this.id = id;
+    return '';
+  }
+
+  Future<void> _drainSessionEventQueue(
+    StreamEventHandler cb,
+    SimpleWrapper<bool> isToNewWindowNotified,
+    int? tabWindowId,
+    int? display,
+    bool hasGpuTextureRender,
+  ) async {
+    if (_isProcessingSessionEvent) return;
+    _isProcessingSessionEvent = true;
+    try {
+      while (_sessionEventQueue.isNotEmpty && !closed) {
+        final message = _sessionEventQueue.removeAt(0);
+        if (tabWindowId != null && !isToNewWindowNotified.value) {
+          isToNewWindowNotified.value = true;
+          try {
+            final args = jsonEncode({'id': id, 'close': false});
+            final cachedData = await DesktopMultiWindow.invokeMethod(
+              tabWindowId,
+              kWindowEventGetCachedSessionData,
+              args,
+            );
+            if (cachedData != null) {
+              final data = CachedPeerData.fromString(cachedData);
+              if (data != null) {
+                ffiModel.setPermissions(data.permissions);
+                await ffiModel.handleCachedPeerData(data, id);
+                await sessionRefreshVideo(sessionId, ffiModel.pi);
+                await bind.sessionRequestNewDisplayInitMsgs(
+                  sessionId: sessionId,
+                  display: ffiModel.pi.currentDisplay,
+                );
+                if (display == null) {
+                  try {
+                    await DesktopMultiWindow.invokeMethod(
+                      tabWindowId,
+                      kWindowEventCommitTabTransfer,
+                      jsonEncode({'id': id}),
+                    );
+                  } catch (e) {
+                    debugPrint('Error committing tab transfer: $e');
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint('Error during tab transfer cached data handling: $e');
           }
-          final data = CachedPeerData.fromString(cachedData);
-          if (data == null) {
-            debugPrint('Unreachable, the cached data cannot be decoded.');
-            return;
-          }
-          ffiModel.setPermissions(data.permissions);
-          await ffiModel.handleCachedPeerData(data, id);
-          await sessionRefreshVideo(sessionId, ffiModel.pi);
-          await bind.sessionRequestNewDisplayInitMsgs(
-            sessionId: sessionId,
-            display: ffiModel.pi.currentDisplay,
-          );
-        });
-        isToNewWindowNotified.value = true;
-      }
-      () async {
+        }
+
         if (message is EventToUI_Event) {
           if (message.field0 == "close") {
             closed = true;
@@ -4557,36 +4637,37 @@ class FFI {
             await cb(event);
           }
         } else if (message is EventToUI_Rgba) {
-          final display = message.field0.toInt();
-          // Fetch the image buffer from rust codes.
-          final sz = platformFFI.getRgbaSize(sessionId, display);
+          final displayIdx = message.field0.toInt();
+          final sz = platformFFI.getRgbaSize(sessionId, displayIdx);
           if (sz == 0) {
-            platformFFI.nextRgba(sessionId, display);
-            return;
+            platformFFI.nextRgba(sessionId, displayIdx);
+            continue;
           }
-          final rgba = platformFFI.getRgba(sessionId, display, sz);
-          platformFFI.nextRgba(sessionId, display);
+          final rgba = platformFFI.getRgba(sessionId, displayIdx, sz);
+          platformFFI.nextRgba(sessionId, displayIdx);
           if (rgba != null) {
             onEvent2UIRgba();
-            await imageModel.onRgba(display, rgba);
+            await imageModel.onRgba(displayIdx, rgba);
           }
         } else if (message is EventToUI_Texture) {
-          final display = message.field0.toInt();
+          final displayIdx = message.field0.toInt();
           final gpuTexture = message.field1;
           debugPrint(
-            "EventToUI_Texture display:$display, gpuTexture:$gpuTexture",
+            "EventToUI_Texture display:$displayIdx, gpuTexture:$gpuTexture",
           );
           if (gpuTexture && !hasGpuTextureRender) {
             debugPrint('the gpuTexture is not supported.');
-            return;
+            continue;
           }
-          textureModel.setTextureType(display: display, gpuTexture: gpuTexture);
+          textureModel.setTextureType(display: displayIdx, gpuTexture: gpuTexture);
           onEvent2UIRgba();
         }
-      }();
-    });
-    // every instance will bind a stream
-    this.id = id;
+      }
+    } catch (e) {
+      debugPrint('Error in _drainSessionEventQueue: $e');
+    } finally {
+      _isProcessingSessionEvent = false;
+    }
   }
 
   void onEvent2UIRgba() async {
@@ -4659,6 +4740,10 @@ class FFI {
   /// Close the remote session.
   Future<void> close({bool closeSession = true}) async {
     closed = true;
+    _sessionEventSubscription?.cancel();
+    _sessionEventSubscription = null;
+    _sessionEventQueue.clear();
+    _isProcessingSessionEvent = false;
     ffiModel.resetReconnectRetry();
     chatModel.close();
     chatModel.dispose();

@@ -1570,6 +1570,9 @@ pub fn session_start_(
     let mut is_connected = false;
     let mut is_found = false;
     for s in sessions::get_sessions() {
+        if s.lc.read().unwrap().id() != id {
+            continue;
+        }
         if let Some(h) = s.session_handlers.write().unwrap().get_mut(session_id) {
             is_connected = h.event_stream.is_some();
             try_send_close_event(&h.event_stream);
@@ -1587,6 +1590,14 @@ pub fn session_start_(
     }
 
     if let Some(session) = sessions::get_session_by_session_id(session_id) {
+        if session.lc.read().unwrap().id() != id {
+            bail!(
+                "Session peer id mismatch for session id {}: expected {}, got {}",
+                session_id.to_string(),
+                id,
+                session.lc.read().unwrap().id()
+            );
+        }
         let is_first_ui_session = session.session_handlers.read().unwrap().len() == 1;
         if !is_connected && is_first_ui_session {
             log::info!(

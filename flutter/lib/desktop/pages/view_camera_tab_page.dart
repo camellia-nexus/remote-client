@@ -486,10 +486,22 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       } catch (e) {
         debugPrint('Failed to get cached session data: $e');
       }
-      if (close && returnValue != null) {
+      if (close == true && returnValue != null) {
         closeSessionOnDispose[id] = false;
         tabController.closeBy(id);
       }
+    } else if (call.method == kWindowEventCommitTabTransfer) {
+      final args = jsonDecode(call.arguments);
+      final id = args['id'];
+      try {
+        tabController.state.value.tabs
+            .firstWhere((tab) => tab.key == id);
+        closeSessionOnDispose[id] = false;
+        tabController.closeBy(id);
+      } catch (e) {
+        debugPrint('Failed to find view camera tab for commit transfer: $e');
+      }
+      return true;
     } else if (call.method == kWindowEventRemoteWindowCoords) {
       final viewCameraPage =
           tabController.state.value.selectedTabInfo.page as ViewCameraPage;

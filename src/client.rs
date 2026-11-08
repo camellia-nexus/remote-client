@@ -1836,6 +1836,11 @@ impl Deref for LoginConfigHandler {
 }
 
 impl LoginConfigHandler {
+    #[inline]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// Initialize the login config handler.
     ///
     /// # Arguments

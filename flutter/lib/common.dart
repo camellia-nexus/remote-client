@@ -3436,13 +3436,36 @@ Future<void> onActiveWindowChanged() async {
         // embedder.cc (2672): 'FlutterEngineSendPlatformMessage' returned 'kInvalidArguments'. Invalid engine handle.
         // 2024-11-11 11:41:11.565 RustDesk[90272:2567686] Failed to send message to Flutter engine on channel 'flutter/lifecycle' (2).
         // ```
-        periodic_immediate(
-          Duration(milliseconds: 30),
-          RdPlatformChannel.instance.terminate,
-        );
+        // Supervised macOS terminate with bounded attempts and timeout (RES-052)
+        supervisedMacOSTerminate();
       }
     }
   }
+}
+
+/// Supervised macOS termination with bounded retry budget and timeout.
+/// Prevents leaking persistent 30ms reentrant timer on terminate failure/hang (RES-052).
+Timer supervisedMacOSTerminate({
+  int maxAttempts = 10,
+  Duration interval = const Duration(milliseconds: 30),
+  Future<void> Function()? terminateFn,
+}) {
+  final fn = terminateFn ?? RdPlatformChannel.instance.terminate;
+  int attempt = 0;
+  Timer? timer;
+  timer = Timer.periodic(interval, (t) async {
+    attempt++;
+    try {
+      await fn();
+    } catch (e) {
+      debugPrint("macOS terminate attempt $attempt error: $e");
+    }
+    if (attempt >= maxAttempts) {
+      t.cancel();
+      debugPrint("macOS terminate completed max attempts ($maxAttempts). Stopping periodic timer.");
+    }
+  });
+  return timer;
 }
 
 class CancelablePeriodicTimer implements Timer {

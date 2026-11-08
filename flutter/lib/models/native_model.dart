@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -36,7 +37,7 @@ class PlatformFFI {
   String _homeDir = '';
   final _eventHandlers = <String, Map<String, HandleEvent>>{};
   RustdeskImpl _ffiBind = const RustdeskImpl();
-  late String _appType;
+  String _appType = '';
   StreamEventHandler? _eventCallback;
 
   PlatformFFI._();
@@ -48,6 +49,9 @@ class PlatformFFI {
   set ffiBind(RustdeskImpl value) => _ffiBind = value;
   F3? _session_get_rgba;
   FCopyRgba? _session_copy_rgba;
+  StreamSubscription<String>? _globalEventSubscription;
+  final List<String> _globalEventQueue = [];
+  bool _isProcessingGlobalEvent = false;
 
   static get localeName => Platform.localeName;
 
@@ -283,13 +287,37 @@ class PlatformFFI {
   }
 
   /// Start listening to the Rust core's events and frames.
+  void startListenEvent(RustdeskImpl rustdeskImpl) {
+    _startListenEvent(rustdeskImpl);
+  }
+
   void _startListenEvent(RustdeskImpl rustdeskImpl) {
+    _globalEventSubscription?.cancel();
+    _globalEventQueue.clear();
     final appType = _appType == kAppTypeDesktopRemote
         ? '$_appType,$kWindowId'
         : _appType;
     var sink = rustdeskImpl.startGlobalEventStream(appType: appType);
-    sink.listen((message) {
-      () async {
+    _globalEventSubscription = sink.listen(
+      (message) {
+        _globalEventQueue.add(message);
+        _drainGlobalEventQueue();
+      },
+      onError: (err) {
+        debugPrint('Global event stream error: $err');
+      },
+      onDone: () {
+        debugPrint('Global event stream done');
+      },
+    );
+  }
+
+  Future<void> _drainGlobalEventQueue() async {
+    if (_isProcessingGlobalEvent) return;
+    _isProcessingGlobalEvent = true;
+    try {
+      while (_globalEventQueue.isNotEmpty) {
+        final message = _globalEventQueue.removeAt(0);
         try {
           Map<String, dynamic> event = json.decode(message);
           // _tryHandle here may be more flexible than _eventCallback
@@ -301,8 +329,34 @@ class PlatformFFI {
         } catch (e) {
           debugPrint('json.decode fail(): $e');
         }
-      }();
-    });
+      }
+    } finally {
+      _isProcessingGlobalEvent = false;
+    }
+  }
+
+  void stopListenEvent([RustdeskImpl? rustdeskImpl]) {
+    _globalEventSubscription?.cancel();
+    _globalEventSubscription = null;
+    _globalEventQueue.clear();
+    final appType = _appType == kAppTypeDesktopRemote
+        ? '$_appType,$kWindowId'
+        : _appType;
+    try {
+      (rustdeskImpl ?? _ffiBind).stopGlobalEventStream(appType: appType);
+    } catch (e) {
+      debugPrint('stopGlobalEventStream error: $e');
+    }
+  }
+
+  void clearEventCallback() {
+    _eventCallback = null;
+  }
+
+  void dispose() {
+    stopListenEvent();
+    _eventCallback = null;
+    _eventHandlers.clear();
   }
 
   void setEventCallback(StreamEventHandler fun) async {

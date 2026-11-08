@@ -80,6 +80,7 @@ const String kWindowEventSetFullscreen = "set_fullscreen";
 
 const String kWindowEventMoveTabToNewWindow = "move_tab_to_new_window";
 const String kWindowEventGetCachedSessionData = "get_cached_session_data";
+const String kWindowEventCommitTabTransfer = "commit_tab_transfer";
 const String kWindowEventOpenMonitorSession = "open_monitor_session";
 
 const String kOptionViewStyle = "view_style";

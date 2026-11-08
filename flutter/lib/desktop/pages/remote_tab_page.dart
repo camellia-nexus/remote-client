@@ -596,11 +596,30 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       } catch (e) {
         debugPrint('Failed to get cached session data: $e');
       }
-      if (close && returnValue != null && remotePage != null) {
+      if (close == true && returnValue != null && remotePage != null) {
         remotePage.releaseMacOSInputForTabTransfer();
         closeSessionOnDispose[id] = false;
         tabController.closeBy(id);
       }
+    } else if (call.method == kWindowEventCommitTabTransfer) {
+      final args = jsonDecode(call.arguments);
+      final id = args['id'];
+      RemotePage? remotePage;
+      try {
+        remotePage =
+            tabController.state.value.tabs
+                    .firstWhere((tab) => tab.key == id)
+                    .page
+                as RemotePage;
+      } catch (e) {
+        debugPrint('Failed to find tab for commit transfer: $e');
+      }
+      if (remotePage != null) {
+        remotePage.releaseMacOSInputForTabTransfer();
+        closeSessionOnDispose[id] = false;
+        tabController.closeBy(id);
+      }
+      return true;
     } else if (call.method == kWindowEventRemoteWindowCoords) {
       final remotePage =
           tabController.state.value.selectedTabInfo.page as RemotePage;
