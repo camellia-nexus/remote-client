@@ -5,6 +5,7 @@ import 'package:camellia_remote_app/common/widgets/peers_view.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/models/user_model.dart';
 import 'package:get/get.dart';
 import 'dart:convert';
 import '../utils/http_service.dart' as http;
@@ -94,40 +95,55 @@ class GroupModel {
     if (!gFFI.userModel.isLogin || groupLoading.value) return;
     if (gFFI.userModel.networkError.isNotEmpty) return;
     if (!force && initialized) return;
+    final requestGen = UserModel.currentAccountGen;
+    final expectedToken = bind.mainGetLocalOption(key: 'access_token');
+    if (expectedToken.isEmpty) return;
+
     if (!quiet) {
       groupLoading.value = true;
       groupLoadError.value = "";
     }
+    bool pullSucceeded = false;
     try {
-      await _pull();
+      pullSucceeded = await _pull(requestGen);
+      if (requestGen != UserModel.currentAccountGen) return;
       _tryHandlePullError();
     } catch (e) {
       print("pull accessibles error: $e");
+    } finally {
+      if (requestGen == UserModel.currentAccountGen) {
+        groupLoading.value = false;
+      }
     }
-    groupLoading.value = false;
-    initialized = true;
+    if (requestGen != UserModel.currentAccountGen) return;
+    if (pullSucceeded) {
+      initialized = true;
+    }
     platformFFI.tryHandle({'name': LoadEvent.group});
     if (_statusCode == 401) {
       gFFI.userModel.reset(resetOther: true);
-    } else {
-      _saveCache();
+    } else if (pullSucceeded) {
+      _saveCache(expectedToken);
     }
   }
 
-  Future<void> _pull() async {
+  Future<bool> _pull(int requestGen) async {
     List<DeviceGroupPayload> tmpDeviceGroups = List.empty(growable: true);
-    if (!await _getDeviceGroups(tmpDeviceGroups)) {
-      return;
+    if (!await _getDeviceGroups(tmpDeviceGroups, requestGen)) {
+      return false;
     }
+    if (requestGen != UserModel.currentAccountGen) return false;
     tmpDeviceGroups.sort((a, b) => a.name.compareTo(b.name));
     List<UserPayload> tmpUsers = List.empty(growable: true);
-    if (!await _getUsers(tmpUsers)) {
-      return;
+    if (!await _getUsers(tmpUsers, requestGen)) {
+      return false;
     }
+    if (requestGen != UserModel.currentAccountGen) return false;
     List<Peer> tmpPeers = List.empty(growable: true);
-    if (!await _getPeers(tmpPeers)) {
-      return;
+    if (!await _getPeers(tmpPeers, requestGen)) {
+      return false;
     }
+    if (requestGen != UserModel.currentAccountGen) return false;
     deviceGroups.value = tmpDeviceGroups;
     // me first
     var index = tmpUsers.indexWhere(
@@ -151,10 +167,12 @@ class GroupModel {
         .toList();
     groupLoadError.value = '';
     _callbackPeerUpdate();
+    return true;
   }
 
   Future<bool> _getDeviceGroups(
     List<DeviceGroupPayload> tmpDeviceGroups,
+    int requestGen,
   ) async {
     final api = "${await bind.mainGetApiServer()}/api/device-group/accessible";
     try {
@@ -175,6 +193,7 @@ class GroupModel {
           },
         );
         final resp = await http.get(uri, headers: getHttpHeaders());
+        if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
         Map<String, dynamic> json = _jsonDecodeResp(
           decode_http_response(resp),
@@ -213,7 +232,10 @@ class GroupModel {
     return false;
   }
 
-  Future<bool> _getUsers(List<UserPayload> tmpUsers) async {
+  Future<bool> _getUsers(
+    List<UserPayload> tmpUsers,
+    int requestGen,
+  ) async {
     final api = "${await bind.mainGetApiServer()}/api/users";
     try {
       var uri0 = Uri.parse(api);
@@ -235,6 +257,7 @@ class GroupModel {
           },
         );
         final resp = await http.get(uri, headers: getHttpHeaders());
+        if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
         Map<String, dynamic> json = _jsonDecodeResp(
           decode_http_response(resp),
@@ -280,7 +303,10 @@ class GroupModel {
     return false;
   }
 
-  Future<bool> _getPeers(List<Peer> tmpPeers) async {
+  Future<bool> _getPeers(
+    List<Peer> tmpPeers,
+    int requestGen,
+  ) async {
     try {
       final api = "${await bind.mainGetApiServer()}/api/peers";
       var uri0 = Uri.parse(api);
@@ -299,6 +325,7 @@ class GroupModel {
           queryParameters: queryParameters,
         );
         final resp = await http.get(uri, headers: getHttpHeaders());
+        if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
 
         Map<String, dynamic> json = _jsonDecodeResp(
@@ -350,10 +377,16 @@ class GroupModel {
     }
   }
 
-  void _saveCache() {
+  void _saveCache([String? expectedToken]) {
     try {
+      final currentToken = bind.mainGetLocalOption(key: 'access_token');
+      if (currentToken.isEmpty ||
+          (expectedToken != null && currentToken != expectedToken)) {
+        debugPrint('GroupModel: skip saving cache due to token mismatch');
+        return;
+      }
       final map = (<String, dynamic>{
-        "access_token": bind.mainGetLocalOption(key: 'access_token'),
+        "access_token": currentToken,
         "device_groups": deviceGroups.map((e) => e.toGroupCacheJson()).toList(),
         "users": users.map((e) => e.toGroupCacheJson()).toList(),
         'peers': peers.map((e) => e.toGroupCacheJson()).toList(),
@@ -372,6 +405,8 @@ class GroupModel {
       if (access_token.isEmpty) return;
       final cache = await bind.mainLoadGroup();
       if (groupLoading.value) return;
+      final currentToken = bind.mainGetLocalOption(key: 'access_token');
+      if (currentToken != access_token || currentToken.isEmpty) return;
       final data = jsonDecode(cache);
       if (data == null || data['access_token'] != access_token) return;
       deviceGroups.clear();
@@ -400,6 +435,8 @@ class GroupModel {
 
   reset() async {
     initialized = false;
+    _cacheLoadOnceFlag = false;
+    groupLoading.value = false;
     groupLoadError.value = '';
     deviceGroups.clear();
     users.clear();

@@ -598,16 +598,26 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget deleteSelection() {
     final model = Provider.of<PeerTabModel>(context);
-    if (model.currentTab == PeerTabIndex.group.index) {
+    final currentTab = model.currentTab;
+    if (currentTab == PeerTabIndex.group.index) {
       return Offstage();
     }
     return _hoverAction(
       context: context,
       toolTip: translate('Delete'),
       onTap: () {
+        final targetTab = model.selectionTab >= 0 ? model.selectionTab : model.currentTab;
+        if (targetTab == PeerTabIndex.group.index) return;
+        final selectedSnapshot = List<Peer>.from(model.selectedPeers);
+        if (selectedSnapshot.isEmpty) return;
+
         onSubmit() async {
-          final peers = model.selectedPeers;
-          switch (model.currentTab) {
+          if (model.currentTab != targetTab) {
+            gFFI.peerTabModel.setMultiSelectionMode(false);
+            return;
+          }
+          final peers = selectedSnapshot;
+          switch (targetTab) {
             case 0:
               for (var p in peers) {
                 await bind.mainRemovePeer(id: p.id);
@@ -635,7 +645,7 @@ class _PeerTabPageState extends State<PeerTabPage>
               break;
           }
           gFFI.peerTabModel.setMultiSelectionMode(false);
-          if (model.currentTab != 3) showToast(translate('Successful'));
+          if (targetTab != 3) showToast(translate('Successful'));
         }
 
         deleteConfirmDialog(onSubmit, translate('Delete'));
@@ -653,7 +663,7 @@ class _PeerTabPageState extends State<PeerTabPage>
         context: context,
         toolTip: translate('Add to Favorites'),
         onTap: () async {
-          final peers = model.selectedPeers;
+          final peers = List<Peer>.from(model.selectedPeers);
           final favs = (await bind.mainGetFav()).toList();
           for (var p in peers) {
             if (!favs.contains(p.id)) {
@@ -702,7 +712,7 @@ class _PeerTabPageState extends State<PeerTabPage>
         toolTip: translate('Edit Tag'),
         onTap: () {
           editAbTagDialog(List.empty(), (selectedTags) async {
-            final peers = model.selectedPeers;
+            final peers = List<Peer>.from(model.selectedPeers);
             await gFFI.abModel.changeTagForPeers(
               peers.map((p) => p.id).toList(),
               selectedTags,

@@ -58,6 +58,8 @@ class PeerTabModel with ChangeNotifier {
       orders.where((e) => isVisibleEnabled[e]).toList();
   List<Peer> _selectedPeers = List.empty(growable: true);
   List<Peer> get selectedPeers => _selectedPeers;
+  int _selectionTab = -1;
+  int get selectionTab => _selectionTab;
   bool _multiSelectionMode = false;
   bool get multiSelectionMode => _multiSelectionMode;
   List<Peer> _currentTabCachedPeers = List.empty(growable: true);
@@ -120,6 +122,13 @@ class PeerTabModel with ChangeNotifier {
   setCurrentTab(int index) {
     if (_currentTab != index) {
       _currentTab = index;
+      if (_multiSelectionMode || _selectedPeers.isNotEmpty) {
+        _selectedPeers.clear();
+        _multiSelectionMode = false;
+        _lastId = '';
+        _selectionTab = -1;
+      }
+      _currentTabCachedPeers = [];
       notifyListeners();
     }
   }
@@ -143,6 +152,9 @@ class PeerTabModel with ChangeNotifier {
     if (!mode) {
       _selectedPeers.clear();
       _lastId = '';
+      _selectionTab = -1;
+    } else {
+      _selectionTab = _currentTab;
     }
     notifyListeners();
   }
@@ -154,6 +166,10 @@ class PeerTabModel with ChangeNotifier {
       // because onTap is delayed when onDoubleTap is not null
       if (isDesktop || isWebDesktop) return;
       _multiSelectionMode = true;
+      _selectionTab = _currentTab;
+    } else if (_selectionTab != _currentTab) {
+      _selectedPeers.clear();
+      _selectionTab = _currentTab;
     }
     final cached = _currentTabCachedPeers.map((e) => e.id).toList();
     int thisIndex = cached.indexOf(peer.id);
@@ -200,6 +216,7 @@ class PeerTabModel with ChangeNotifier {
 
   selectAll() {
     _selectedPeers = _currentTabCachedPeers.toList();
+    _selectionTab = _currentTab;
     notifyListeners();
   }
 

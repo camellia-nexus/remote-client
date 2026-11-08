@@ -104,7 +104,7 @@ class ButtonOP extends StatelessWidget {
                     ? primaryColor
                     : Colors.grey,
               ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
-              onPressed: curOP.value.isEmpty || curOP.value == op
+              onPressed: curOP.value.isEmpty
                   ? onTap
                   : null,
               child: Row(
@@ -161,9 +161,12 @@ class _WidgetOPState extends State<WidgetOP> {
   String _stateMsg = '';
   String _failedMsg = '';
   String _url = '';
+  bool _queryInFlight = false;
+  int _attemptGen = 0;
 
   @override
   void dispose() {
+    _attemptGen++;
     _updateTimer?.cancel();
     _updateTimer = null;
     super.dispose();
@@ -171,23 +174,39 @@ class _WidgetOPState extends State<WidgetOP> {
 
   _beginQueryState(int requestGen) {
     _updateTimer?.cancel();
+    final myAttemptGen = ++_attemptGen;
     _updateTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (requestGen != AuthGenerationTracker.currentAuthGen) {
+      if (!mounted ||
+          requestGen != AuthGenerationTracker.currentAuthGen ||
+          myAttemptGen != _attemptGen) {
         timer.cancel();
+        if (identical(_updateTimer, timer)) {
+          _updateTimer = null;
+        }
         return;
       }
-      _updateState(requestGen);
+      _updateState(requestGen, myAttemptGen);
     });
   }
 
-  _updateState(int requestGen) {
-    if (requestGen != AuthGenerationTracker.currentAuthGen) {
+  _updateState(int requestGen, int myAttemptGen) {
+    if (!mounted ||
+        requestGen != AuthGenerationTracker.currentAuthGen ||
+        myAttemptGen != _attemptGen) {
       _updateTimer?.cancel();
+      _updateTimer = null;
       return;
     }
+    if (_queryInFlight) return;
+    _queryInFlight = true;
+
     bind.mainAccountAuthResult().then((result) {
-      if (requestGen != AuthGenerationTracker.currentAuthGen) {
+      _queryInFlight = false;
+      if (!mounted ||
+          requestGen != AuthGenerationTracker.currentAuthGen ||
+          myAttemptGen != _attemptGen) {
         _updateTimer?.cancel();
+        _updateTimer = null;
         return;
       }
       if (result.isEmpty) {
@@ -216,21 +235,28 @@ class _WidgetOPState extends State<WidgetOP> {
         }
         if (authBody != null) {
           _updateTimer?.cancel();
+          _updateTimer = null;
           widget.curOP.value = '';
           widget.cbLogin(authBody as Map<String, dynamic>, requestGen);
         }
 
-        if (mounted && requestGen == AuthGenerationTracker.currentAuthGen) {
+        if (mounted &&
+            requestGen == AuthGenerationTracker.currentAuthGen &&
+            myAttemptGen == _attemptGen) {
           setState(() {
             _stateMsg = stateMsg;
             _failedMsg = failedMsg;
             if (failedMsg.isNotEmpty) {
               widget.curOP.value = '';
               _updateTimer?.cancel();
+              _updateTimer = null;
             }
           });
         }
       }
+    }).catchError((e) {
+      _queryInFlight = false;
+      debugPrint('OIDC query failed: $e');
     });
   }
 
@@ -251,12 +277,25 @@ class _WidgetOPState extends State<WidgetOP> {
           primaryColor: str2color(widget.config.op, 0x7f),
           height: 36,
           onTap: () async {
+            if (widget.curOP.value.isNotEmpty) return;
             _resetState();
             final requestGen = AuthGenerationTracker.nextGen();
             widget.curOP.value = widget.config.op;
-            await bind.mainAccountAuth(op: widget.config.op, rememberMe: true);
-            if (requestGen != AuthGenerationTracker.currentAuthGen) return;
-            _beginQueryState(requestGen);
+            try {
+              await bind.mainAccountAuth(op: widget.config.op, rememberMe: true);
+              if (requestGen != AuthGenerationTracker.currentAuthGen || !mounted) {
+                return;
+              }
+              _beginQueryState(requestGen);
+            } catch (e) {
+              if (requestGen != AuthGenerationTracker.currentAuthGen) return;
+              widget.curOP.value = '';
+              if (mounted) {
+                setState(() {
+                  _failedMsg = e.toString();
+                });
+              }
+            }
           },
         ),
         Obx(() {
@@ -340,8 +379,10 @@ class _WidgetOPState extends State<WidgetOP> {
               constraints: BoxConstraints(maxHeight: 20),
               child: ElevatedButton(
                 onPressed: () {
+                  _attemptGen++;
                   widget.curOP.value = '';
                   _updateTimer?.cancel();
+                  _updateTimer = null;
                   _resetState();
                   AuthGenerationTracker.invalidate();
                   bind.mainAccountAuthCancel();

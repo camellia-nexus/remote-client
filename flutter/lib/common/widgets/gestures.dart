@@ -114,7 +114,9 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
         default:
           break;
       }
+      _debounceTimer?.cancel();
       _debounceTimer = Timer(Duration(milliseconds: 200), () {
+        _debounceTimer = null;
         _currentState = GestureState.none;
       });
     };
@@ -124,6 +126,7 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
   // If we move our finger very fast, we won't be able to detect the "oneFingerPan" event sometimes.
   void onOneFingerStartDebounce(ScaleUpdateDetails d) {
     start(ScaleUpdateDetails d) {
+      _debounceTimer = null;
       _currentState = GestureState.oneFingerPan;
       if (onOneFingerPanStart != null) {
         onOneFingerPanStart!(DragStartDetails(
@@ -132,6 +135,7 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
     }
 
     if (_currentState != GestureState.none) {
+      _debounceTimer?.cancel();
       _debounceTimer = Timer(Duration(milliseconds: 200), () {
         start(d);
         debugPrint("debounce start oneFingerPan");
@@ -144,6 +148,7 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
 
   void onTwoFingerStartDebounce(ScaleUpdateDetails d) {
     start(ScaleUpdateDetails d) {
+      _debounceTimer = null;
       _currentState = GestureState.twoFingerScale;
       if (onTwoFingerScaleStart != null) {
         onTwoFingerScaleStart!(ScaleStartDetails(
@@ -152,6 +157,7 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
     }
 
     if (_currentState == GestureState.threeFingerVerticalDrag) {
+      _debounceTimer?.cancel();
       _debounceTimer = Timer(Duration(milliseconds: 200), () {
         start(d);
         debugPrint("debounce start twoFingerScale");
@@ -174,6 +180,8 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
   @override
   void rejectGesture(int pointer) {
     super.rejectGesture(pointer);
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
     switch (_currentState) {
       case GestureState.oneFingerPan:
         if (onOneFingerPanCancel != null) {
@@ -190,6 +198,24 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
         break;
     }
     _currentState = GestureState.none;
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _currentState = GestureState.none;
+    onOneFingerPanStart = null;
+    onOneFingerPanUpdate = null;
+    onOneFingerPanEnd = null;
+    onOneFingerPanCancel = null;
+    onTwoFingerScaleStart = null;
+    onTwoFingerScaleUpdate = null;
+    onTwoFingerScaleEnd = null;
+    onThreeFingerVerticalDragStart = null;
+    onThreeFingerVerticalDragUpdate = null;
+    onThreeFingerVerticalDragEnd = null;
+    super.dispose();
   }
 }
 

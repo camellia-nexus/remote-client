@@ -40,6 +40,9 @@ class UserModel {
   }
 
   WeakReference<FFI> parent;
+  static int _accountGeneration = 0;
+  static int get currentAccountGen => _accountGeneration;
+  static int nextAccountGen() => ++_accountGeneration;
 
   UserModel(this.parent) {
     userName.listen((p0) {
@@ -64,6 +67,7 @@ class UserModel {
   }
 
   Future<void> _refreshCurrentUser() async {
+    final requestGen = currentAccountGen;
     if (bind.isDisableAccount()) {
       accountState.value = UserAccountState.disabled;
       return;
@@ -97,8 +101,18 @@ class UserModel {
           body: json.encode(body),
         );
       } catch (e) {
+        if (requestGen != currentAccountGen) return;
         networkError.value = e.toString();
         rethrow;
+      }
+      if (requestGen != currentAccountGen) {
+        debugPrint('Discarding stale currentUser response: account generation changed');
+        return;
+      }
+      final currentToken = bind.mainGetLocalOption(key: 'access_token');
+      if (token != currentToken || currentToken.isEmpty) {
+        debugPrint('Discarding stale currentUser response: token mismatch');
+        return;
       }
       final status = response.statusCode;
       if (status == 401 || status == 400) {
@@ -118,16 +132,20 @@ class UserModel {
         throw error;
       }
 
+      if (requestGen != currentAccountGen) return;
       final user = UserPayload.fromJson(data);
       _parseAndUpdateUser(user);
     } catch (e) {
+      if (requestGen != currentAccountGen) return;
       networkError.value = e.toString();
       accountState.value = isLogin
           ? UserAccountState.offline
           : UserAccountState.error;
       debugPrint('Failed to refreshCurrentUser: $e');
     } finally {
-      await updateOtherModels();
+      if (requestGen == currentAccountGen) {
+        await updateOtherModels();
+      }
     }
   }
 
@@ -180,6 +198,8 @@ class UserModel {
   }
 
   Future<void> reset({bool resetOther = false}) async {
+    nextAccountGen();
+    _refreshOperation = null;
     await bind.mainAccountLogout();
     await bind.mainSetLocalOption(key: 'access_token', value: '');
     await bind.mainSetLocalOption(key: 'user_info', value: '');
