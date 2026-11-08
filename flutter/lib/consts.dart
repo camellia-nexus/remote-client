@@ -203,6 +203,7 @@ const String kOptionAllowDeepLinkServerSettings =
 
 const String kOptionToggleViewOnly = "view-only";
 const String kOptionToggleShowMyCursor = "show-my-cursor";
+const String kOptionToggleDisableClipboard = "disable-clipboard";
 
 const String kOptionDisableFloatingWindow = "disable-floating-window";
 

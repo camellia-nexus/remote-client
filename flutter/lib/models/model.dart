@@ -449,7 +449,28 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'cursor_position') {
         await parent.target?.cursorModel.updateCursorPosition(evt, peerId);
       } else if (name == 'clipboard') {
-        Clipboard.setData(ClipboardData(text: evt['content']));
+        final content = evt['content'];
+        if (content is String && content.isNotEmpty) {
+          final isViewOnly = bind.sessionGetToggleOptionSync(
+            sessionId: sessionId,
+            arg: kOptionToggleViewOnly,
+          );
+          final isDisableClipboard = bind.sessionGetToggleOptionSync(
+            sessionId: sessionId,
+            arg: kOptionToggleDisableClipboard,
+          );
+          if (!isViewOnly && !isDisableClipboard) {
+            try {
+              Clipboard.setData(ClipboardData(text: content));
+            } catch (e) {
+              debugPrint('Failed to set clipboard data: $e');
+            }
+          } else {
+            debugPrint(
+              'Inbound clipboard ignored for $sessionId due to policy (view-only: $isViewOnly, disable-clipboard: $isDisableClipboard)',
+            );
+          }
+        }
       } else if (name == 'permission') {
         updatePermission(evt, peerId);
       } else if (name == 'chat_client_mode') {

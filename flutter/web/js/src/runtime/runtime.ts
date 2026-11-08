@@ -120,6 +120,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private onlineQueryCloseTimer?: number;
   private connectStatusProbeInFlight = false;
   private readonly ephemeralSessionSecrets = new Map<string, string>();
+  private sessionGeneration = 0;
 
   constructor() {
     this.config = loadConfig();
@@ -162,6 +163,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         return '';
       case 'session_close':
       case 'close':
+        this.sessionGeneration += 1;
         this.inputSource1PointerInside = false;
         this.releaseInputSource1PressedKeys();
         this.currentSession?.detachVideoSurface(this.videoSurfaceElementId);
@@ -4107,11 +4109,18 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         mode,
         forceRelay
       };
+      this.sessionGeneration += 1;
+      const generation = this.sessionGeneration;
       this.inputSource1PointerInside = false;
       this.releaseInputSource1PressedKeys();
       this.currentSession?.close();
       this.ephemeralSessionSecrets.clear();
-      this.currentSession = new WebSession(request, this.events);
+      this.currentSession = new WebSession(
+        request,
+        this.events,
+        generation,
+        () => this.canReceiveClipboard()
+      );
       if (this.videoSurfaceElementId) {
         this.currentSession.attachVideoSurface(this.videoSurfaceElementId);
       }
@@ -4124,9 +4133,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private async handleSessionStart(arg0?: unknown): Promise<void> {
-    if (!this.currentSession) {
+    const session = this.currentSession;
+    if (!session || session.isClosed()) {
       return;
     }
+    const generation = this.sessionGeneration;
     if (typeof arg0 !== 'string') {
       return;
     }
@@ -4136,19 +4147,33 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           .map((value) => Number(value))
           .filter((value) => Number.isFinite(value) && value >= 0)
       : [];
-    const peerId = this.currentSession.getPeerId();
+    const peerId = session.getPeerId();
     const context = this.buildSessionContext(peerId);
     this.store.set('session_conn_status', 'connecting');
     this.setServiceStatus('connecting');
     try {
-      await this.connectWithCandidates(context);
-      if (requestedDisplays.length > 0) {
-        this.currentSession.switchDisplay(requestedDisplays);
+      await this.connectWithCandidates(session, generation, context);
+      if (
+        this.currentSession !== session ||
+        this.sessionGeneration !== generation ||
+        session.isClosed()
+      ) {
+        return;
       }
-      this.recordRecentPeer(this.currentSession.getPeerId());
+      if (requestedDisplays.length > 0) {
+        session.switchDisplay(requestedDisplays);
+      }
+      this.recordRecentPeer(session.getPeerId());
       this.store.set('session_conn_status', 'connected');
       this.setServiceStatus('connected');
     } catch (err) {
+      if (
+        this.currentSession !== session ||
+        this.sessionGeneration !== generation ||
+        session.isClosed()
+      ) {
+        return;
+      }
       this.store.set('session_conn_status', 'error');
       this.setServiceStatus('error');
       this.logger.error('Session connect failed', err);
@@ -4163,10 +4188,24 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     }
   }
 
-  private async connectWithCandidates(baseContext: SessionContext): Promise<void> {
+  private async connectWithCandidates(
+    session: WebSession,
+    generation: number,
+    baseContext: SessionContext
+  ): Promise<void> {
     const candidates = this.buildConnectionCandidates(baseContext);
     let lastError: unknown;
     for (let i = 0; i < candidates.length; i += 1) {
+      if (
+        this.currentSession !== session ||
+        this.sessionGeneration !== generation ||
+        session.isClosed()
+      ) {
+        this.logger.warn(
+          `Aborting candidate loop: session superseded or closed (currentGen=${this.sessionGeneration}, loopGen=${generation})`
+        );
+        return;
+      }
       const candidate = candidates[i];
       const context: SessionContext = {
         ...baseContext,
@@ -4174,7 +4213,16 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         relayServer: candidate.relayServer
       };
       try {
-        await this.currentSession!.connect(context);
+        await session.connect(context);
+        if (
+          this.currentSession !== session ||
+          this.sessionGeneration !== generation ||
+          session.isClosed()
+        ) {
+          this.logger.warn('Session superseded or closed after connect');
+          session.close();
+          return;
+        }
         if (i > 0) {
           this.logger.info(
             `Connected via fallback route ${i + 1}/${candidates.length}: ${candidate.rendezvousServer}`
@@ -4188,6 +4236,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           err
         );
       }
+    }
+    if (
+      this.currentSession !== session ||
+      this.sessionGeneration !== generation ||
+      session.isClosed()
+    ) {
+      return;
     }
     throw lastError instanceof Error ? lastError : new Error('Connection failed');
   }
@@ -4327,6 +4382,66 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return;
     }
     this.logger.info('Reconnect requested');
+    const prevSession = this.currentSession;
+    const request = prevSession.getRequest();
+    this.inputSource1PointerInside = false;
+    this.releaseInputSource1PressedKeys();
+    prevSession.close();
+    this.ephemeralSessionSecrets.clear();
+
+    this.sessionGeneration += 1;
+    const generation = this.sessionGeneration;
+    const session = new WebSession(
+      request,
+      this.events,
+      generation,
+      () => this.canReceiveClipboard()
+    );
+    this.currentSession = session;
+    if (this.videoSurfaceElementId) {
+      session.attachVideoSurface(this.videoSurfaceElementId);
+    }
+    this.store.set('conn_session_id', generateUuid());
+
+    const peerId = session.getPeerId();
+    const context = this.buildSessionContext(peerId);
+    this.store.set('session_conn_status', 'connecting');
+    this.setServiceStatus('connecting');
+
+    void (async () => {
+      try {
+        await this.connectWithCandidates(session, generation, context);
+        if (
+          this.currentSession !== session ||
+          this.sessionGeneration !== generation ||
+          session.isClosed()
+        ) {
+          return;
+        }
+        this.recordRecentPeer(session.getPeerId());
+        this.store.set('session_conn_status', 'connected');
+        this.setServiceStatus('connected');
+      } catch (err) {
+        if (
+          this.currentSession !== session ||
+          this.sessionGeneration !== generation ||
+          session.isClosed()
+        ) {
+          return;
+        }
+        this.store.set('session_conn_status', 'error');
+        this.setServiceStatus('error');
+        this.logger.error('Session reconnect failed', err);
+        const reason =
+          err instanceof Error && err.message
+            ? err.message
+            : 'Reconnection failed';
+        this.events.emit({
+          name: 'toast',
+          text: reason
+        });
+      }
+    })();
   }
 
   private scheduleConnectStatusProbe(delayMs = 400): void {

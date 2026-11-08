@@ -83,6 +83,7 @@ type FileEntryInfo = {
 };
 
 type UploadJob = {
+  token: symbol;
   id: number;
   file: File;
   remotePath: string;
@@ -91,6 +92,7 @@ type UploadJob = {
   sentBytes: number;
   started: boolean;
   cancelled: boolean;
+  abortController?: AbortController;
   nextBlockId: number;
   startTime: number;
   lastProgressTime: number;
@@ -100,6 +102,7 @@ type UploadJob = {
 };
 
 type DownloadJob = {
+  token: symbol;
   id: number;
   remotePath: string;
   files: FileEntryInfo[];
@@ -235,10 +238,20 @@ export class WebSession {
   private closeNotified = false;
   private manualClose = false;
   private transportMessageOff?: () => void;
+  public readonly generation: number;
+  private readonly isClipboardAllowed?: () => boolean;
+  private abortController: AbortController = new AbortController();
 
-  constructor(request: ConnectRequest, events: EventDispatcher) {
+  constructor(
+    request: ConnectRequest,
+    events: EventDispatcher,
+    generation = 0,
+    isClipboardAllowed?: () => boolean
+  ) {
     this.request = request;
     this.events = events;
+    this.generation = generation;
+    this.isClipboardAllowed = isClipboardAllowed;
     this.transport = new WebSocketTransport('session');
     this.logger = new Logger(`session:${request.id}`);
     this.video = new VideoPipeline(
@@ -300,6 +313,18 @@ export class WebSession {
     return this.request.id;
   }
 
+  getRequest(): ConnectRequest {
+    return this.request;
+  }
+
+  isClosed(): boolean {
+    return (
+      this.manualClose ||
+      this.state === 'closed' ||
+      this.abortController.signal.aborted
+    );
+  }
+
   attachVideoSurface(elementId: string): void {
     this.video.attachSurface(elementId);
   }
@@ -309,6 +334,9 @@ export class WebSession {
   }
 
   async connect(context: SessionContext, reconnecting = false): Promise<void> {
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
+    }
     this.manualClose = false;
     this.closeNotified = false;
     this.peerInfoSnapshot.fileTransferProtocolVersion = 0;
@@ -331,6 +359,9 @@ export class WebSession {
     this.events.emit({ name: 'conn_status', status: 'connecting' });
     try {
       this.proto = await loadProtos();
+      if (this.isClosed()) {
+        throw new Error('Session is closed');
+      }
       this.logger.info(
         `Session context: version=${context.version || '-'}, buildDate=${context.buildDate || '-'}`
       );
@@ -371,10 +402,16 @@ export class WebSession {
         forceRelay: Boolean(this.request.forceRelay),
         version: context.version
       });
+      if (this.isClosed()) {
+        throw new Error('Session is closed');
+      }
       this.logger.info(
         `Route selected: ${route.kind === 'direct' ? 'direct' : 'relay'}`
       );
       const routeResult = await this.connectWithRoute(route, rendezvous, context);
+      if (this.isClosed()) {
+        throw new Error('Session is closed');
+      }
       const isDirect = routeResult === 'direct';
 
       this.state = 'connected';
@@ -404,7 +441,9 @@ export class WebSession {
       this.detachTransportMessageHandler();
       this.transport.setCipher(undefined);
       this.transport.close();
-      this.state = 'idle';
+      if (!this.isClosed()) {
+        this.state = 'idle';
+      }
       throw err;
     }
   }
@@ -414,14 +453,23 @@ export class WebSession {
     rendezvous: RendezvousClient,
     context: SessionContext
   ): Promise<'direct' | 'relay'> {
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
+    }
     if (route.kind === 'direct') {
       try {
         await this.connectDirect(route.direct, context);
         return 'direct';
       } catch (err) {
+        if (this.isClosed()) {
+          throw err;
+        }
         this.logger.warn('Direct connection failed, falling back to relay', err);
         this.transport.close();
       }
+    }
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
     }
     const relayInfo =
       route.kind === 'relay'
@@ -437,6 +485,9 @@ export class WebSession {
             connType: this.connTypeFromMode(this.request.mode),
             secure: true
           });
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
+    }
     await this.connectRelay(relayInfo, context);
     return 'relay';
   }
@@ -445,9 +496,16 @@ export class WebSession {
     direct: { endpoint: string; signedIdPk: Uint8Array },
     context: SessionContext
   ): Promise<void> {
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
+    }
     this.signedIdPk = direct.signedIdPk;
     this.logger.info(`Connecting direct via ${direct.endpoint}`);
     await this.transport.connect(direct.endpoint);
+    if (this.isClosed()) {
+      this.transport.close();
+      throw new Error('Session is closed');
+    }
     const inbox = new MessageInbox(this.transport);
     try {
       await this.secureConnection(inbox, context);
@@ -457,12 +515,22 @@ export class WebSession {
   }
 
   private async connectRelay(relayInfo: RelayInfo, context: SessionContext): Promise<void> {
+    if (this.isClosed()) {
+      throw new Error('Session is closed');
+    }
     this.signedIdPk = relayInfo.signedIdPk;
     this.logger.info(`Connecting relay via ${relayInfo.relayEndpoint}`);
     await this.transport.connect(relayInfo.relayEndpoint);
+    if (this.isClosed()) {
+      this.transport.close();
+      throw new Error('Session is closed');
+    }
     const inbox = new MessageInbox(this.transport);
     try {
       await this.sendRelayJoin(relayInfo.uuid, context);
+      if (this.isClosed()) {
+        throw new Error('Session is closed');
+      }
       await this.secureConnection(inbox, context);
     } finally {
       inbox.close();
@@ -471,10 +539,25 @@ export class WebSession {
 
   close(): void {
     this.manualClose = true;
+    this.abortController.abort();
     if (this.reconnectTimer !== undefined) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    for (const upload of this.uploadJobs.values()) {
+      upload.cancelled = true;
+      upload.abortController?.abort();
+      if (upload.pendingStartTimer !== undefined) {
+        window.clearTimeout(upload.pendingStartTimer);
+        upload.pendingStartTimer = undefined;
+      }
+    }
+    this.uploadJobs.clear();
+    for (const download of this.downloadJobs.values()) {
+      download.cancelled = true;
+      this.clearDownloadConfirmRetry(download);
+    }
+    this.downloadJobs.clear();
     this.detachTransportMessageHandler();
     this.stopInitialVideoRefreshLoop();
     this.finalizeClosedState();
@@ -497,7 +580,15 @@ export class WebSession {
     if (!path) {
       return;
     }
+    const existing = this.downloadJobs.get(id);
+    if (existing) {
+      existing.cancelled = true;
+      this.clearDownloadConfirmRetry(existing);
+      this.downloadJobs.delete(id);
+    }
+    const token = Symbol(`download-job-${id}`);
     const job: DownloadJob = {
+      token,
       id,
       remotePath: path,
       files: [],
@@ -531,6 +622,16 @@ export class WebSession {
     if (!file || !remotePath) {
       return;
     }
+    const existing = this.uploadJobs.get(id);
+    if (existing) {
+      existing.cancelled = true;
+      existing.abortController?.abort();
+      if (existing.pendingStartTimer !== undefined) {
+        window.clearTimeout(existing.pendingStartTimer);
+        existing.pendingStartTimer = undefined;
+      }
+      this.uploadJobs.delete(id);
+    }
     const modifiedTime = Math.floor((file.lastModified || Date.now()) / 1000);
     const entry: FileEntryInfo = {
       entryType: 4,
@@ -539,7 +640,10 @@ export class WebSession {
       modifiedTime,
       isHidden: false
     };
+    const token = Symbol(`upload-job-${id}`);
+    const abortController = new AbortController();
     const job: UploadJob = {
+      token,
       id,
       file,
       remotePath,
@@ -548,6 +652,7 @@ export class WebSession {
       sentBytes: 0,
       started: false,
       cancelled: false,
+      abortController,
       nextBlockId: 0,
       startTime: Date.now(),
       lastProgressTime: Date.now(),
@@ -567,7 +672,11 @@ export class WebSession {
       }
     });
     job.pendingStartTimer = window.setTimeout(() => {
-      if (!job.started && !job.cancelled) {
+      if (
+        !job.started &&
+        !job.cancelled &&
+        this.uploadJobs.get(job.id)?.token === job.token
+      ) {
         this.startUploadJob(job, 0);
       }
     }, 800);
@@ -1163,6 +1272,11 @@ export class WebSession {
     const upload = this.uploadJobs.get(id);
     if (upload) {
       upload.cancelled = true;
+      upload.abortController?.abort();
+      if (upload.pendingStartTimer !== undefined) {
+        window.clearTimeout(upload.pendingStartTimer);
+        upload.pendingStartTimer = undefined;
+      }
       this.uploadJobs.delete(id);
     }
     const download = this.downloadJobs.get(id);
@@ -1248,13 +1362,21 @@ export class WebSession {
       this.startUploadJob(job, 0);
     }
     if (job && skip) {
+      job.cancelled = true;
+      job.abortController?.abort();
+      if (job.pendingStartTimer !== undefined) {
+        window.clearTimeout(job.pendingStartTimer);
+        job.pendingStartTimer = undefined;
+      }
       this.events.emit({
         name: 'job_error',
         id: String(id),
         file_num: String(fileNum),
         err: 'skipped'
       });
-      this.uploadJobs.delete(id);
+      if (this.uploadJobs.get(id)?.token === job.token) {
+        this.uploadJobs.delete(id);
+      }
     }
   }
 
@@ -1841,7 +1963,15 @@ export class WebSession {
   }
 
   private handleClipboard(data: Record<string, unknown>): void {
+    if (this.isClosed()) {
+      return;
+    }
+    if (this.isClipboardAllowed && !this.isClipboardAllowed()) {
+      this.logger.info('Inbound clipboard ignored due to live clipboard policy');
+      return;
+    }
     if (this.context?.policy?.viewOnly || this.context?.policy?.disableClipboard) {
+      this.logger.info('Inbound clipboard ignored due to context session policy');
       return;
     }
     const format = Number(data.format ?? 0);
@@ -2011,7 +2141,9 @@ export class WebSession {
           file_num: String(fileNum),
           err: 'decompress_failed'
         });
-        this.downloadJobs.delete(id);
+        if (this.downloadJobs.get(id)?.token === job.token) {
+          this.downloadJobs.delete(id);
+        }
         return;
       }
       if (!data || data.byteLength === 0) {
@@ -2022,7 +2154,9 @@ export class WebSession {
           file_num: String(fileNum),
           err: 'invalid_file_block'
         });
-        this.downloadJobs.delete(id);
+        if (this.downloadJobs.get(id)?.token === job.token) {
+          this.downloadJobs.delete(id);
+        }
         return;
       }
     }
@@ -2035,19 +2169,16 @@ export class WebSession {
     const id = Number(done.id ?? 0);
     const fileNum = Number(done.fileNum ?? 0);
     const job = this.downloadJobs.get(id);
-    if (job && !job.cancelled) {
-      this.clearDownloadConfirmRetry(job);
-      const completedFileNum =
-        job.currentFileNum >= 0 ? job.currentFileNum : Math.max(0, fileNum - 1);
-      void this.completeDownloadJob(id, fileNum, job, completedFileNum);
+    if (!job || job.cancelled) {
+      this.logger.debug(
+        `Ignoring file_done for unknown or cancelled job id=${id}, fileNum=${fileNum}`
+      );
       return;
     }
-    this.events.emit({
-      name: 'job_done',
-      id: String(id),
-      file_num: String(fileNum),
-      speed: '0'
-    });
+    this.clearDownloadConfirmRetry(job);
+    const completedFileNum =
+      job.currentFileNum >= 0 ? job.currentFileNum : Math.max(0, fileNum - 1);
+    void this.completeDownloadJob(id, fileNum, job, completedFileNum);
   }
 
   private async completeDownloadJob(
@@ -2057,7 +2188,13 @@ export class WebSession {
     completedFileNum: number
   ): Promise<void> {
     try {
+      if (job.cancelled || this.downloadJobs.get(id)?.token !== job.token) {
+        return;
+      }
       await this.finalizeDownloadFile(job, completedFileNum);
+      if (job.cancelled || this.downloadJobs.get(id)?.token !== job.token) {
+        return;
+      }
       const finalFinishedSize =
         job.totalSize > 0 ? job.totalSize : Math.max(job.receivedBytes, 0);
       if (finalFinishedSize > 0) {
@@ -2078,16 +2215,20 @@ export class WebSession {
         speed: '0'
       });
     } catch (err) {
-      this.logger.warn('Failed to finalize web download', err);
-      this.events.emit({
-        name: 'job_error',
-        id: String(id),
-        file_num: String(reportedFileNum),
-        err: 'download_save_failed'
-      });
+      if (!job.cancelled && this.downloadJobs.get(id)?.token === job.token) {
+        this.logger.warn('Failed to finalize web download', err);
+        this.events.emit({
+          name: 'job_error',
+          id: String(id),
+          file_num: String(reportedFileNum),
+          err: 'download_save_failed'
+        });
+      }
     } finally {
       this.clearDownloadConfirmRetry(job);
-      this.downloadJobs.delete(id);
+      if (this.downloadJobs.get(id)?.token === job.token) {
+        this.downloadJobs.delete(id);
+      }
     }
   }
 
@@ -2187,10 +2328,15 @@ export class WebSession {
   }
 
   private startUploadJob(job: UploadJob, offset: number): void {
-    if (job.started || job.cancelled) {
+    if (
+      this.isClosed() ||
+      job.started ||
+      job.cancelled ||
+      this.uploadJobs.get(job.id)?.token !== job.token
+    ) {
       return;
     }
-    if (job.pendingStartTimer) {
+    if (job.pendingStartTimer !== undefined) {
       window.clearTimeout(job.pendingStartTimer);
       job.pendingStartTimer = undefined;
     }
@@ -2207,6 +2353,13 @@ export class WebSession {
     const chunkSize = 128 * 1024;
     let offset = Math.max(0, job.resumeOffset);
     if (offset >= job.file.size) {
+      if (
+        job.cancelled ||
+        this.uploadJobs.get(job.id)?.token !== job.token ||
+        this.isClosed()
+      ) {
+        return;
+      }
       this.sendMessage({
         fileResponse: {
           done: {
@@ -2221,16 +2374,41 @@ export class WebSession {
         file_num: String(job.fileNum),
         speed: '0'
       });
-      this.uploadJobs.delete(job.id);
+      if (this.uploadJobs.get(job.id)?.token === job.token) {
+        this.uploadJobs.delete(job.id);
+      }
       return;
     }
     while (offset < job.file.size) {
-      if (job.cancelled) {
+      if (
+        job.cancelled ||
+        this.uploadJobs.get(job.id)?.token !== job.token ||
+        this.isClosed()
+      ) {
         return;
       }
-      const slice = job.file.slice(offset, offset + chunkSize);
-      const buffer = await slice.arrayBuffer();
-      if (job.cancelled) {
+      let buffer: ArrayBuffer;
+      try {
+        const slice = job.file.slice(offset, offset + chunkSize);
+        buffer = await slice.arrayBuffer();
+      } catch (err) {
+        if (!job.cancelled && this.uploadJobs.get(job.id)?.token === job.token) {
+          this.logger.warn(`Failed reading slice for upload job ${job.id}`, err);
+          this.events.emit({
+            name: 'job_error',
+            id: String(job.id),
+            file_num: String(job.fileNum),
+            err: 'read_failed'
+          });
+          this.uploadJobs.delete(job.id);
+        }
+        return;
+      }
+      if (
+        job.cancelled ||
+        this.uploadJobs.get(job.id)?.token !== job.token ||
+        this.isClosed()
+      ) {
         return;
       }
       const data = new Uint8Array(buffer);
@@ -2249,6 +2427,13 @@ export class WebSession {
       job.sentBytes = offset;
       this.emitJobProgress(job.id, job.fileNum, job.sentBytes, job.startTime);
     }
+    if (
+      job.cancelled ||
+      this.uploadJobs.get(job.id)?.token !== job.token ||
+      this.isClosed()
+    ) {
+      return;
+    }
     this.sendMessage({
       fileResponse: {
         done: {
@@ -2263,7 +2448,9 @@ export class WebSession {
       file_num: String(job.fileNum),
       speed: '0'
     });
-    this.uploadJobs.delete(job.id);
+    if (this.uploadJobs.get(job.id)?.token === job.token) {
+      this.uploadJobs.delete(job.id);
+    }
   }
 
   private handleTerminalResponse(resp: Record<string, unknown>): void {
