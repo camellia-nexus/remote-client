@@ -311,6 +311,7 @@ pub enum RecordState {
     NewFrame,
     WriteTail,
     RemoveFile,
+    Failed(String),
 }
 
 pub struct Recorder {
@@ -420,10 +421,12 @@ impl Recorder {
             bail!("unsupported frame type");
         }
         let res = self.check(w, h, format);
-        if res.is_err() {
+        if let Err(err) = res {
             self.check_failed = true;
-            log::error!("check failed: {:?}", res);
-            res?;
+            let err_msg = err.to_string();
+            log::error!("check failed: {err_msg}");
+            self.send_state(RecordState::Failed(err_msg));
+            return Err(err);
         }
         match frame {
             video_frame::Union::Vp8s(vp8s) => {
@@ -493,10 +496,12 @@ impl Recorder {
             self.inner = None;
             self.ctx2 = None;
             let res = self.check(w, h, format);
-            if res.is_err() {
+            if let Err(err) = res {
                 self.check_failed = true;
-                log::error!("check failed: {:?}", res);
-                res?;
+                let err_msg = err.to_string();
+                log::error!("check failed: {err_msg}");
+                self.send_state(RecordState::Failed(err_msg));
+                return Err(err);
             }
             self.pts = Some(pts);
         }

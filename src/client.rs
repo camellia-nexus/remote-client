@@ -1586,6 +1586,7 @@ pub struct VideoHandler {
     pub texture: ImageTexture,
     recorder: Arc<Mutex<Option<Recorder>>>,
     record: bool,
+    record_error: Option<String>,
     _display: usize, // useful for debug
     fail_counter: usize,
     first_frame: bool,
@@ -1613,6 +1614,7 @@ impl VideoHandler {
             texture: Default::default(),
             recorder: Default::default(),
             record: false,
+            record_error: None,
             _display,
             fail_counter: 0,
             first_frame: true,
@@ -1658,14 +1660,26 @@ impl VideoHandler {
                 }
                 self.first_frame = false;
                 if self.record {
-                    self.recorder.lock().unwrap().as_mut().map(|r| {
+                    let mut rec_err = None;
+                    if let Some(r) = self.recorder.lock().unwrap().as_mut() {
                         let (w, h) = if *pixelbuffer {
                             (self.rgb.w, self.rgb.h)
                         } else {
                             (self.texture.w, self.texture.h)
                         };
-                        r.write_frame(frame, w, h).ok();
-                    });
+                        if let Err(e) = r.write_frame(frame, w, h) {
+                            rec_err = Some(e.to_string());
+                        }
+                    }
+                    if let Some(err) = rec_err {
+                        log::error!(
+                            "Recording write_frame failed on display {}: {err}",
+                            self._display
+                        );
+                        self.record = false;
+                        self.recorder = Default::default();
+                        self.record_error = Some(err);
+                    }
                 }
                 res
             }
@@ -1689,23 +1703,34 @@ impl VideoHandler {
     }
 
     /// Start or stop screen record.
-    pub fn record_screen(&mut self, start: bool, id: String, display_idx: usize, camera: bool) {
+    pub fn record_screen(
+        &mut self,
+        start: bool,
+        id: String,
+        display_idx: usize,
+        camera: bool,
+    ) -> ResultType<()> {
         self.record = false;
         if start {
-            self.recorder = Recorder::new(RecorderContext {
+            let r = Recorder::new(RecorderContext {
                 server: false,
                 id,
                 dir: crate::ui_interface::video_save_directory(false),
                 display_idx,
                 camera,
                 tx: None,
-            })
-            .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))));
+            })?;
+            self.recorder = Arc::new(Mutex::new(Some(r)));
+            self.record = true;
         } else {
             self.recorder = Default::default();
         }
 
-        self.record = start;
+        Ok(())
+    }
+
+    pub fn take_record_error(&mut self) -> Option<String> {
+        self.record_error.take()
     }
 }
 
@@ -3429,7 +3454,14 @@ where
                                 let record_permission = session.lc.read().unwrap().record_permission;
                                 let id = session.lc.read().unwrap().id.clone();
                                 if record_state && record_permission {
-                                    handler.record_screen(true, id, display, is_view_camera);
+                                    if let Err(err) =
+                                        handler.record_screen(true, id, display, is_view_camera)
+                                    {
+                                        log::error!(
+                                            "Failed to initialize screen recording on display {display}: {err}"
+                                        );
+                                        session.send(Data::RecordScreenFailed(err.to_string()));
+                                    }
                                 }
                                 video_handler = Some(handler);
                             }
@@ -3489,6 +3521,9 @@ where
                                         );
                                     }
                                 }
+                                if let Some(err) = handler.take_record_error() {
+                                    session.send(Data::RecordScreenFailed(err));
+                                }
                             }
                             if should_update_supported {
                                 session.send(Data::Message(
@@ -3504,7 +3539,14 @@ where
                         VideoCommand::RecordScreen(start) => {
                             let id = session.lc.read().unwrap().id.clone();
                             if let Some(handler) = video_handler.as_mut() {
-                                handler.record_screen(start, id, display, is_view_camera);
+                                if let Err(err) =
+                                    handler.record_screen(start, id, display, is_view_camera)
+                                {
+                                    log::error!(
+                                        "Failed to toggle screen recording on display {display}: {err}"
+                                    );
+                                    session.send(Data::RecordScreenFailed(err.to_string()));
+                                }
                             }
                         }
                     }
@@ -4268,6 +4310,7 @@ pub enum Data {
     AddJob((i32, JobType, String, String, i32, bool, bool)),
     ResumeJob((i32, bool)),
     RecordScreen(bool),
+    RecordScreenFailed(String),
     ElevateDirect,
     ElevateWithLogon(String, String),
     NewVoiceCall,

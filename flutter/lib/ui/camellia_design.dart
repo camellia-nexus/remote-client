@@ -18,6 +18,9 @@ abstract final class CamelliaTypography {
     ].join('-').toLowerCase();
     final candidate = saved.isEmpty || saved == 'default' ? system : saved;
     if (!candidate.startsWith('zh')) return CamelliaLanguage.english;
+    if (candidate.contains('hans')) {
+      return CamelliaLanguage.simplifiedChinese;
+    }
     if (candidate.contains('hant') ||
         candidate.contains('-tw') ||
         candidate.contains('-hk') ||

@@ -2888,6 +2888,10 @@ pub fn main_clear_trusted_devices() {
     clear_trusted_devices()
 }
 
+pub fn main_disable_2fa_and_clear_trusted_devices() -> bool {
+    disable_2fa_and_clear_trusted_devices()
+}
+
 #[frb(sync)]
 pub fn main_max_encrypt_len() -> usize {
     max_encrypt_len()

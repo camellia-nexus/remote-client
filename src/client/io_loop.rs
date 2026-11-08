@@ -1139,6 +1139,11 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler.lc.write().unwrap().record_state = start;
                 self.update_record_state();
             }
+            Data::RecordScreenFailed(err) => {
+                log::error!("Screen recording failed: {err}");
+                self.handler.lc.write().unwrap().record_state = false;
+                self.update_record_state_with_error(Some(err));
+            }
             Data::ElevateDirect => {
                 let mut request = ElevationRequest::new();
                 request.set_direct(true);
@@ -2849,6 +2854,10 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     fn update_record_state(&mut self) {
+        self.update_record_state_with_error(None);
+    }
+
+    fn update_record_state_with_error(&mut self, error: Option<String>) {
         // state
         let permission = self.handler.lc.read().unwrap().record_permission;
         if !permission {
@@ -2856,16 +2865,16 @@ impl<T: InvokeUiSession> Remote<T> {
         }
         let state = self.handler.lc.read().unwrap().record_state;
         let start = state && permission;
-        if self.last_record_state == start {
+        if self.last_record_state == start && error.is_none() {
             return;
         }
         self.last_record_state = start;
-        log::info!("record screen start: {start}");
+        log::info!("record screen start: {start}, error: {error:?}");
         // update local
         for (_, v) in self.video_threads.iter_mut() {
             v.queue.push_record_screen(start);
         }
-        self.handler.update_record_status(start);
+        self.handler.update_record_status(start, error);
         // update remote
         let mut misc = Misc::new();
         misc.set_client_record_status(start);

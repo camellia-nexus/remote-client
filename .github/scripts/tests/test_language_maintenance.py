@@ -39,6 +39,31 @@ class LanguageMaintenanceTests(unittest.TestCase):
             'path\\\\name \\"quoted\\"\\n',
         )
 
+    def test_all_flutter_translation_keys_are_defined_in_template(self) -> None:
+        import re
+        flutter_dir = language.ROOT / "flutter" / "lib"
+        template_keys = set(language.get_lang("template"))
+
+        def normalize_dart_key(s: str) -> str:
+            s = re.sub(r"\$\{[^}]*\}", "TOKEN", s)
+            s = re.sub(r"\$[A-Za-z0-9_]+", "TOKEN", s)
+            return re.sub(r"\{.*?\}", "{}", s)
+
+        pattern = re.compile(r"""translate\(\s*['"]([^'"]+)['"]\s*\)""")
+        missing = set()
+        for path in flutter_dir.rglob("*.dart"):
+            content = path.read_text(encoding="utf-8", errors="ignore")
+            for match in pattern.finditer(content):
+                key = normalize_dart_key(match.group(1))
+                if key not in template_keys:
+                    missing.add((match.group(1), key))
+
+        self.assertEqual(
+            missing,
+            set(),
+            f"The following Dart keys are missing from template.rs: {sorted(missing)}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

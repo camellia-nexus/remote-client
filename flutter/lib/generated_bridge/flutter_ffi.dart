@@ -1877,6 +1877,9 @@ Future<void> mainRemoveTrustedDevices({required String json}) =>
 Future<void> mainClearTrustedDevices() =>
     RustLib.instance.api.crateFlutterFfiMainClearTrustedDevices();
 
+Future<bool> mainDisable2FaAndClearTrustedDevices() =>
+    RustLib.instance.api.crateFlutterFfiMainDisable2FaAndClearTrustedDevices();
+
 int mainMaxEncryptLen() =>
     RustLib.instance.api.crateFlutterFfiMainMaxEncryptLen();
 

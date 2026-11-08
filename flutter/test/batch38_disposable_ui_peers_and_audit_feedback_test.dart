@@ -78,6 +78,12 @@ class _FakeRustdeskImpl extends Fake implements RustdeskImpl {
   Future<void> mainClearTrustedDevices() async {
     clearedTrustedDevices.add('cleared');
   }
+
+  @override
+  Future<bool> mainDisable2FaAndClearTrustedDevices() async {
+    clearedTrustedDevices.add('cleared');
+    return true;
+  }
 }
 
 void main() {

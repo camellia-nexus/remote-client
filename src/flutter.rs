@@ -1200,8 +1200,17 @@ impl InvokeUiSession for FlutterHandler {
         }
     }
 
-    fn update_record_status(&self, start: bool) {
-        self.push_event("record_status", &[("start", &start.to_string())], &[]);
+    fn update_record_status(&self, start: bool, error: Option<String>) {
+        let start_str = start.to_string();
+        if let Some(err) = error {
+            self.push_event(
+                "record_status",
+                &[("start", start_str.as_str()), ("error", err.as_str())],
+                &[],
+            );
+        } else {
+            self.push_event("record_status", &[("start", start_str.as_str())], &[]);
+        }
     }
 
     fn printer_request(&self, id: i32, path: String) {

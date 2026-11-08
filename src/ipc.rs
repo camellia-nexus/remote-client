@@ -485,6 +485,7 @@ pub enum Data {
     HwCodecConfig(Option<String>),
     RemoveTrustedDevices(Vec<Bytes>),
     ClearTrustedDevices,
+    Disable2FaAndClearTrustedDevices,
     #[cfg(all(target_os = "windows", feature = "flutter"))]
     PrinterData(Vec<u8>),
     InstallOption(Option<(String, String)>),
@@ -1226,6 +1227,9 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::ClearTrustedDevices => {
             Config::clear_trusted_devices();
         }
+        Data::Disable2FaAndClearTrustedDevices => {
+            Config::disable_2fa_and_clear_trusted_devices();
+        }
         Data::InstallOption(opt) => match opt {
             Some((_k, _v)) => {
                 #[cfg(target_os = "windows")]
@@ -1842,6 +1846,14 @@ pub fn remove_trusted_devices(hwids: Vec<Bytes>) {
 pub fn clear_trusted_devices() {
     Config::clear_trusted_devices();
     allow_err!(set_data(&Data::ClearTrustedDevices));
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn disable_2fa_and_clear_trusted_devices() -> ResultType<()> {
+    Config::try_disable_2fa_and_clear_trusted_devices()?;
+    allow_err!(set_data(&Data::Disable2FaAndClearTrustedDevices));
+    Ok(())
 }
 
 pub fn get_id() -> String {

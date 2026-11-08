@@ -1782,6 +1782,18 @@ pub fn clear_trusted_devices() {
 }
 
 #[cfg(feature = "flutter")]
+pub fn disable_2fa_and_clear_trusted_devices() -> bool {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        Config::try_disable_2fa_and_clear_trusted_devices().is_ok()
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        ipc::disable_2fa_and_clear_trusted_devices().is_ok()
+    }
+}
+
+#[cfg(feature = "flutter")]
 pub fn max_encrypt_len() -> usize {
     camellia_remote_protocol::config::ENCRYPT_MAX_LEN
 }

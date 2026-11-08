@@ -1109,6 +1109,8 @@ class RustdeskImpl {
   Future<void> mainRemoveTrustedDevices({required String json}) =>
       ffi.mainRemoveTrustedDevices(json: json);
   Future<void> mainClearTrustedDevices() => ffi.mainClearTrustedDevices();
+  Future<bool> mainDisable2FaAndClearTrustedDevices() =>
+      ffi.mainDisable2FaAndClearTrustedDevices();
   int mainMaxEncryptLen() => ffi.mainMaxEncryptLen();
   Future<void> sessionRequestNewDisplayInitMsgs({
     required UuidValue sessionId,

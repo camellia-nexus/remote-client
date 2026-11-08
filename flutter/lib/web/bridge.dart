@@ -2299,6 +2299,10 @@ class RustdeskImpl {
     throw UnimplementedError("mainClearTrustedDevices");
   }
 
+  Future<bool> mainDisable2FaAndClearTrustedDevices({dynamic hint}) {
+    throw UnimplementedError("mainDisable2FaAndClearTrustedDevices");
+  }
+
   Future<String> getVoiceCallInputDevice({required bool isCm, dynamic hint}) {
     throw UnimplementedError("getVoiceCallInputDevice");
   }

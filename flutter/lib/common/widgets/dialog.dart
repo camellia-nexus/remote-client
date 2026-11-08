@@ -2776,9 +2776,12 @@ void changeBot({Function()? callback}) async {
 
 void change2fa({Function()? callback}) async {
   if (bind.mainHasValid2FaSync()) {
-    await bind.mainSetOption(key: "2fa", value: "");
-    await bind.mainClearTrustedDevices();
-    callback?.call();
+    final ok = await bind.mainDisable2FaAndClearTrustedDevices();
+    if (ok) {
+      callback?.call();
+    } else {
+      showToast(translate('Failed'));
+    }
     return;
   }
   var new2fa = (await bind.mainGenerate2Fa());

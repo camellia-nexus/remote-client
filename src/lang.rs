@@ -16,7 +16,9 @@ fn canonical_lang(lang_or_locale: &str) -> &'static str {
     if !normalized.starts_with("zh") {
         return "en";
     }
-    if normalized.contains("hant")
+    if normalized.contains("hans") {
+        "zh-cn"
+    } else if normalized.contains("hant")
         || normalized.contains("-tw")
         || normalized.contains("-hk")
         || normalized.contains("-mo")

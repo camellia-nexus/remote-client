@@ -1947,7 +1947,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn set_current_display(&self, disp_idx: i32);
     #[cfg(feature = "flutter")]
     fn is_multi_ui_session(&self) -> bool;
-    fn update_record_status(&self, start: bool);
+    fn update_record_status(&self, start: bool, error: Option<String>);
     fn update_empty_dirs(&self, _res: ReadEmptyDirsResponse) {}
     fn printer_request(&self, id: i32, path: String);
     fn handle_screenshot_resp(&self, sid: String, msg: String);

@@ -207,6 +207,10 @@ pub fn run(rx: RecordStateReceiver, recording_dir: String) -> RecordUploadHandle
                 }
                 RecordState::WriteTail => uploader.handle_tail_with_retry(&stop_signal_clone),
                 RecordState::RemoveFile => uploader.handle_abort(),
+                RecordState::Failed(err) => {
+                    log::warn!("recording failed during capture: {err}");
+                    uploader.handle_abort()
+                }
             };
             if let Err(error) = result {
                 // The durable sidecar remains authoritative after errors. A

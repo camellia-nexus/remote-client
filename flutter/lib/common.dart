@@ -1029,6 +1029,8 @@ final ButtonStyle flatButtonStyle = TextButton.styleFrom(
 
 const List<Locale> supportedLocales = [
   Locale('en', 'US'),
+  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
+  Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
   Locale('zh', 'CN'),
   Locale('zh', 'SG'),
   Locale('zh', 'TW'),

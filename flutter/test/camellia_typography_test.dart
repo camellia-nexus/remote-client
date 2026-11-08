@@ -58,6 +58,8 @@ void main() {
   test('Flutter advertises only English and Chinese regional locales', () {
     expect(supportedLocales.map((locale) => locale.toLanguageTag()).toSet(), {
       'en-US',
+      'zh-Hans',
+      'zh-Hant',
       'zh-CN',
       'zh-SG',
       'zh-TW',
@@ -65,4 +67,32 @@ void main() {
       'zh-MO',
     });
   });
+
+  test(
+    'script code takes precedence over regional code for script-tagged locales',
+    () {
+      expect(
+        CamelliaTypography.resolve(
+          savedLanguage: '',
+          systemLocale: const Locale.fromSubtags(
+            languageCode: 'zh',
+            scriptCode: 'Hans',
+            countryCode: 'TW',
+          ),
+        ),
+        CamelliaLanguage.simplifiedChinese,
+      );
+      expect(
+        CamelliaTypography.resolve(
+          savedLanguage: '',
+          systemLocale: const Locale.fromSubtags(
+            languageCode: 'zh',
+            scriptCode: 'Hant',
+            countryCode: 'CN',
+          ),
+        ),
+        CamelliaLanguage.traditionalChinese,
+      );
+    },
+  );
 }

@@ -46,7 +46,7 @@ pub mod clipboard;
 pub mod core_main;
 mod custom_server;
 mod device_identity;
-mod lang;
+pub mod lang;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod port_forward;
 

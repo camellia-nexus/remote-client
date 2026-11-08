@@ -574,7 +574,9 @@ class FfiModel with ChangeNotifier {
         if (desktopType == DesktopType.remote ||
             desktopType == DesktopType.viewCamera ||
             isMobile) {
-          parent.target?.recordingModel.updateStatus(evt['start'] == 'true');
+          final isStart = evt['start'] == 'true';
+          final error = evt['error'] as String?;
+          parent.target?.recordingModel.updateStatus(isStart, error: error);
         }
       } else if (name == "printer_request") {
         _handlePrinterRequest(evt, sessionId, peerId);
@@ -4242,9 +4244,13 @@ class RecordingModel with ChangeNotifier {
     await bind.sessionRecordScreen(sessionId: sessionId, start: value);
   }
 
-  updateStatus(bool status) {
+  updateStatus(bool status, {String? error}) {
     _start = status;
     notifyListeners();
+    if (error != null && error.isNotEmpty) {
+      final prefix = translate('Recording failed');
+      showToast(prefix.isNotEmpty ? '$prefix: $error' : error);
+    }
   }
 }
 
@@ -4454,12 +4460,16 @@ class FFI {
       if (addRes.isNotEmpty) {
         debugPrint('Failed to add session $id: $addRes');
         closed = true;
-        ffiModel.handleMsgBox({
-          'type': 'error',
-          'title': 'Connection Error',
-          'text': addRes,
-          'link': '',
-        }, sessionId, id);
+        ffiModel.handleMsgBox(
+          {
+            'type': 'error',
+            'title': 'Connection Error',
+            'text': addRes,
+            'link': '',
+          },
+          sessionId,
+          id,
+        );
         return addRes;
       }
     } else if (display != null) {
@@ -4481,12 +4491,16 @@ class FFI {
           'Unreachable, failed to add existed session to $id, $addRes',
         );
         closed = true;
-        ffiModel.handleMsgBox({
-          'type': 'error',
-          'title': 'Connection Error',
-          'text': addRes,
-          'link': '',
-        }, sessionId, id);
+        ffiModel.handleMsgBox(
+          {
+            'type': 'error',
+            'title': 'Connection Error',
+            'text': addRes,
+            'link': '',
+          },
+          sessionId,
+          id,
+        );
         return addRes;
       }
       ffiModel.pi.currentDisplay = display;
@@ -4523,12 +4537,16 @@ class FFI {
     } catch (e) {
       debugPrint('Failed to start session stream: $e');
       closed = true;
-      ffiModel.handleMsgBox({
-        'type': 'error',
-        'title': 'Connection Error',
-        'text': 'Failed to start session stream: $e',
-        'link': '',
-      }, sessionId, id);
+      ffiModel.handleMsgBox(
+        {
+          'type': 'error',
+          'title': 'Connection Error',
+          'text': 'Failed to start session stream: $e',
+          'link': '',
+        },
+        sessionId,
+        id,
+      );
       return 'Failed to start session stream: $e';
     }
 
@@ -4679,7 +4697,10 @@ class FFI {
             debugPrint('the gpuTexture is not supported.');
             continue;
           }
-          textureModel.setTextureType(display: displayIdx, gpuTexture: gpuTexture);
+          textureModel.setTextureType(
+            display: displayIdx,
+            gpuTexture: gpuTexture,
+          );
           onEvent2UIRgba();
         }
       }
