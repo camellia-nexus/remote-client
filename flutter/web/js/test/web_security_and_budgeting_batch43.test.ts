@@ -18,6 +18,90 @@ import { safeZstdDecompress } from '../src/runtime/zstd.ts';
 import { SecretBoxCipher } from '../src/runtime/crypto.ts';
 
 // -----------------------------------------------------------------------------
+// Test environment shims for real WebRuntime & WebSession bridge testing
+// -----------------------------------------------------------------------------
+
+let envInstance: {
+  storageMap: Map<string, string>;
+  createdUrls: string[];
+  revokedUrls: string[];
+} | null = null;
+
+async function getTestBrowserEnvironment() {
+  if (!envInstance) {
+    const storageMap = new Map<string, string>();
+    const createdUrls: string[] = [];
+    const revokedUrls: string[] = [];
+
+    (globalThis as any).self = globalThis;
+    (globalThis as any).window = {
+      __CAMELLIA_REMOTE_WEB__: {},
+      localStorage: {
+        getItem(k: string) {
+          return storageMap.has(k) ? storageMap.get(k)! : null;
+        },
+        setItem(k: string, v: string) {
+          storageMap.set(k, String(v));
+        },
+        removeItem(k: string) {
+          storageMap.delete(k);
+        },
+        clear() {
+          storageMap.clear();
+        }
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      clearTimeout(t: unknown) {},
+      setTimeout(fn: () => void, ms?: number) {
+        return 12345;
+      },
+      setInterval(fn: () => void, ms?: number) {
+        return 67890;
+      },
+      clearInterval() {},
+      requestAnimationFrame(fn: () => void) {
+        fn();
+      }
+    };
+    try {
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { userAgent: 'NodeTest', maxTouchPoints: 0 },
+        configurable: true,
+        writable: true
+      });
+    } catch {
+      // noop
+    }
+    (globalThis as any).document = {
+      body: { appendChild() {} },
+      addEventListener() {},
+      createElement() {
+        return { style: {}, dispatchEvent() {}, click() {} };
+      }
+    };
+    (globalThis as any).URL = {
+      createObjectURL(blob: unknown) {
+        const u = `blob:http://localhost/test-blob-${createdUrls.length + 1}`;
+        createdUrls.push(u);
+        return u;
+      },
+      revokeObjectURL(u: string) {
+        revokedUrls.push(u);
+      }
+    };
+
+    await import('../src/main.ts');
+    envInstance = { storageMap, createdUrls, revokedUrls };
+  } else {
+    envInstance.storageMap.clear();
+    envInstance.createdUrls.length = 0;
+    envInstance.revokedUrls.length = 0;
+  }
+  return envInstance;
+}
+
+// -----------------------------------------------------------------------------
 // RES-054: WebSocket send path backpressure and budget against bufferedAmount
 // -----------------------------------------------------------------------------
 
@@ -218,6 +302,60 @@ test('RES-055: Cursor dimension constants and bounds', () => {
   assert.equal(MAX_DOWNLOAD_BLOCK_BYTES, 16 * 1024 * 1024);
 });
 
+test('RES-055: WebSession handleCursorData validates width <= 512, height <= 512, and byteLength bounds', async () => {
+  await getTestBrowserEnvironment();
+
+  const win = (globalThis as any).window;
+  win.setByName('session_add_sync', JSON.stringify({ id: 'peer-cursor-test' }));
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
+
+  const cursorEvents: any[] = [];
+  session.events.onEmit((evt: any) => {
+    if (evt.name === 'cursor_data') cursorEvents.push(evt);
+  });
+
+  // Valid 16x16 cursor -> 16*16*4 = 1024 bytes -> accepted
+  session.handleCursorData({
+    id: 'c1',
+    width: 16,
+    height: 16,
+    colors: new Uint8Array(1024)
+  });
+  assert.equal(cursorEvents.length, 1);
+  assert.equal(cursorEvents[0].width, '16');
+  assert.equal(cursorEvents[0].height, '16');
+
+  // Oversized width 513 -> rejected
+  session.handleCursorData({
+    id: 'c2',
+    width: 513,
+    height: 16,
+    colors: new Uint8Array(513 * 16 * 4)
+  });
+  assert.equal(cursorEvents.length, 1);
+
+  // Oversized height 513 -> rejected
+  session.handleCursorData({
+    id: 'c3',
+    width: 16,
+    height: 513,
+    colors: new Uint8Array(16 * 513 * 4)
+  });
+  assert.equal(cursorEvents.length, 1);
+
+  // Mismatched buffer length (16x16 expects 1024, received 1025) -> rejected
+  session.handleCursorData({
+    id: 'c4',
+    width: 16,
+    height: 16,
+    colors: new Uint8Array(1025)
+  });
+  assert.equal(cursorEvents.length, 1);
+
+  session.close();
+});
+
 // -----------------------------------------------------------------------------
 // RES-056: Web download memory budgeting, monotonic blocks, and resource cleanup
 // -----------------------------------------------------------------------------
@@ -226,125 +364,255 @@ test('RES-056: MAX_DOWNLOAD_CHUNKS_BYTES is strictly 256 MiB', () => {
   assert.equal(MAX_DOWNLOAD_CHUNKS_BYTES, 256 * 1024 * 1024);
 });
 
-test('RES-056: Download block sequence enforcement detects non-monotonic blkId', () => {
-  let nextBlockId = 0;
-  let jobFailed = false;
-  const verifyBlock = (blkId: number): boolean => {
-    if (jobFailed) {
-      return false;
-    }
-    if (blkId !== nextBlockId) {
-      jobFailed = true;
-      return false;
-    }
-    nextBlockId++;
-    return true;
-  };
+test('RES-056: Download block sequence enforcement detects non-monotonic blkId in real session', async () => {
+  await getTestBrowserEnvironment();
 
-  assert.equal(verifyBlock(0), true);
-  assert.equal(verifyBlock(1), true);
-  assert.equal(verifyBlock(3), false); // Skipped 2 -> fails and aborts
-  assert.equal(verifyBlock(2), false); // Subsequent block fails because job aborted
+  const win = (globalThis as any).window;
+  win.setByName('session_add_sync', JSON.stringify({ id: 'peer-download-seq' }));
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
 
-  // Additional check: duplicate block sequence rejection
-  let nextBlockId2 = 0;
-  const verifyBlock2 = (blkId: number): boolean => {
-    if (blkId !== nextBlockId2) {
-      return false;
+  session.proto = {
+    messageType: {
+      encode() { return { finish() { return new Uint8Array(); } }; },
+      decode() { return {}; }
     }
-    nextBlockId2++;
-    return true;
   };
-  assert.equal(verifyBlock2(0), true);
-  assert.equal(verifyBlock2(1), true);
-  assert.equal(verifyBlock2(1), false); // Duplicate block 1
+  session.peerInfoSnapshot.fileTransferProtocolVersion = 2;
+
+  const events: any[] = [];
+  session.events.onEmit((evt: any) => events.push(evt));
+
+  session.requestDownload(10, '/remote/test.bin', false);
+  session.handleFileResponse({
+    dir: {
+      id: 10,
+      path: '/remote/test.bin',
+      entries: [{ name: 'test.bin', size: 1000, entry_type: 1 }]
+    }
+  });
+
+  // Block 0: blkId 0 -> accepted
+  session.handleFileResponse({
+    block: { id: 10, fileNum: 0, blkId: 0, data: new Uint8Array(100) }
+  });
+  assert.equal(session.downloadJobs.get(10).nextBlockId, 1);
+
+  // Block skipped to blkId 2 -> non-monotonic sequence detected -> job terminated
+  session.handleFileResponse({
+    block: { id: 10, fileNum: 0, blkId: 2, data: new Uint8Array(100) }
+  });
+
+  const err = events.find((e) => e.name === 'job_error');
+  assert.ok(err, 'Must emit job_error on non-monotonic block sequence');
+  assert.equal(err.err, 'invalid_block_sequence');
+  assert.equal(session.downloadJobs.has(10), false, 'Job must be cleaned up');
+
+  session.close();
 });
 
-test('RES-056: Download declared size enforcement detects excess bytes', () => {
-  const declaredSize = 1000;
-  let receivedBytes = 0;
+test('RES-056: Download declared size enforcement detects excess bytes in real session', async () => {
+  await getTestBrowserEnvironment();
 
-  const receiveChunk = (chunkBytes: number): boolean => {
-    if (receivedBytes + chunkBytes > declaredSize) {
-      return false; // declared_size_exceeded
+  const win = (globalThis as any).window;
+  win.setByName('session_add_sync', JSON.stringify({ id: 'peer-download-size' }));
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
+
+  session.proto = {
+    messageType: {
+      encode() { return { finish() { return new Uint8Array(); } }; },
+      decode() { return {}; }
     }
-    receivedBytes += chunkBytes;
-    return true;
   };
+  session.peerInfoSnapshot.fileTransferProtocolVersion = 2;
 
-  assert.equal(receiveChunk(500), true);
-  assert.equal(receiveChunk(400), true);
-  assert.equal(receiveChunk(200), false); // 500 + 400 + 200 = 1100 > 1000
+  const events: any[] = [];
+  session.events.onEmit((evt: any) => events.push(evt));
+
+  session.requestDownload(20, '/remote/small.bin', false);
+  session.handleFileResponse({
+    dir: {
+      id: 20,
+      path: '/remote/small.bin',
+      entries: [{ name: 'small.bin', size: 100, entry_type: 1 }]
+    }
+  });
+
+  // Block 0: 60 bytes <= 100 -> ok
+  session.handleFileResponse({
+    block: { id: 20, fileNum: 0, blkId: 0, data: new Uint8Array(60) }
+  });
+
+  // Block 1: 50 bytes -> total 110 > 100 declared -> error
+  session.handleFileResponse({
+    block: { id: 20, fileNum: 0, blkId: 1, data: new Uint8Array(50) }
+  });
+
+  const err = events.find((e) => e.name === 'job_error');
+  assert.ok(err);
+  assert.equal(err.err, 'declared_size_exceeded');
+  assert.equal(session.downloadJobs.has(20), false);
+
+  session.close();
 });
 
-test('RES-056: Download memory budget enforcement detects exceeding MAX_DOWNLOAD_CHUNKS_BYTES', () => {
-  let chunksBytes = 250 * 1024 * 1024; // 250 MiB
-  const chunkToAdd = 10 * 1024 * 1024;  // 10 MiB -> 260 MiB > 256 MiB
+test('RES-056: Download memory budget enforcement detects exceeding MAX_DOWNLOAD_CHUNKS_BYTES', async () => {
+  await getTestBrowserEnvironment();
 
-  const checkBudget = (current: number, additional: number): boolean => {
-    return current + additional <= MAX_DOWNLOAD_CHUNKS_BYTES;
+  const win = (globalThis as any).window;
+  win.setByName('session_add_sync', JSON.stringify({ id: 'peer-download-budget' }));
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
+
+  session.proto = {
+    messageType: {
+      encode() { return { finish() { return new Uint8Array(); } }; },
+      decode() { return {}; }
+    }
   };
+  session.peerInfoSnapshot.fileTransferProtocolVersion = 2;
 
-  assert.equal(checkBudget(chunksBytes, 5 * 1024 * 1024), true); // 255 MiB <= 256 MiB
-  assert.equal(checkBudget(chunksBytes, chunkToAdd), false);      // 260 MiB > 256 MiB
+  const events: any[] = [];
+  session.events.onEmit((evt: any) => events.push(evt));
+
+  session.requestDownload(30, '/remote/huge.bin', false);
+  const job = session.downloadJobs.get(30);
+  assert.ok(job);
+
+  // Set existing chunksBytes near limit: 255 MiB for file 0
+  job.currentFileNum = 0;
+  job.chunksBytes = 255 * 1024 * 1024;
+  job.nextBlockId = 1;
+
+  // Add a 2 MiB chunk -> 257 MiB > 256 MiB budget cap -> rejected
+  session.handleFileResponse({
+    block: { id: 30, fileNum: 0, blkId: 1, data: new Uint8Array(2 * 1024 * 1024) }
+  });
+
+  const err = events.find((e) => e.name === 'job_error');
+  assert.ok(err);
+  assert.equal(err.err, 'budget_exceeded');
+  assert.equal(session.downloadJobs.has(30), false);
+
+  session.close();
 });
 
-test('RES-056: Object URL and timer cleanup simulation confirms zero leaks', () => {
-  const activeUrls = new Map<string, number>();
-  const revokedUrls: string[] = [];
+test('RES-056: Object URL remains valid after completeDownloadJob and is cleanly revoked on cancelJob & session close', async () => {
+  const env = await getTestBrowserEnvironment();
 
-  const mockRevoke = (url: string) => {
-    const timer = activeUrls.get(url);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      activeUrls.delete(url);
+  const win = (globalThis as any).window;
+  win.setByName('session_add_sync', JSON.stringify({ id: 'peer-download-lifecycle' }));
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
+
+  session.proto = {
+    messageType: {
+      encode() { return { finish() { return new Uint8Array(); } }; },
+      decode() { return {}; }
     }
-    revokedUrls.push(url);
   };
+  session.peerInfoSnapshot.fileTransferProtocolVersion = 2;
 
-  const mockCreate = (id: string): string => {
-    const url = `blob:http://localhost/${id}`;
-    const timer = setTimeout(() => {
-      mockRevoke(url);
-    }, 60000) as unknown as number;
-    activeUrls.set(url, timer);
-    return url;
-  };
+  // 1. Download job 40 finishes normally
+  session.requestDownload(40, '/remote/completed.txt', false);
+  session.handleFileResponse({
+    dir: {
+      id: 40,
+      path: '/remote/completed.txt',
+      entries: [{ name: 'completed.txt', size: 100, entry_type: 1 }]
+    }
+  });
+  session.handleFileResponse({
+    block: { id: 40, fileNum: 0, blkId: 0, data: new Uint8Array(100) }
+  });
+  session.handleFileResponse({
+    done: { id: 40, fileNum: 1 }
+  });
 
-  const url1 = mockCreate('file1');
-  const url2 = mockCreate('file2');
+  await new Promise((r) => setTimeout(r, 10));
 
-  assert.equal(activeUrls.size, 2);
+  // The Object URL was created for download
+  assert.equal(env.createdUrls.length, 1);
+  const createdUrl = env.createdUrls[0];
+  // Crucial fix: The URL must NOT be revoked immediately upon job completion!
+  assert.equal(env.revokedUrls.length, 0, 'Object URL must stay alive for browser download');
+  assert.equal(session.activeDownloadUrls.has(createdUrl), true);
 
-  // Simulate cancelJob or close: deterministic cleanup of all active URLs
-  for (const url of Array.from(activeUrls.keys())) {
-    mockRevoke(url);
-  }
+  // 2. Download job 41 is in progress and gets cancelled via cancelJob(41)
+  session.requestDownload(41, '/remote/cancelled.txt', false);
+  session.handleFileResponse({
+    dir: {
+      id: 41,
+      path: '/remote/cancelled.txt',
+      entries: [{ name: 'cancelled.txt', size: 200, entry_type: 1 }]
+    }
+  });
+  session.handleFileResponse({
+    block: { id: 41, fileNum: 0, blkId: 0, data: new Uint8Array(200) }
+  });
 
-  assert.equal(activeUrls.size, 0);
-  assert.deepEqual(revokedUrls, [url1, url2]);
+  // Manually attach a test URL to job 41 to test cancelJob cleanup
+  const job41 = session.downloadJobs.get(41);
+  const url41 = 'blob:http://localhost/job-41-partial';
+  job41.createdUrls.push(url41);
+  session.activeDownloadUrls.set(url41, 9999);
+
+  session.cancelJob(41);
+  assert.equal(session.downloadJobs.has(41), false);
+  assert.ok(env.revokedUrls.includes(url41), 'cancelJob must immediately revoke job Object URLs');
+  assert.equal(session.activeDownloadUrls.has(url41), false);
+
+  // 3. cancelJob when proto is uninitialized still cleans up local job and URLs
+  session.proto = undefined;
+  session.downloadJobs.set(42, {
+    token: Symbol(),
+    id: 42,
+    remotePath: '/remote/uninit.txt',
+    files: [],
+    currentFileNum: 0,
+    chunks: [new Uint8Array(50)],
+    chunksBytes: 50,
+    currentFileReceivedBytes: 50,
+    nextBlockId: 1,
+    receivedBytes: 50,
+    totalSize: 100,
+    startTime: Date.now(),
+    lastProgressTime: Date.now(),
+    lastProgressBytes: 0,
+    cancelled: false,
+    createdUrls: ['blob:http://localhost/job-42-uninit']
+  });
+  session.activeDownloadUrls.set('blob:http://localhost/job-42-uninit', 8888);
+
+  session.cancelJob(42);
+  assert.equal(session.downloadJobs.has(42), false);
+  assert.ok(env.revokedUrls.includes('blob:http://localhost/job-42-uninit'));
+
+  // 4. Session close cleans up all remaining active download URLs
+  session.close();
+  assert.ok(env.revokedUrls.includes(createdUrl), 'session close must revoke all remaining active URLs');
+  assert.equal(session.activeDownloadUrls.size, 0);
 });
 
 // -----------------------------------------------------------------------------
 // CRED-010: Peer password export prevention, boolean query, lifetime isolation
 // -----------------------------------------------------------------------------
 
-test('CRED-010: Generic peer option getter denies plaintext password export', () => {
-  function isSecretPeerOption(name: string): boolean {
-    const normalized = name.trim().toLowerCase().replace(/_/g, '-');
-    return (
-      normalized === 'password' ||
-      normalized === 'rdp-password' ||
-      normalized === 'os-password'
-    );
-  }
+test('CRED-010: Generic peer option getter denies plaintext password export in real runtime', async () => {
+  await getTestBrowserEnvironment();
 
-  function getPeerOptionValue(id: string, name: string): string {
-    if (isSecretPeerOption(name)) {
-      return '';
-    }
-    return 'non_secret_value';
-  }
+  const win = (globalThis as any).window;
+
+  // Save peer credentials
+  win.setByName(
+    'option:peer',
+    JSON.stringify({ id: 'peer-cred-1', name: 'password', value: 'SuperSecretToken99' })
+  );
+  win.setByName(
+    'option:peer',
+    JSON.stringify({ id: 'peer-cred-1', name: 'alias', value: 'ProductionServer' })
+  );
 
   const secretVariants = [
     'password',
@@ -359,102 +627,96 @@ test('CRED-010: Generic peer option getter denies plaintext password export', ()
   ];
 
   for (const variant of secretVariants) {
+    const exported = win.getByName(
+      'option:peer',
+      JSON.stringify({ id: 'peer-cred-1', name: variant })
+    );
     assert.equal(
-      getPeerOptionValue('peer1', variant),
+      exported,
       '',
       `Secret variant '${variant}' must return empty string from generic option getter`
     );
   }
 
-  assert.equal(getPeerOptionValue('peer1', 'alias'), 'non_secret_value');
-  assert.equal(getPeerOptionValue('peer1', 'force-always-relay'), 'non_secret_value');
+  // Non-secret options remain readable
+  assert.equal(
+    win.getByName('option:peer', JSON.stringify({ id: 'peer-cred-1', name: 'alias' })),
+    'ProductionServer'
+  );
+
+  // Scoped option getter also denies secret keys
+  assert.equal(win.getByName('option:flutter:peer', 'password'), '');
+  assert.equal(win.getByName('option:session', 'os-password'), '');
 });
 
-test('CRED-010: Boolean query has_remembered_password verifies status without plaintext leak', () => {
-  const store = new Map<string, string>();
-  store.set('peer_option:1001', JSON.stringify({ password: 'encrypted:SecretToken123' }));
-  store.set('peer_option:1002', JSON.stringify({ alias: 'WorkStation' })); // no password
+test('CRED-010: Boolean query has_remembered_password verifies status without plaintext leak for string and numeric IDs', async () => {
+  await getTestBrowserEnvironment();
 
-  function hasRememberedPeerPassword(id: string): boolean {
-    const raw = store.get(`peer_option:${id}`);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw);
-    const stored = parsed.password ?? '';
-    return Boolean(stored && stored.trim().length > 0);
-  }
+  const win = (globalThis as any).window;
 
-  function getByName(name: string, arg0?: unknown): string {
-    switch (name) {
-      case 'has_remembered_password':
-      case 'peer_has_password':
-        if (typeof arg0 === 'string') {
-          const peerId = String(arg0 ?? '').trim();
-          return hasRememberedPeerPassword(peerId) ? 'true' : 'false';
-        }
-        return 'false';
-      case 'option:peer': {
-        const payload = JSON.parse(String(arg0));
-        const normalizedKey = payload.name.trim().toLowerCase().replace(/_/g, '-');
-        if (
-          normalizedKey === 'has-remembered-password' ||
-          normalizedKey === 'peer-has-password' ||
-          normalizedKey === 'has-password'
-        ) {
-          return hasRememberedPeerPassword(payload.id) ? 'true' : 'false';
-        }
-        if (normalizedKey === 'password' || normalizedKey === 'os-password' || normalizedKey === 'rdp-password') {
-          return ''; // Deny secret export!
-        }
-        return 'other';
-      }
-      default:
-        return '';
-    }
-  }
+  // Peer 1001: has password
+  win.setByName(
+    'option:peer',
+    JSON.stringify({ id: '1001', name: 'password', value: 'TopSecret1001' })
+  );
+  // Peer 1002: has only alias (no password)
+  win.setByName(
+    'option:peer',
+    JSON.stringify({ id: '1002', name: 'alias', value: 'WorkStation' })
+  );
 
-  // Boolean queries work accurately
-  assert.equal(getByName('has_remembered_password', '1001'), 'true');
-  assert.equal(getByName('peer_has_password', '1001'), 'true');
-  assert.equal(getByName('has_remembered_password', '1002'), 'false');
-  assert.equal(getByName('peer_has_password', '1002'), 'false');
-  assert.equal(getByName('has_remembered_password', '9999'), 'false');
+  // Boolean queries work accurately with string ID
+  assert.equal(win.getByName('has_remembered_password', '1001'), 'true');
+  assert.equal(win.getByName('peer_has_password', '1001'), 'true');
+  assert.equal(win.getByName('has_remembered_password', '1002'), 'false');
+  assert.equal(win.getByName('peer_has_password', '1002'), 'false');
+  assert.equal(win.getByName('has_remembered_password', '9999'), 'false');
 
-  // Generic option getter with password query returns boolean for has_remembered_password
+  // Boolean queries work accurately with numeric ID (crucial fix for non-string arg0)
+  assert.equal(win.getByName('has_remembered_password', 1001), 'true');
+  assert.equal(win.getByName('peer_has_password', 1001), 'true');
+  assert.equal(win.getByName('has_remembered_password', 1002), 'false');
+
+  // option:peer getter with has_remembered_password query returns boolean
   assert.equal(
-    getByName('option:peer', JSON.stringify({ id: '1001', name: 'has_remembered_password' })),
+    win.getByName('option:peer', JSON.stringify({ id: '1001', name: 'has_remembered_password' })),
     'true'
   );
-
-  // Generic option getter for actual password returns empty string
   assert.equal(
-    getByName('option:peer', JSON.stringify({ id: '1001', name: 'password' })),
+    win.getByName('option:peer', JSON.stringify({ id: '1002', name: 'has_remembered_password' })),
+    'false'
+  );
+
+  // option:peer getter for actual password returns empty string
+  assert.equal(
+    win.getByName('option:peer', JSON.stringify({ id: '1001', name: 'password' })),
     ''
   );
   assert.equal(
-    getByName('option:peer', JSON.stringify({ id: '1001', name: 'PASSWORD' })),
+    win.getByName('option:peer', JSON.stringify({ id: '1001', name: 'PASSWORD' })),
     ''
   );
 });
 
-test('CRED-010: Session close wipes credentials and ephemeral secrets', () => {
-  const request: { id: string; password?: string } = {
-    id: 'peer1',
-    password: 'TopSecretPassword'
-  };
+test('CRED-010: Session close wipes credentials and ephemeral secrets in real session', async () => {
+  await getTestBrowserEnvironment();
 
-  const ephemeralSecrets = new Map<string, string>();
-  ephemeralSecrets.set('os-password', 'OSSecret');
+  const win = (globalThis as any).window;
 
-  function closeSession(): void {
-    request.password = undefined;
-    ephemeralSecrets.clear();
-  }
+  // Add session with initial credentials
+  win.setByName(
+    'session_add_sync',
+    JSON.stringify({ id: 'peer-wipe-test', password: 'EphemeralSessionPassword' })
+  );
+  const runtime = win.__CAMELLIA_REMOTE_WEB_BRIDGE__.runtime;
+  const session = runtime.currentSession;
 
-  assert.equal(request.password, 'TopSecretPassword');
-  assert.equal(ephemeralSecrets.size, 1);
+  assert.equal(session.request.password, 'EphemeralSessionPassword');
 
-  closeSession();
+  // Close session
+  session.close();
 
-  assert.equal(request.password, undefined);
-  assert.equal(ephemeralSecrets.size, 0);
+  // Password must be wiped to undefined
+  assert.equal(session.request.password, undefined);
+  assert.equal(session.pendingLogin, undefined);
 });

@@ -1,21 +1,21 @@
 import * as fzstd from 'fzstd';
-import { EventDispatcher } from '../core/events';
-import { Logger } from '../core/logger';
+import { EventDispatcher } from '../core/events.ts';
+import { Logger } from '../core/logger.ts';
 import {
   SecretBoxCipher,
   createSymmetricKey,
   decodeBase64,
   encodeBase64,
   signOpen
-} from './crypto';
-import { concatBytes, sha256, utf8ToBytes } from './hash';
-import { MessageInbox } from './inbox';
-import { ProtoRoots, decodeProtoObject, loadProtos } from './proto';
-import { ConnectionRoute, RelayInfo, RendezvousClient } from './rendezvous';
-import { assertPeerAuthenticatedRoute } from './direct_access_policy';
-import { WebSocketTransport } from './transport';
-import { ConnectRequest, ConnectionState, SessionContext, SessionMode } from './types';
-import { safeZstdDecompress } from './zstd';
+} from './crypto.ts';
+import { concatBytes, sha256, utf8ToBytes } from './hash.ts';
+import { MessageInbox } from './inbox.ts';
+import { decodeProtoObject, loadProtos, type ProtoRoots } from './proto.ts';
+import { RendezvousClient, type ConnectionRoute, type RelayInfo } from './rendezvous.ts';
+import { assertPeerAuthenticatedRoute } from './direct_access_policy.ts';
+import { WebSocketTransport } from './transport.ts';
+import type { ConnectRequest, ConnectionState, SessionContext, SessionMode } from './types.ts';
+import { safeZstdDecompress } from './zstd.ts';
 
 import {
   UPLOAD_BACKPRESSURE_HIGH_WATERMARK,
@@ -25,16 +25,16 @@ import {
   MAX_DOWNLOAD_CHUNKS_BYTES,
   MAX_DOWNLOAD_BLOCK_BYTES,
   MAX_TERMINAL_PAYLOAD_BYTES
-} from './session_constants';
-export * from './session_constants';
+} from './session_constants.ts';
+export * from './session_constants.ts';
 
 
 import {
-  RenderQualityPreference,
+  type RenderQualityPreference,
   VideoPipeline,
   detectDecodingSupport
-} from './video';
-import { MACOS_ISO_SWAP, USB_HID_TARGET_KEYCODES } from './keycode_maps';
+} from './video.ts';
+import { MACOS_ISO_SWAP, USB_HID_TARGET_KEYCODES } from './keycode_maps.ts';
 
 type CodecProbe = {
   supported: boolean;
@@ -135,54 +135,63 @@ type DownloadJob = {
   createdUrls: string[];
 };
 
-enum SupportedDecodingPreferCodec {
-  Auto = 0,
-  VP9 = 1,
-  H264 = 2,
-  H265 = 3,
-  VP8 = 4,
-  AV1 = 5
-}
+const SupportedDecodingPreferCodec = {
+  Auto: 0,
+  VP9: 1,
+  H264: 2,
+  H265: 3,
+  VP8: 4,
+  AV1: 5
+} as const;
+type SupportedDecodingPreferCodec =
+  (typeof SupportedDecodingPreferCodec)[keyof typeof SupportedDecodingPreferCodec];
 
-enum BackNotificationState {
-  BlkStateUnknown = 0,
-  BlkOnSucceeded = 2,
-  BlkOnFailed = 3,
-  BlkOffSucceeded = 4,
-  BlkOffFailed = 5
-}
+const BackNotificationState = {
+  BlkStateUnknown: 0,
+  BlkOnSucceeded: 2,
+  BlkOnFailed: 3,
+  BlkOffSucceeded: 4,
+  BlkOffFailed: 5
+} as const;
+type BackNotificationState =
+  (typeof BackNotificationState)[keyof typeof BackNotificationState];
 
-enum PrivacyModeState {
-  PrvStateUnknown = 0,
-  PrvOnByOther = 2,
-  PrvNotSupported = 3,
-  PrvOnSucceeded = 4,
-  PrvOnFailedDenied = 5,
-  PrvOnFailedPlugin = 6,
-  PrvOnFailed = 7,
-  PrvOffSucceeded = 8,
-  PrvOffByPeer = 9,
-  PrvOffFailed = 10,
-  PrvOffUnknown = 11
-}
+const PrivacyModeState = {
+  PrvStateUnknown: 0,
+  PrvOnByOther: 2,
+  PrvNotSupported: 3,
+  PrvOnSucceeded: 4,
+  PrvOnFailedDenied: 5,
+  PrvOnFailedPlugin: 6,
+  PrvOnFailed: 7,
+  PrvOffSucceeded: 8,
+  PrvOffByPeer: 9,
+  PrvOffFailed: 10,
+  PrvOffUnknown: 11
+} as const;
+type PrivacyModeState =
+  (typeof PrivacyModeState)[keyof typeof PrivacyModeState];
 
-enum BoolOption {
-  NotSet = 0,
-  No = 1,
-  Yes = 2
-}
+const BoolOption = {
+  NotSet: 0,
+  No: 1,
+  Yes: 2
+} as const;
+type BoolOption = (typeof BoolOption)[keyof typeof BoolOption];
 
-enum ImageQuality {
-  NotSet = 0,
-  Low = 2,
-  Balanced = 3,
-  Best = 4
-}
+const ImageQuality = {
+  NotSet: 0,
+  Low: 2,
+  Balanced: 3,
+  Best: 4
+} as const;
+type ImageQuality = (typeof ImageQuality)[keyof typeof ImageQuality];
 
-enum Chroma {
-  I420 = 0,
-  I444 = 1
-}
+const Chroma = {
+  I420: 0,
+  I444: 1
+} as const;
+type Chroma = (typeof Chroma)[keyof typeof Chroma];
 
 const BUTTON_MASK: Record<string, number> = {
   left: 1,
@@ -1324,9 +1333,6 @@ export class WebSession {
   }
 
   cancelJob(id: number): void {
-    if (!this.proto) {
-      return;
-    }
     const upload = this.uploadJobs.get(id);
     if (upload) {
       upload.cancelled = true;
@@ -1342,7 +1348,7 @@ export class WebSession {
       this.cleanupDownloadJobResources(download);
       this.downloadJobs.delete(id);
     }
-    if (!this.ensureFileTransferProtocol(id)) {
+    if (!this.proto || !this.ensureFileTransferProtocol(id)) {
       return;
     }
     this.sendMessage({
@@ -1980,12 +1986,12 @@ export class WebSession {
   }
 
   private handleCursorData(data: Record<string, unknown>): void {
-    const colors = data.colors as Uint8Array | undefined;
-    if (!colors) {
+    const colors = normalizeDownloadChunk(data.colors);
+    if (!colors || colors.byteLength === 0) {
       return;
     }
-    const width = this.toFiniteNumber(data.width, 0);
-    const height = this.toFiniteNumber(data.height, 0);
+    const width = Math.floor(this.toFiniteNumber(data.width, 0));
+    const height = Math.floor(this.toFiniteNumber(data.height, 0));
     if (
       width <= 0 ||
       height <= 0 ||
@@ -1995,7 +2001,7 @@ export class WebSession {
       this.logger.warn(`Dropped cursor with invalid dimensions: ${width}x${height}`);
       return;
     }
-    const expectedBytes = Math.floor(width) * Math.floor(height) * 4;
+    const expectedBytes = width * height * 4;
     if (expectedBytes <= 0 || expectedBytes > MAX_CURSOR_BYTES) {
       this.logger.warn(`Dropped cursor with invalid expected byte count: ${expectedBytes}`);
       return;
@@ -2191,7 +2197,7 @@ export class WebSession {
     if (!job || job.cancelled) {
       return;
     }
-    const fileNum = Number(block.fileNum ?? 0);
+    const fileNum = Number(block.fileNum ?? block.file_num ?? 0);
 
     // Enforce monotonic file sequence
     if (job.currentFileNum >= 0 && fileNum < job.currentFileNum) {
@@ -2225,7 +2231,7 @@ export class WebSession {
     }
 
     // Enforce monotonic block sequence
-    const blkId = Number(block.blkId ?? 0);
+    const blkId = Number(block.blkId ?? block.blk_id ?? 0);
     if (blkId !== job.nextBlockId) {
       this.logger.warn(
         `Download job ${id} received non-monotonic block sequence: got blkId=${blkId}, expected=${job.nextBlockId}`
@@ -2397,11 +2403,13 @@ export class WebSession {
           file_num: String(reportedFileNum),
           err: 'download_save_failed'
         });
+        this.cleanupDownloadJobResources(job);
       }
     } finally {
       this.clearDownloadConfirmRetry(job);
       if (this.downloadJobs.get(id)?.token === job.token) {
-        this.cleanupDownloadJobResources(job);
+        job.chunks = [];
+        job.chunksBytes = 0;
         this.downloadJobs.delete(id);
       }
     }

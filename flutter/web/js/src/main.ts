@@ -1,5 +1,5 @@
-import { WebRuntime } from './runtime/runtime';
-import { attachBridge } from './bridge';
+import { WebRuntime } from './runtime/runtime.ts';
+import { attachBridge } from './bridge/index.ts';
 
 const runtime = new WebRuntime();
 attachBridge(runtime);

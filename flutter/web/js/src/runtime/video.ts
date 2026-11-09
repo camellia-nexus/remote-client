@@ -1,4 +1,4 @@
-import { Logger } from '../core/logger';
+import { Logger } from '../core/logger.ts';
 
 export type CodecType = 'vp8' | 'vp9' | 'av1' | 'h264' | 'h265';
 export type RenderQualityPreference = 'low' | 'balanced' | 'best' | 'custom';
@@ -2699,14 +2699,25 @@ export class VideoPipeline {
 }
 
 class SoftwareDecoder {
+  private readonly display: number;
+  private readonly module: OgvDecoderModule;
+  private readonly logger: Logger;
+  private readonly onFrame: (
+    display: number,
+    rgba: Uint8Array,
+    width: number,
+    height: number,
+    displayWidth: number,
+    displayHeight: number
+  ) => void;
   private readonly ready: Promise<void>;
   private queue = Promise.resolve(true);
 
   constructor(
-    private readonly display: number,
-    private readonly module: OgvDecoderModule,
-    private readonly logger: Logger,
-    private readonly onFrame: (
+    display: number,
+    module: OgvDecoderModule,
+    logger: Logger,
+    onFrame: (
       display: number,
       rgba: Uint8Array,
       width: number,
@@ -2715,6 +2726,10 @@ class SoftwareDecoder {
       displayHeight: number
     ) => void
   ) {
+    this.display = display;
+    this.module = module;
+    this.logger = logger;
+    this.onFrame = onFrame;
     this.ready = new Promise((resolve) => {
       this.module.init(() => resolve());
     });

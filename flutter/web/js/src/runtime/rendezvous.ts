@@ -1,10 +1,10 @@
-import { Logger } from '../core/logger';
-import { RuntimeConfig } from '../core/config';
-import { generateUuid } from '../core/uuid';
-import { SecretBoxCipher, createSymmetricKey, decodeBase64, signOpen } from './crypto';
-import { MessageInbox } from './inbox';
-import { decodeProtoObject, ProtoRoots } from './proto';
-import { WebSocketTransport } from './transport';
+import { Logger } from '../core/logger.ts';
+import type { RuntimeConfig } from '../core/config.ts';
+import { generateUuid } from '../core/uuid.ts';
+import { SecretBoxCipher, createSymmetricKey, decodeBase64, signOpen } from './crypto.ts';
+import { MessageInbox } from './inbox.ts';
+import { decodeProtoObject, type ProtoRoots } from './proto.ts';
+import { WebSocketTransport } from './transport.ts';
 
 export type RelayInfo = {
   relayServer: string;

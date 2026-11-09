@@ -1,13 +1,13 @@
-import { loadConfig, RuntimeConfig } from '../core/config';
-import { EventDispatcher } from '../core/events';
-import { Logger } from '../core/logger';
-import { detectOs, screenInfo } from '../core/platform';
-import { StorageStore } from '../core/storage';
+import { loadConfig, type RuntimeConfig } from '../core/config.ts';
+import { EventDispatcher } from '../core/events.ts';
+import { Logger } from '../core/logger.ts';
+import { detectOs, screenInfo } from '../core/platform.ts';
+import { StorageStore } from '../core/storage.ts';
 import {
   generateDeviceUuid,
   generateUuid,
   isCanonicalDeviceUuid
-} from '../core/uuid';
+} from '../core/uuid.ts';
 import {
   decodeBase64,
   decryptLocalSecret,
@@ -17,25 +17,25 @@ import {
   generateDeviceSigningKeyPair,
   signDeviceProof,
   validateDeviceProofChallenge
-} from './crypto';
-import { MessageInbox } from './inbox';
-import { createOidcPollRequest } from './oidc_poll_request';
-import { purgeAccountCredentials as purgeStoreCredentials } from './account_credentials';
+} from './crypto.ts';
+import { MessageInbox } from './inbox.ts';
+import { createOidcPollRequest } from './oidc_poll_request.ts';
+import { purgeAccountCredentials as purgeStoreCredentials } from './account_credentials.ts';
 import {
   resolveSecurityPolicyFromReader,
   type SecurityPolicyOptionsReader,
   SessionPolicyGuard
-} from './policy';
-import { decodeProtoObject, loadProtos, ProtoRoots } from './proto';
-import { checkWsEndpoint, secureRendezvousTransport } from './rendezvous';
-import { WebSession } from './session';
-import { WebSocketTransport } from './transport';
-import {
+} from './policy.ts';
+import { decodeProtoObject, loadProtos, type ProtoRoots } from './proto.ts';
+import { checkWsEndpoint, secureRendezvousTransport } from './rendezvous.ts';
+import { WebSession } from './session.ts';
+import { WebSocketTransport } from './transport.ts';
+import type {
   ConnectRequest,
   SessionContext,
   SessionMode,
   SessionSecurityPolicy
-} from './types';
+} from './types.ts';
 
 type OptionPayload = { name?: string; value?: unknown };
 type AccountAuthPayload = { op?: string; remember?: boolean };
@@ -86,8 +86,8 @@ type ConnectionCandidate = {
 
 const FALLBACK_DEFAULT_ID_PORT = 21116;
 
-export { SessionPolicyGuard } from './policy';
-import { decodeOnlineStates } from './online_states';
+export { SessionPolicyGuard } from './policy.ts';
+import { decodeOnlineStates } from './online_states.ts';
 
 export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly config: RuntimeConfig;
@@ -889,15 +889,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       case 'image_quality':
         return this.resolveImageQualityPreference();
       case 'has_remembered_password':
-      case 'peer_has_password':
-        if (typeof arg0 === 'string') {
-          const peerId = String(arg0 ?? '').trim();
-          if (!peerId) {
-            return 'false';
-          }
-          return this.hasRememberedPeerPassword(peerId) ? 'true' : 'false';
+      case 'peer_has_password': {
+        const peerId = String(arg0 ?? '').trim();
+        if (!peerId) {
+          return 'false';
         }
-        return 'false';
+        return this.hasRememberedPeerPassword(peerId) ? 'true' : 'false';
+      }
       case 'peer_exists':
         if (typeof arg0 === 'string') {
           return this.findPeerById(arg0) ? 'true' : 'false';
@@ -1089,6 +1087,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       normalizedKey === 'has-password'
     ) {
       return this.hasRememberedPeerPassword(payload.id) ? 'true' : 'false';
+    }
+    if (normalizedKey === 'has-rdp-password') {
+      const options = this.getPeerOptions(payload.id);
+      const rdpPwd = options['rdp_password'] ?? options['rdp-password'] ?? '';
+      return rdpPwd.trim().length > 0 ? 'true' : 'false';
     }
     if (this.isSecretPeerOption(payload.name)) {
       return '';
@@ -1422,7 +1425,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
 
   private getScopedOption(prefix: string, key: string): string {
     const normalizedKey = key.trim().toLowerCase().replace(/_/g, '-');
-    if (prefix === 'option:session' && (normalizedKey === 'os-password' || normalizedKey === 'rdp-password')) {
+    if (
+      normalizedKey === 'password' ||
+      normalizedKey === 'os-password' ||
+      normalizedKey === 'rdp-password'
+    ) {
       return '';
     }
     const scopedKey = `${prefix}:${key}`;

@@ -1,5 +1,5 @@
-import { isMobileDevice } from '../core/platform';
-import { WebRuntime } from '../runtime/runtime';
+import { isMobileDevice } from '../core/platform.ts';
+import { WebRuntime } from '../runtime/runtime.ts';
 
 export function attachBridge(runtime: WebRuntime): void {
   window.isMobile = isMobileDevice;
