@@ -28,6 +28,7 @@ cert.pfx
 !res/128x128@2x.png
 !res/mac-tray-dark-x2.png
 !res/mac-tray-light-x2.png
+!flutter/plugins/window_manager/images/*.png
 !res/scalable.svg
 !flutter/android/app/src/main/res/drawable-*/ic_launcher_foreground.png
 !flutter/android/app/src/main/res/drawable-*/ic_launcher_monochrome.png
