@@ -9,6 +9,10 @@ use jni::{
     JavaVM,
 };
 
+use crate::common::frame_raw::{
+    FrameRaw, MAX_AUDIO_FRAME_BYTES, MAX_AUDIO_FRAME_TIMEOUT, MAX_VIDEO_FRAME_BYTES,
+    MAX_VIDEO_FRAME_TIMEOUT,
+};
 use camellia_remote_protocol::{message_proto::MultiClipboards, protobuf::Message};
 use jni::errors::{Error as JniError, Result as JniResult};
 use lazy_static::lazy_static;
@@ -23,85 +27,13 @@ lazy_static! {
     static ref JVM: RwLock<Option<JavaVM>> = RwLock::new(None);
     static ref MAIN_SERVICE_CTX: RwLock<Option<GlobalRef>> = RwLock::new(None); // MainService -> video service / audio service / info
     static ref APPLICATION_CONTEXT: RwLock<Option<GlobalRef>> = RwLock::new(None);
-    static ref VIDEO_RAW: Mutex<FrameRaw> = Mutex::new(FrameRaw::new("video", MAX_VIDEO_FRAME_TIMEOUT));
-    static ref AUDIO_RAW: Mutex<FrameRaw> = Mutex::new(FrameRaw::new("audio", MAX_AUDIO_FRAME_TIMEOUT));
+    static ref VIDEO_RAW: Mutex<FrameRaw> = Mutex::new(FrameRaw::new("video", MAX_VIDEO_FRAME_TIMEOUT, MAX_VIDEO_FRAME_BYTES));
+    static ref AUDIO_RAW: Mutex<FrameRaw> = Mutex::new(FrameRaw::new("audio", MAX_AUDIO_FRAME_TIMEOUT, MAX_AUDIO_FRAME_BYTES));
     static ref NDK_CONTEXT_INITED: Mutex<bool> = Default::default();
     static ref MEDIA_CODEC_INFOS: RwLock<Option<MediaCodecInfos>> = RwLock::new(None);
     static ref CLIPBOARD_MANAGER: RwLock<Option<GlobalRef>> = RwLock::new(None);
     static ref CLIPBOARDS_HOST: Mutex<Option<MultiClipboards>> = Mutex::new(None);
     static ref CLIPBOARDS_CLIENT: Mutex<Option<MultiClipboards>> = Mutex::new(None);
-}
-
-const MAX_VIDEO_FRAME_TIMEOUT: Duration = Duration::from_millis(100);
-const MAX_AUDIO_FRAME_TIMEOUT: Duration = Duration::from_millis(1000);
-
-struct FrameRaw {
-    name: &'static str,
-    ptr: AtomicPtr<u8>,
-    len: usize,
-    last_update: Instant,
-    timeout: Duration,
-    enable: bool,
-}
-
-impl FrameRaw {
-    fn new(name: &'static str, timeout: Duration) -> Self {
-        FrameRaw {
-            name,
-            ptr: AtomicPtr::default(),
-            len: 0,
-            last_update: Instant::now(),
-            timeout,
-            enable: false,
-        }
-    }
-
-    fn set_enable(&mut self, value: bool) {
-        self.enable = value;
-        self.ptr.store(std::ptr::null_mut(), SeqCst);
-        self.len = 0;
-    }
-
-    fn update(&mut self, data: *mut u8, len: usize) {
-        if self.enable.not() {
-            return;
-        }
-        self.len = len;
-        self.ptr.store(data, SeqCst);
-        self.last_update = Instant::now();
-    }
-
-    // take inner data as slice
-    // release when success
-    fn take<'a>(&mut self, dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
-        if self.enable.not() {
-            return None;
-        }
-        let ptr = self.ptr.load(SeqCst);
-        if ptr.is_null() || self.len == 0 {
-            None
-        } else {
-            if self.last_update.elapsed() > self.timeout {
-                log::trace!("Failed to take {} raw,timeout!", self.name);
-                return None;
-            }
-            let slice = unsafe { std::slice::from_raw_parts(ptr, self.len) };
-            self.release();
-            if last.len() == slice.len() && crate::would_block_if_equal(last, slice).is_err() {
-                return None;
-            }
-            dst.resize(slice.len(), 0);
-            unsafe {
-                std::ptr::copy_nonoverlapping(slice.as_ptr(), dst.as_mut_ptr(), slice.len());
-            }
-            Some(())
-        }
-    }
-
-    fn release(&mut self) {
-        self.len = 0;
-        self.ptr.store(std::ptr::null_mut(), SeqCst);
-    }
 }
 
 pub fn get_video_raw<'a>(dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
@@ -129,7 +61,12 @@ pub extern "system" fn Java_ffi_FFI_onVideoFrameUpdate(
     let jb = JByteBuffer::from(buffer);
     if let Ok(data) = env.get_direct_buffer_address(&jb) {
         if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
-            VIDEO_RAW.lock().unwrap().update(data, len);
+            if !data.is_null() && len > 0 && len <= MAX_VIDEO_FRAME_BYTES {
+                let slice = unsafe { std::slice::from_raw_parts(data, len) };
+                if let Ok(mut raw) = VIDEO_RAW.lock() {
+                    raw.update(slice);
+                }
+            }
         }
     }
 }
@@ -143,8 +80,25 @@ pub extern "system" fn Java_ffi_FFI_onAudioFrameUpdate(
     let jb = JByteBuffer::from(buffer);
     if let Ok(data) = env.get_direct_buffer_address(&jb) {
         if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
-            AUDIO_RAW.lock().unwrap().update(data, len);
+            if !data.is_null() && len > 0 && len <= MAX_AUDIO_FRAME_BYTES {
+                let slice = unsafe { std::slice::from_raw_parts(data, len) };
+                if let Ok(mut raw) = AUDIO_RAW.lock() {
+                    raw.update(slice);
+                }
+            }
         }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_ffi_FFI_cleanupMainService(_env: JNIEnv, _class: JClass) {
+    log::debug!("cleanupMainService from jvm");
+    *MAIN_SERVICE_CTX.write().unwrap() = None;
+    if let Ok(mut raw) = VIDEO_RAW.lock() {
+        raw.set_enable(false);
+    }
+    if let Ok(mut raw) = AUDIO_RAW.lock() {
+        raw.set_enable(false);
     }
 }
 

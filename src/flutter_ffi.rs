@@ -3082,16 +3082,25 @@ pub mod server_side {
     ) {
         log::debug!("startServer from jvm");
         let mut env = env;
+        let mut app_dir_str = String::new();
         if let Ok(app_dir) = env.get_string(&app_dir) {
-            *config::APP_DIR.write().unwrap() = app_dir.into();
+            app_dir_str = app_dir.into();
+            *config::APP_DIR.write().unwrap() = app_dir_str.clone();
         }
+        let mut custom_config_str = String::new();
         if let Ok(custom_client_config) = env.get_string(&custom_client_config) {
             if !custom_client_config.is_empty() {
-                let custom_client_config: String = custom_client_config.into();
-                crate::read_custom_client(&custom_client_config);
+                custom_config_str = custom_client_config.into();
+                crate::read_custom_client(&custom_config_str);
             }
         }
-        std::thread::spawn(move || start_server(true));
+        crate::server::android_supervisor::start_android_server(app_dir_str, custom_config_str);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_ffi_FFI_stopServer(_env: JNIEnv, _class: JClass) {
+        log::debug!("stopServer from jvm");
+        crate::server::android_supervisor::stop_android_server();
     }
 
     #[no_mangle]

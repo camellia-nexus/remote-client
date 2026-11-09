@@ -37,6 +37,8 @@ cfg_if! {
 
 pub mod codec;
 pub mod convert;
+pub mod frame_raw;
+pub use frame_raw::*;
 #[cfg(feature = "hwcodec")]
 pub mod hwcodec;
 #[cfg(feature = "mediacodec")]

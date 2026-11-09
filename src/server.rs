@@ -31,6 +31,7 @@ use video_service::VideoSource;
 
 use crate::ipc::Data;
 
+pub mod android_supervisor;
 pub mod audio_service;
 #[cfg(target_os = "windows")]
 pub mod terminal_helper;

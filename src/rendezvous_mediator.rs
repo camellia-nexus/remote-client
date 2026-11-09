@@ -137,6 +137,10 @@ impl RendezvousMediator {
         scrap::codec::test_av1();
         *LAST_NOT_DEPLOYED_REGISTER.lock().await = None;
         loop {
+            if !crate::common::is_server_running() {
+                log::info!("Server is stopped, exiting RendezvousMediator::start_all");
+                break;
+            }
             let timeout = Arc::new(RwLock::new(CONNECT_TIMEOUT));
             let conn_start_time = Instant::now();
             let managed_incoming_allowed = crate::hbbs_http::sync::incoming_connections_allowed();
@@ -192,6 +196,10 @@ impl RendezvousMediator {
             } else {
                 // https://github.com/rustdesk/rustdesk/issues/12233
                 sleep(0.033).await;
+            }
+            if !crate::common::is_server_running() {
+                log::info!("Server is stopped, exiting RendezvousMediator::start_all");
+                break;
             }
         }
     }
@@ -761,6 +769,10 @@ async fn direct_server(server: ServerPtr) {
     let mut listener = None;
     let mut port = 0;
     loop {
+        if !crate::common::is_server_running() {
+            log::info!("Server is stopped, exiting direct_server");
+            break;
+        }
         let disabled = !option2bool(
             OPTION_ENABLE_DIRECT_SERVER,
             &Config::get_option(OPTION_ENABLE_DIRECT_SERVER),

@@ -62,7 +62,7 @@ pub(super) fn start_listening() -> ResultType<()> {
     let socket = std::net::UdpSocket::bind(addr)?;
     socket.set_read_timeout(Some(std::time::Duration::from_millis(1000)))?;
     log::info!("lan discovery listener started");
-    loop {
+    while crate::common::is_server_running() {
         let mut buf = [0; 2048];
         if let Ok((len, addr)) = socket.recv_from(&mut buf) {
             if let Ok(msg_in) = Message::parse_from_bytes(&buf[0..len]) {
@@ -104,6 +104,8 @@ pub(super) fn start_listening() -> ResultType<()> {
             }
         }
     }
+    log::info!("lan discovery listener stopped");
+    Ok(())
 }
 
 pub fn discover() -> ResultType<()> {

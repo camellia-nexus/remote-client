@@ -149,11 +149,14 @@ class MainActivity : FlutterActivity() {
                 }
                 "stop_service" -> {
                     Log.d(logTag, "Stop service")
-                    mainService?.let {
-                        it.destroy()
+                    val service = mainService
+                    if (service != null) {
+                        service.destroy()
                         result.success(true)
-                    } ?: let {
-                        result.success(false)
+                    } else {
+                        FFI.stopServer()
+                        stopService(Intent(this, MainService::class.java))
+                        result.success(true)
                     }
                 }
                 "check_permission" -> {

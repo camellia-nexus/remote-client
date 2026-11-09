@@ -16,6 +16,8 @@ object FFI {
     external fun onAppStart(ctx: Context)
     external fun setClipboardManager(clipboardManager: RdClipboardManager)
     external fun startServer(app_dir: String, custom_client_config: String)
+    external fun stopServer()
+    external fun cleanupMainService()
     external fun startService()
     external fun onVideoFrameUpdate(buf: ByteBuffer)
     external fun onAudioFrameUpdate(buf: ByteBuffer)
