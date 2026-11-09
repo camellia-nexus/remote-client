@@ -60,7 +60,7 @@ read -r WEB_DEPS_URL WEB_DEPS_API_ASSET_URL WEB_DEPS_SHA256 < <(
 import json, sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     m = json.load(f)["archive"]
-    print(f"{m[\"url\"]} {m[\"api_asset_url\"]} {m[\"sha256\"]}")
+    print(m["url"] + " " + m["api_asset_url"] + " " + m["sha256"])
 ' "$MANIFEST_FILE"
 )
 
