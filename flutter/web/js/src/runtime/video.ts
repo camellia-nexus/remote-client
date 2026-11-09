@@ -145,8 +145,15 @@ type SoftwareDecoderConfig = {
     | 'ogv-decoder-video-vp9-wasm.js'
     | 'ogv-decoder-video-av1-wasm.js';
 };
-type SoftwareDecoderGlobals = Partial<
-  Record<SoftwareDecoderConfig['globalName'], PromiseLike<OgvDecoderModule>>
+export type SoftwareDecoderFactory = (options?: {
+  locateFile?: (path: string, prefix?: string) => string;
+}) => PromiseLike<OgvDecoderModule>;
+
+export type SoftwareDecoderGlobals = Partial<
+  Record<
+    SoftwareDecoderConfig['globalName'],
+    SoftwareDecoderFactory | PromiseLike<OgvDecoderModule>
+  >
 >;
 
 const CODEC_CONFIG: Record<CodecType, string[]> = {
@@ -3219,14 +3226,25 @@ async function instantiateSoftwareDecoder(codec: CodecType): Promise<OgvDecoderM
 }
 
 async function checkSoftwareDecoderAsset(config: SoftwareDecoderConfig): Promise<void> {
-  const url = softwareDecoderScriptUrl(config.scriptName);
-  let response = await fetchSoftwareDecoderAsset(url, { method: 'HEAD' });
-  if (response.status === 405 || response.status === 501) {
-    response = await fetchSoftwareDecoderAsset(url);
-    await response.body?.cancel();
+  const scriptUrl = softwareDecoderScriptUrl(config.scriptName);
+  let scriptResponse = await fetchSoftwareDecoderAsset(scriptUrl, { method: 'HEAD' });
+  if (scriptResponse.status === 405 || scriptResponse.status === 501) {
+    scriptResponse = await fetchSoftwareDecoderAsset(scriptUrl);
+    await scriptResponse.body?.cancel();
   }
-  if (!response.ok) {
-    throw new Error(`failed to load ${config.scriptName}: ${response.status}`);
+  if (!scriptResponse.ok) {
+    throw new Error(`failed to load ${config.scriptName}: ${scriptResponse.status}`);
+  }
+
+  const wasmName = config.scriptName.replace(/\.js$/, '.wasm');
+  const wasmUrl = softwareDecoderScriptUrl(wasmName);
+  let wasmResponse = await fetchSoftwareDecoderAsset(wasmUrl, { method: 'HEAD' });
+  if (wasmResponse.status === 405 || wasmResponse.status === 501) {
+    wasmResponse = await fetchSoftwareDecoderAsset(wasmUrl);
+    await wasmResponse.body?.cancel();
+  }
+  if (!wasmResponse.ok) {
+    throw new Error(`failed to load ${wasmName}: ${wasmResponse.status}`);
   }
 }
 
@@ -3251,7 +3269,7 @@ async function fetchSoftwareDecoderAsset(
   }
 }
 
-function loadSoftwareDecoderScript(
+export function loadSoftwareDecoderScript(
   config: SoftwareDecoderConfig
 ): Promise<OgvDecoderModule> {
   if (typeof document === 'undefined') {
@@ -3281,8 +3299,26 @@ function loadSoftwareDecoderScript(
     script.async = true;
     script.src = scriptUrl;
     script.onload = () => {
-      const modulePromise = globalScope[config.globalName];
-      if (!modulePromise || typeof modulePromise.then !== 'function') {
+      const exported = globalScope[config.globalName];
+      let modulePromise: PromiseLike<OgvDecoderModule>;
+      if (typeof exported === 'function') {
+        try {
+          modulePromise = (exported as SoftwareDecoderFactory)({
+            locateFile: (path: string) => {
+              return new URL(path, scriptUrl).toString();
+            }
+          });
+        } catch (error: unknown) {
+          fail(
+            error instanceof Error
+              ? error
+              : new Error(`failed to initialize ${config.scriptName}`)
+          );
+          return;
+        }
+      } else if (exported && typeof (exported as any).then === 'function') {
+        modulePromise = exported as PromiseLike<OgvDecoderModule>;
+      } else {
         fail(new Error(`${config.scriptName} did not expose ${config.globalName}`));
         return;
       }
@@ -3308,14 +3344,21 @@ function loadSoftwareDecoderScript(
 }
 
 export function softwareDecoderScriptUrl(
-  target: CodecType | SoftwareDecoderConfig['scriptName']
+  target: CodecType | SoftwareDecoderConfig['scriptName'] | string
 ): string {
+  const normalized = typeof target === 'string' ? target.trim().toLowerCase() : '';
   let url: URL;
-  switch (target) {
+  switch (normalized) {
     case 'vp8':
     case 'ogv-decoder-video-vp8-wasm.js':
       url = new URL(
         /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.js',
+        import.meta.url
+      );
+      break;
+    case 'ogv-decoder-video-vp8-wasm.wasm':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.wasm',
         import.meta.url
       );
       break;
@@ -3326,10 +3369,22 @@ export function softwareDecoderScriptUrl(
         import.meta.url
       );
       break;
+    case 'ogv-decoder-video-vp9-wasm.wasm':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.wasm',
+        import.meta.url
+      );
+      break;
     case 'av1':
     case 'ogv-decoder-video-av1-wasm.js':
       url = new URL(
         /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-av1-wasm.js',
+        import.meta.url
+      );
+      break;
+    case 'ogv-decoder-video-av1-wasm.wasm':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-av1-wasm.wasm',
         import.meta.url
       );
       break;

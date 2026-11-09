@@ -45,7 +45,7 @@ for (const source of cspSources) {
 const undefinedPatterns = [
   ['empty glob Object.assign', /Object\.assign\(\{\}\)\[/u],
   ['undefined URL path', /new\s+URL\s*\(\s*['"`][^'"`]*\/undefined['"`]/u],
-  ['undefined URL resolution', /new\s+URL\s*\(\s*undefined/u],
+  ['undefined URL resolution', /new\s+URL\s*\(\s*(?:undefined|void\s+0)\b/u],
   ['root absolute /js/dist worker path', /['"`]\/js\/dist\/assets\/video_worker/u]
 ];
 const distFiles = await findJavaScript(webDist);
@@ -65,8 +65,11 @@ const bundleCombined = (
 ).join('\n');
 const requiredDecoderScripts = [
   'ogv-decoder-video-vp8-wasm.js',
+  'ogv-decoder-video-vp8-wasm.wasm',
   'ogv-decoder-video-vp9-wasm.js',
-  'ogv-decoder-video-av1-wasm.js'
+  'ogv-decoder-video-vp9-wasm.wasm',
+  'ogv-decoder-video-av1-wasm.js',
+  'ogv-decoder-video-av1-wasm.wasm'
 ];
 for (const script of requiredDecoderScripts) {
   if (!bundleCombined.includes(script)) {

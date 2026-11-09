@@ -317,12 +317,18 @@ if (-not $Run) {
       sha256 = $sha
     }
   }
-  $sortedKeys = $manifestFiles.Keys | Sort-Object
+  [string[]]$sortedKeys = @($manifestFiles.Keys)
+  [Array]::Sort($sortedKeys, [System.StringComparer]::Ordinal)
   $digestLines = $sortedKeys | ForEach-Object { "$_`:$($manifestFiles[$_].size)`:$($manifestFiles[$_].sha256)" }
   $rawDigestString = $digestLines -join "`n"
   $hasher = [Security.Cryptography.SHA256]::Create()
   $rootDigestBytes = $hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($rawDigestString))
   $rootDigest = ($rootDigestBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+
+  $orderedFiles = [ordered]@{}
+  foreach ($key in $sortedKeys) {
+    $orderedFiles[$key] = $manifestFiles[$key]
+  }
 
   $buildManifest = [ordered]@{
     schema_version = 1
@@ -330,7 +336,7 @@ if (-not $Run) {
     source_state = $sourceState
     base_href = $BaseHref
     root_digest = $rootDigest
-    files = $manifestFiles
+    files = $orderedFiles
   }
   $manifestJson = ConvertTo-Json -InputObject $buildManifest -Depth 4
   [IO.File]::WriteAllText(

@@ -5,7 +5,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { softwareDecoderScriptUrl } from '../src/runtime/video.ts';
+import {
+  softwareDecoderScriptUrl,
+  loadSoftwareDecoderScript
+} from '../src/runtime/video.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,17 +18,29 @@ test('softwareDecoderScriptUrl returns correct relative URLs for valid targets',
   const vp8Url = softwareDecoderScriptUrl('vp8');
   assert.match(vp8Url, /ogv-decoder-video-vp8-wasm\.js$/);
 
+  const vp8Upper = softwareDecoderScriptUrl('VP8');
+  assert.strictEqual(vp8Upper, vp8Url);
+
+  const vp8Wasm = softwareDecoderScriptUrl('ogv-decoder-video-vp8-wasm.wasm');
+  assert.match(vp8Wasm, /ogv-decoder-video-vp8-wasm\.wasm$/);
+
   const vp8ByName = softwareDecoderScriptUrl('ogv-decoder-video-vp8-wasm.js');
   assert.strictEqual(vp8ByName, vp8Url);
 
   const vp9Url = softwareDecoderScriptUrl('vp9');
   assert.match(vp9Url, /ogv-decoder-video-vp9-wasm\.js$/);
 
+  const vp9Wasm = softwareDecoderScriptUrl('ogv-decoder-video-vp9-wasm.wasm');
+  assert.match(vp9Wasm, /ogv-decoder-video-vp9-wasm\.wasm$/);
+
   const vp9ByName = softwareDecoderScriptUrl('ogv-decoder-video-vp9-wasm.js');
   assert.strictEqual(vp9ByName, vp9Url);
 
   const av1Url = softwareDecoderScriptUrl('av1');
   assert.match(av1Url, /ogv-decoder-video-av1-wasm\.js$/);
+
+  const av1Wasm = softwareDecoderScriptUrl('ogv-decoder-video-av1-wasm.wasm');
+  assert.match(av1Wasm, /ogv-decoder-video-av1-wasm\.wasm$/);
 
   const av1ByName = softwareDecoderScriptUrl('ogv-decoder-video-av1-wasm.js');
   assert.strictEqual(av1ByName, av1Url);
@@ -155,4 +170,116 @@ test('compiled web_bridge bundle contains no dynamic glob failures or root-absol
   const files = fs.readdirSync(assetsDir);
   const workerMatches = files.filter(f => f.startsWith('video_worker-') && f.endsWith('.js'));
   assert.ok(workerMatches.length >= 1, 'Expected at least one video_worker-*.js chunk in dist/assets');
+});
+
+test('loadSoftwareDecoderScript correctly resolves with factory functions and locateFile', async () => {
+  const originalDoc = (globalThis as any).document;
+  try {
+    const appendedScripts: any[] = [];
+    (globalThis as any).document = {
+      createElement: (tag: string) => {
+        return {
+          tagName: tag.toUpperCase(),
+          src: '',
+          async: false,
+          onload: null as any,
+          onerror: null as any,
+          remove: () => {}
+        };
+      },
+      head: {
+        append: (el: any) => {
+          appendedScripts.push(el);
+          // Simulate script execution defining a factory function (ogvjs style)
+          (globalThis as any).OGVDecoderVideoVP8W = (options?: any) => {
+            const locateResult = options?.locateFile ? options.locateFile('ogv-decoder-video-vp8-wasm.wasm') : '';
+            return Promise.resolve({
+              _mock: true,
+              locatedWasm: locateResult
+            });
+          };
+          if (typeof el.onload === 'function') {
+            queueMicrotask(() => el.onload());
+          }
+        }
+      }
+    };
+
+    const decoderModule = await loadSoftwareDecoderScript({
+      globalName: 'OGVDecoderVideoVP8W',
+      scriptName: 'ogv-decoder-video-vp8-wasm.js'
+    });
+
+    assert.ok(decoderModule && (decoderModule as any)._mock);
+    assert.match((decoderModule as any).locatedWasm, /ogv-decoder-video-vp8-wasm\.wasm$/);
+  } finally {
+    if (originalDoc === undefined) {
+      delete (globalThis as any).document;
+    } else {
+      (globalThis as any).document = originalDoc;
+    }
+    delete (globalThis as any).OGVDecoderVideoVP8W;
+  }
+});
+
+test('loadSoftwareDecoderScript rejects properly when factory throws or global is missing', async () => {
+  const originalDoc = (globalThis as any).document;
+  try {
+    (globalThis as any).document = {
+      createElement: () => ({
+        src: '',
+        async: false,
+        onload: null as any,
+        onerror: null as any,
+        remove: () => {}
+      }),
+      head: {
+        append: (el: any) => {
+          // Define factory that throws
+          (globalThis as any).OGVDecoderVideoVP9W = () => {
+            throw new Error('simulated factory initialization failure');
+          };
+          if (typeof el.onload === 'function') {
+            queueMicrotask(() => el.onload());
+          }
+        }
+      }
+    };
+
+    await assert.rejects(
+      async () => {
+        await loadSoftwareDecoderScript({
+          globalName: 'OGVDecoderVideoVP9W',
+          scriptName: 'ogv-decoder-video-vp9-wasm.js'
+        });
+      },
+      /simulated factory initialization failure/
+    );
+
+    // Now test missing global export
+    (globalThis as any).document.head.append = (el: any) => {
+      delete (globalThis as any).OGVDecoderVideoAV1W;
+      if (typeof el.onload === 'function') {
+        queueMicrotask(() => el.onload());
+      }
+    };
+
+    await assert.rejects(
+      async () => {
+        await loadSoftwareDecoderScript({
+          globalName: 'OGVDecoderVideoAV1W',
+          scriptName: 'ogv-decoder-video-av1-wasm.js'
+        });
+      },
+      /ogv-decoder-video-av1-wasm\.js did not expose OGVDecoderVideoAV1W/
+    );
+  } finally {
+    if (originalDoc === undefined) {
+      delete (globalThis as any).document;
+    } else {
+      (globalThis as any).document = originalDoc;
+    }
+    delete (globalThis as any).OGVDecoderVideoVP9W;
+    delete (globalThis as any).OGVDecoderVideoAV1W;
+  }
 });
