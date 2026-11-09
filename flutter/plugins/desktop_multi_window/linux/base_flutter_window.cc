@@ -262,15 +262,16 @@ gboolean onWindowEventAfter(GtkWidget *text_view, GdkEvent *event,
 }
 
 void BaseFlutterWindow::findEventBox(GtkWidget *widget) {
-  GList *children;
-  GtkWidget *currentChild;
-  children = gtk_container_get_all_children(GTK_CONTAINER(widget));
-  while (children) {
-    currentChild = (GtkWidget *)children->data;
+  GList *children = gtk_container_get_all_children(GTK_CONTAINER(widget));
+  for (GList *iter = children; iter != nullptr; iter = g_list_next(iter)) {
+    GtkWidget *currentChild = (GtkWidget *)iter->data;
     if (GTK_IS_EVENT_BOX(currentChild)) {
       this->event_box = currentChild;
+      break;
     }
-    children = children->next;
+  }
+  if (children != nullptr) {
+    g_list_free(children);
   }
 }
 

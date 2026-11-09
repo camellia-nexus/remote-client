@@ -41,14 +41,15 @@ FlutterWindow::FlutterWindow(
   gtk_window_set_decorated(GTK_WINDOW(window_), FALSE);
   gtk_window_set_default_size(GTK_WINDOW(window_), 1280, 720);
   gtk_window_set_position(GTK_WINDOW(window_), GTK_WIN_POS_CENTER);
-  // try setting icon for rustdesk, which uses the system cache 
+  // try setting icon for camellia, which uses the system cache 
   // mainly for the icon in appimage.
   GtkIconTheme* theme = gtk_icon_theme_get_default();
   gint icons[4] = {256, 128, 64, 32};
   for (int i = 0; i < 4; i++) {
-    GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "rustdesk", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
+    GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "camellia", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
     if (icon != nullptr) {
       gtk_window_set_icon(GTK_WINDOW(window_), icon);
+      g_object_unref(icon);
     }
   }
 
@@ -64,7 +65,8 @@ FlutterWindow::FlutterWindow(
   }
   g_autoptr(FlDartProject)
       project = fl_dart_project_new();
-  const char *entrypoint_args[] = {"multi_window", g_strdup_printf("%ld", id_), args.c_str(), nullptr};
+  g_autofree gchar *window_id_str = g_strdup_printf("%ld", id_);
+  const char *entrypoint_args[] = {"multi_window", window_id_str, args.c_str(), nullptr};
   fl_dart_project_set_dart_entrypoint_arguments(project, const_cast<char **>(entrypoint_args));
 
   FlView* fl_view = fl_view_new(project);

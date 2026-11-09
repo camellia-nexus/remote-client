@@ -252,10 +252,9 @@ packages:
   desktop_drop:
     dependency: "direct main"
     description:
-      name: desktop_drop
-      sha256: "47ded09c85909edfed644fd4cbb5051b040d0aed5c79e7e062ea4b3b7156dbe4"
-      url: "https://pub.dev"
-    source: hosted
+      path: "plugins/desktop_drop"
+      relative: true
+    source: path
     version: "0.8.4"
   desktop_multi_window:
     dependency: "direct main"
@@ -1062,12 +1061,11 @@ packages:
     source: hosted
     version: "0.6.0"
   screen_retriever:
-    dependency: transitive
+    dependency: "direct main"
     description:
-      name: screen_retriever
-      sha256: "6ee02c8a1158e6dae7ca430da79436e3b1c9563c8cf02f524af997c201ac2b90"
-      url: "https://pub.dev"
-    source: hosted
+      path: "plugins/screen_retriever"
+      relative: true
+    source: path
     version: "0.1.9"
   scroll_pos:
     dependency: "direct main"
@@ -1221,11 +1219,9 @@ packages:
   texture_rgba_renderer:
     dependency: "direct main"
     description:
-      path: "."
-      ref: "42797e0f03141dc2b585f76c64a13974508058b4"
-      resolved-ref: "42797e0f03141dc2b585f76c64a13974508058b4"
-      url: "https://github.com/rustdesk-org/flutter_texture_rgba_renderer"
-    source: git
+      path: "plugins/texture_rgba_renderer"
+      relative: true
+    source: path
     version: "0.0.16"
   tuple:
     dependency: "direct main"
@@ -1471,11 +1467,9 @@ packages:
   window_manager:
     dependency: "direct main"
     description:
-      path: "."
-      ref: cf4aef0512092fad9344a27ffe1c47ad83269dfc
-      resolved-ref: cf4aef0512092fad9344a27ffe1c47ad83269dfc
-      url: "https://github.com/rustdesk-org/window_manager"
-    source: git
+      path: "plugins/window_manager"
+      relative: true
+    source: path
     version: "0.3.6"
   window_size:
     dependency: "direct main"

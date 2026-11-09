@@ -99,20 +99,53 @@ fn load_plugin_in_app_path(dll_name: &str) -> Result<Library, LibError> {
     }
 }
 
+/// Tri-state C ABI status codes for core main initialization:
+///  1: Start Flutter UI
+///  0: Handled CLI / Service exit cleanly (exit_code output set)
+/// -1: Fatal initialization failure
+pub const CORE_MAIN_STATUS_START_UI: c_int = 1;
+pub const CORE_MAIN_STATUS_HANDLED_EXIT: c_int = 0;
+pub const CORE_MAIN_STATUS_FATAL: c_int = -1;
+
+#[cfg(not(windows))]
+#[no_mangle]
+pub unsafe extern "C" fn camellia_remote_core_main_status(exit_code: *mut c_int) -> c_int {
+    if !exit_code.is_null() {
+        unsafe { *exit_code = 0 };
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::core_main::core_main()
+        }));
+        match res {
+            Ok(Some(_args)) => CORE_MAIN_STATUS_START_UI,
+            Ok(None) => {
+                #[cfg(target_os = "macos")]
+                std::process::exit(0);
+                #[cfg(not(target_os = "macos"))]
+                CORE_MAIN_STATUS_HANDLED_EXIT
+            }
+            Err(e) => {
+                log::error!("Panic caught in core_main: {:?}", e);
+                if !exit_code.is_null() {
+                    unsafe { *exit_code = 1 };
+                }
+                CORE_MAIN_STATUS_FATAL
+            }
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    CORE_MAIN_STATUS_HANDLED_EXIT
+}
+
 /// FFI for rustdesk core's main entry.
 /// Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
 #[cfg(not(windows))]
 #[no_mangle]
 pub extern "C" fn camellia_remote_core_main() -> bool {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if crate::core_main::core_main().is_some() {
-        return true;
-    } else {
-        #[cfg(target_os = "macos")]
-        std::process::exit(0);
-    }
-    #[cfg(not(target_os = "macos"))]
-    false
+    let mut exit_code: c_int = 0;
+    unsafe { camellia_remote_core_main_status(&mut exit_code) == CORE_MAIN_STATUS_START_UI }
 }
 
 #[cfg(target_os = "macos")]

@@ -119,6 +119,7 @@ static void my_application_activate(GApplication* application) {
     GdkPixbuf* icon = gtk_icon_theme_load_icon(theme, "camellia", icons[i], GTK_ICON_LOOKUP_NO_SVG, NULL);
     if (icon != nullptr) {
       gtk_window_set_icon(window, icon);
+      g_object_unref(icon);
     }
   }
   // Use a header bar when running in GNOME as this is the common style used
@@ -242,8 +243,22 @@ MyApplication* my_application_new() {
 
 void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data)
 {
-  if (strcmp(fl_method_call_get_name(method_call), "bumpMouse") == 0) {
+  const gchar* method_name = fl_method_call_get_name(method_call);
+  if (method_name == nullptr) {
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+        fl_method_error_response_new("invalid_method", "Method name is null", nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  if (strcmp(method_name, "bumpMouse") == 0) {
     FlValue *args = fl_method_call_get_args(method_call);
+    if (args == nullptr) {
+      g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+          fl_method_error_response_new("invalid_arguments", "bumpMouse requires non-null arguments", nullptr));
+      fl_method_call_respond(method_call, response, nullptr);
+      return;
+    }
 
     FlValue *dxValue = nullptr;
     FlValue *dyValue = nullptr;
@@ -254,45 +269,66 @@ void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_ca
       {
         dxValue = fl_value_lookup_string(args, "dx");
         dyValue = fl_value_lookup_string(args, "dy");
-
         break;
       }
       case FL_VALUE_TYPE_LIST:
       {
-        int listSize = fl_value_get_length(args);
-
+        size_t listSize = fl_value_get_length(args);
         dxValue = (listSize >= 1) ? fl_value_get_list_value(args, 0) : nullptr;
         dyValue = (listSize >= 2) ? fl_value_get_list_value(args, 1) : nullptr;
-
         break;
       }
-
-      default: break;
+      default:
+        break;
     }
 
-    int dx = 0, dy = 0;
-
-    if (dxValue && (fl_value_get_type(dxValue) == FL_VALUE_TYPE_INT)) {
-      dx = fl_value_get_int(dxValue);
+    if (dxValue == nullptr || dyValue == nullptr ||
+        fl_value_get_type(dxValue) != FL_VALUE_TYPE_INT ||
+        fl_value_get_type(dyValue) != FL_VALUE_TYPE_INT) {
+      g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+          fl_method_error_response_new("invalid_arguments",
+                                       "bumpMouse requires dx and dy integer parameters",
+                                       nullptr));
+      fl_method_call_respond(method_call, response, nullptr);
+      return;
     }
 
-    if (dyValue && (fl_value_get_type(dyValue) == FL_VALUE_TYPE_INT)) {
-      dy = fl_value_get_int(dyValue);
+    int64_t raw_dx = fl_value_get_int(dxValue);
+    int64_t raw_dy = fl_value_get_int(dyValue);
+
+    constexpr int64_t kMaxCoordDelta = 100000;
+    if (raw_dx < -kMaxCoordDelta || raw_dx > kMaxCoordDelta ||
+        raw_dy < -kMaxCoordDelta || raw_dy > kMaxCoordDelta) {
+      g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+          fl_method_error_response_new("out_of_bounds",
+                                       "bumpMouse coordinates delta out of bounds",
+                                       nullptr));
+      fl_method_call_respond(method_call, response, nullptr);
+      return;
     }
 
+    int dx = static_cast<int>(raw_dx);
+    int dy = static_cast<int>(raw_dy);
     bool result = bump_mouse(dx, dy);
 
-    FlValue *result_value = fl_value_new_bool(result);
+    g_autoptr(FlValue) result_value = fl_value_new_bool(result);
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+        fl_method_success_response_new(result_value));
 
     GError *error = nullptr;
-
-    if (!fl_method_call_respond_success(method_call, result_value, &error)) {
-      g_warning("Failed to send Flutter Platform Channel response: %s", error->message);
-      g_error_free(error);
+    if (!fl_method_call_respond(method_call, response, &error)) {
+      g_warning("Failed to send Flutter Platform Channel response: %s", error ? error->message : "unknown");
+      if (error != nullptr) {
+        g_error_free(error);
+      }
     }
-
-    fl_value_unref(result_value);
+    return;
   }
+
+  // Unknown method: always respond not-implemented so caller never hangs
+  g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+      fl_method_not_implemented_response_new());
+  fl_method_call_respond(method_call, response, nullptr);
 }
 
 GtkWidget *find_gl_area(GtkWidget *widget)
