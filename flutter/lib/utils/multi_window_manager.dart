@@ -690,14 +690,24 @@ class RustDeskMultiWindowManager {
   Future<List<RemoteWindowCoords>> getOtherRemoteWindowCoordsFromMain() async {
     List<RemoteWindowCoords> coords = [];
     // Call the main window to get the coords of other remote windows.
-    String res = await DesktopMultiWindow.invokeMethod(
-      kMainWindowId,
-      kWindowEventRemoteWindowCoords,
-      kWindowId.toString(),
-    );
-    List<dynamic> list = jsonDecode(res);
-    for (var item in list) {
-      coords.add(RemoteWindowCoords.fromJson(jsonDecode(item)));
+    try {
+      final res = await DesktopMultiWindow.invokeMethod(
+        kMainWindowId,
+        kWindowEventRemoteWindowCoords,
+        kWindowId.toString(),
+      );
+      if (res is String && res.isNotEmpty) {
+        List<dynamic> list = jsonDecode(res);
+        for (var item in list) {
+          if (item is String) {
+            coords.add(RemoteWindowCoords.fromJson(jsonDecode(item)));
+          } else if (item is Map<String, dynamic>) {
+            coords.add(RemoteWindowCoords.fromJson(item));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to get other remote window coords from main: $e');
     }
     return coords;
   }

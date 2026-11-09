@@ -260,11 +260,9 @@ packages:
   desktop_multi_window:
     dependency: "direct main"
     description:
-      path: "."
-      ref: cddc2e64f8fefce4f80db87b20bcda2dd019bed6
-      resolved-ref: cddc2e64f8fefce4f80db87b20bcda2dd019bed6
-      url: "https://github.com/rustdesk-org/rustdesk_desktop_multi_window"
-    source: git
+      path: "plugins/desktop_multi_window"
+      relative: true
+    source: path
     version: "0.1.0"
   device_info_plus:
     dependency: "direct main"
@@ -451,10 +449,9 @@ packages:
   flutter_custom_cursor:
     dependency: "direct main"
     description:
-      name: flutter_custom_cursor
-      sha256: "3850a32ac6de351ccc5e4286b6d94ff70c10abecd44479ea6c5aaea17264285d"
-      url: "https://pub.dev"
-    source: hosted
+      path: "plugins/flutter_custom_cursor"
+      relative: true
+    source: path
     version: "0.0.4"
   flutter_gpu_texture_renderer:
     dependency: "direct main"
