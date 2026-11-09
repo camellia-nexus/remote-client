@@ -11,13 +11,14 @@ favicon, icons) and the JS bridge toolchain under `web/js`.
 - `web/tools/build_web.sh`: Linux/macOS build helper.
 
 ## What the scripts do
-1. Resolve Flutter packages with `flutter pub get --enforce-lockfile`.
-2. Build the JS bridge in `web/js` unless JS build is skipped.
-3. Bootstrap the checksum-pinned optional web codec/runtime archive unless deps
-   bootstrap is skipped.
+1. Bootstrap and verify the checksum-pinned optional web codec/runtime archive
+   against `tools/web_codec_manifest.json` unless deps bootstrap is skipped.
+2. Build the JS bridge in `web/js` (runs `check-web-build.mjs`) unless JS build is skipped.
+3. Resolve Flutter packages with `flutter pub get --enforce-lockfile`.
 4. Run `flutter build web` or `flutter run -d chrome`.
 5. Record the exact Git revision and tracked-worktree state in
-   `build/web/.source_revision`.
+   `build/web/.source_revision` and emit a canonical `build/web/build_manifest.json`
+   containing file-level SHA-256 digests and root tree digest.
 
 Web builds never rewrite tracked launcher icons or favicon sources. Brand
 artifacts have one reviewed geometry source. Refresh and verify them from the
@@ -50,6 +51,7 @@ same embedded build date instead of the local wall-clock time.
 ### PowerShell
 `build_web.ps1` accepts:
 - `-Mode release|profile|debug`
+- `-BaseHref PATH` (default: `/`)
 - `-Run`
 - `-SkipJs`
 - `-SkipDeps`
@@ -57,6 +59,7 @@ same embedded build date instead of the local wall-clock time.
 ### Bash
 `build_web.sh` accepts:
 - `--mode release|profile|debug`
+- `--base-href PATH` (default: `/`)
 - `--run`
 - `--skip-js`
 - `--skip-deps`
@@ -173,12 +176,13 @@ is intentionally not supported.
 If you do not want to rely on the helper scripts, the manual flow is:
 
 ```powershell
-cd flutter\web\js
+bash flutter/web/tools/prepare_web_deps.sh
+cd flutter/web/js
 npm ci
 npm run build
-cd ..\..
+cd ../..
 flutter pub get --enforce-lockfile
-flutter build web --release
+flutter build web --release --base-href /
 ```
 
 When building manually, you must pass the same `--dart-define` values yourself

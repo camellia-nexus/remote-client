@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "archive": {
+    "url": "https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/web_deps.tar.gz",
+    "api_asset_url": "https://api.github.com/repos/rustdesk/doc.rustdesk.com/releases/assets/305513689",
+    "sha256": "b66011c4fc066b90c46ba0c78884fe5d1a7e5a7fad3dce401300ad893de63818"
+  },
+  "files": {
+    "libopus.js": {
+      "size": 250003,
+      "sha256": "ef9d9b369dae4319a24d6e527070ffb4e07be2ea3b0ac490f7326b2b2bb1d8a2"
+    },
+    "libopus.wasm": {
+      "size": 489750,
+      "sha256": "18fd261f9c18c442873e6dab73cfafc5a7560aea652f5544b4dd99fae2d1944c"
+    },
+    "yuv-canvas-1.2.6.js": {
+      "size": 44243,
+      "sha256": "5ef16be467a61b34af10600935d78b1cd356066e89cb7f92e7c60d8cfbe41858"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.js": {
+      "size": 10214,
+      "sha256": "e1ce5a5ffdb734e91dddffb500b31cab10a5fe18f4f639bc81eac765a112207d"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.wasm": {
+      "size": 113790,
+      "sha256": "00ea35bea083d4de98e9d2a1e0d25db6a5fa0361b86a023a6213071f2330fd79"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.js": {
+      "size": 10494,
+      "sha256": "1cc5f87b0f6209237dcda30d0fe742f1492182ed9982e20a97f1505deecd8e5d"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.wasm": {
+      "size": 241857,
+      "sha256": "cbaa620aef56a4f328da918c7a3c9a62d0ff6df7923e6002ef2331b3d7ac2b82"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-av1-wasm.js": {
+      "size": 10019,
+      "sha256": "01b9ebc02eac44427dc7099d92e8a41cdd8cc10bf24d9cc8bd4e4cc132f15dd4"
+    },
+    "ogvjs-1.8.6/ogv-decoder-video-av1-wasm.wasm": {
+      "size": 406454,
+      "sha256": "1ebc7d998943a93e8f268fa5bb12d3a0a41ef2ccbbb5b68d58513074339d6070"
+    }
+  }
+}

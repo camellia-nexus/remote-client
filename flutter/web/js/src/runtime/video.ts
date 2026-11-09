@@ -3307,8 +3307,35 @@ function loadSoftwareDecoderScript(
   });
 }
 
-function softwareDecoderScriptUrl(scriptName: string): string {
-  const url = new URL(`../../ogvjs-1.8.6/${scriptName}`, import.meta.url);
+export function softwareDecoderScriptUrl(
+  target: CodecType | SoftwareDecoderConfig['scriptName']
+): string {
+  let url: URL;
+  switch (target) {
+    case 'vp8':
+    case 'ogv-decoder-video-vp8-wasm.js':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.js',
+        import.meta.url
+      );
+      break;
+    case 'vp9':
+    case 'ogv-decoder-video-vp9-wasm.js':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.js',
+        import.meta.url
+      );
+      break;
+    case 'av1':
+    case 'ogv-decoder-video-av1-wasm.js':
+      url = new URL(
+        /* @vite-ignore */ '../../ogvjs-1.8.6/ogv-decoder-video-av1-wasm.js',
+        import.meta.url
+      );
+      break;
+    default:
+      throw new Error(`unknown software decoder target: ${String(target)}`);
+  }
   if (typeof location !== 'undefined' && url.origin !== location.origin) {
     throw new Error(`refusing cross-origin software decoder: ${url.origin}`);
   }

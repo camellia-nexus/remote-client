@@ -42,6 +42,40 @@ for (const source of cspSources) {
   }
 }
 
+const undefinedPatterns = [
+  ['empty glob Object.assign', /Object\.assign\(\{\}\)\[/u],
+  ['undefined URL path', /new\s+URL\s*\(\s*['"`][^'"`]*\/undefined['"`]/u],
+  ['undefined URL resolution', /new\s+URL\s*\(\s*undefined/u],
+  ['root absolute /js/dist worker path', /['"`]\/js\/dist\/assets\/video_worker/u]
+];
+const distFiles = await findJavaScript(webDist);
+for (const file of distFiles) {
+  const contents = await readFile(file, 'utf8');
+  for (const [desc, pattern] of undefinedPatterns) {
+    if (pattern.test(contents)) {
+      throw new Error(
+        `Bundle artifact ${file} contains illegal pattern '${desc}'; check asset base and dynamic URL imports.`
+      );
+    }
+  }
+}
+
+const bundleCombined = (
+  await Promise.all(distFiles.map((file) => readFile(file, 'utf8')))
+).join('\n');
+const requiredDecoderScripts = [
+  'ogv-decoder-video-vp8-wasm.js',
+  'ogv-decoder-video-vp9-wasm.js',
+  'ogv-decoder-video-av1-wasm.js'
+];
+for (const script of requiredDecoderScripts) {
+  if (!bundleCombined.includes(script)) {
+    throw new Error(
+      `Bundle is missing static reference to software decoder script: ${script}`
+    );
+  }
+}
+
 const { hbb } = await import(pathToFileURL(generatedProto).href);
 const idPkWire = hbb.IdPk.encode({
   id: 'csp-build-check',

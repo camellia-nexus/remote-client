@@ -1,6 +1,7 @@
 param(
   [ValidateSet('release', 'profile', 'debug')]
   [string]$Mode = 'release',
+  [string]$BaseHref = '/',
   [switch]$Run,
   [switch]$SkipJs,
   [switch]$SkipDeps
@@ -27,20 +28,39 @@ function Invoke-Checked {
   }
 }
 
-function Test-WebDepsPresent {
-  param([string]$WebDir)
-  $markers = @(
-    (Join-Path $WebDir 'libopus.js'),
-    (Join-Path $WebDir 'libopus.wasm'),
-    (Join-Path $WebDir 'yuv-canvas-1.2.6.js'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-vp8-wasm.js'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-vp8-wasm.wasm'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-vp9-wasm.js'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-vp9-wasm.wasm'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-av1-wasm.js'),
-    (Join-Path $WebDir 'ogvjs-1.8.6\ogv-decoder-video-av1-wasm.wasm')
+function Test-WebDepsValid {
+  param(
+    [Parameter(Mandatory = $true)][string]$WebDir,
+    [Parameter(Mandatory = $true)][string]$ManifestPath
   )
-  return ($markers | ForEach-Object { Test-Path $_ }) -notcontains $false
+  if (-not (Test-Path -Path $ManifestPath -PathType Leaf)) {
+    return $false
+  }
+  try {
+    $manifest = Get-Content -Path $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $manifest.files) {
+      return $false
+    }
+    foreach ($prop in $manifest.files.PSObject.Properties) {
+      $relPath = $prop.Name.Replace('/', [IO.Path]::DirectorySeparatorChar)
+      $targetFile = Join-Path $WebDir $relPath
+      if (-not (Test-Path -Path $targetFile -PathType Leaf)) {
+        return $false
+      }
+      $item = Get-Item -Path $targetFile
+      if ($item.Length -ne $prop.Value.size) {
+        return $false
+      }
+      $actualHash = (Get-FileHash -Path $targetFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      if ($actualHash -ne $prop.Value.sha256.ToLowerInvariant()) {
+        return $false
+      }
+    }
+    return $true
+  }
+  catch {
+    return $false
+  }
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -59,8 +79,26 @@ $webJsPkg = Join-Path $webJsDir 'package.json'
 $webJsLock = Join-Path $webJsDir 'package-lock.json'
 $repoRoot = (Resolve-Path (Join-Path $flutterRoot '..')).Path
 $pubspecPath = Join-Path $flutterRoot 'pubspec.yaml'
+$codecManifestPath = Join-Path $scriptDir 'web_codec_manifest.json'
+
 $webDepsUrl = 'https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/web_deps.tar.gz'
 $webDepsSha256 = 'b66011c4fc066b90c46ba0c78884fe5d1a7e5a7fad3dce401300ad893de63818'
+
+if (Test-Path -Path $codecManifestPath -PathType Leaf) {
+  try {
+    $parsedManifest = Get-Content -Path $codecManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($parsedManifest.archive -and $parsedManifest.archive.url) {
+      $webDepsUrl = $parsedManifest.archive.url
+    }
+    if ($parsedManifest.archive -and $parsedManifest.archive.sha256) {
+      $webDepsSha256 = $parsedManifest.archive.sha256.ToLowerInvariant()
+    }
+  }
+  catch {
+    # Keep fallback pinned defaults
+  }
+}
+
 $appVersion = $env:APP_VERSION
 $appName = $env:APP_NAME
 if ([string]::IsNullOrWhiteSpace($appVersion) -and (Test-Path $pubspecPath)) {
@@ -87,34 +125,10 @@ foreach ($requiredAsset in $requiredWebAssets) {
   }
 }
 
-Invoke-Checked -Command $flutter -Arguments @('pub', 'get', '--enforce-lockfile')
-
-if (-not $SkipJs) {
-  if (-not (Test-Path $webJsPkg)) {
-    throw "Missing '$webJsPkg'. Add the web JS bridge toolchain, or use -SkipJs."
-  }
-  if (-not (Test-Path $webJsLock)) {
-    throw "Missing '$webJsLock'. Web builds require the committed npm lockfile."
-  }
-  Ensure-Command npm "Install Node.js (npm) to build web JS dependencies."
-  Push-Location $webJsDir
-  try {
-    Invoke-Checked -Command 'npm' -Arguments @('ci', '--no-fund', '--no-audit')
-    Invoke-Checked -Command 'npm' -Arguments @('run', 'build')
-  }
-  finally {
-    Pop-Location
-  }
-}
-
-$compiledBridge = Join-Path $webJsDir 'dist\web_bridge.js'
-if (-not (Test-Path -Path $compiledBridge -PathType Leaf)) {
-  throw "Missing compiled JS bridge: $compiledBridge"
-}
-
+# 1. Prepare and verify codec dependencies with SHA-256 validation BEFORE JS build
 if (-not $SkipDeps) {
-  if (Test-WebDepsPresent -WebDir $webDir) {
-    Write-Host "Web deps already present, skipping download."
+  if (Test-WebDepsValid -WebDir $webDir -ManifestPath $codecManifestPath) {
+    Write-Host "Web codec assets verified against web_codec_manifest.json, skipping download."
   }
   else {
     Ensure-Command tar 'Install tar to extract the checksum-verified web codec archive.'
@@ -149,6 +163,10 @@ if (-not $SkipDeps) {
       }
 
       Invoke-Checked -Command 'tar' -Arguments @('-xzf', $depsTar, '-C', $webDir)
+
+      if (-not (Test-WebDepsValid -WebDir $webDir -ManifestPath $codecManifestPath)) {
+        throw "Web codec assets failed manifest verification after extraction."
+      }
     }
     finally {
       if (Test-Path $depsTar) {
@@ -158,6 +176,34 @@ if (-not $SkipDeps) {
   }
 }
 
+# 2. Resolve Flutter packages
+Invoke-Checked -Command $flutter -Arguments @('pub', 'get', '--enforce-lockfile')
+
+# 3. Build JS bridge (check-web-build.mjs will verify bundle against OGV codec assets)
+if (-not $SkipJs) {
+  if (-not (Test-Path $webJsPkg)) {
+    throw "Missing '$webJsPkg'. Add the web JS bridge toolchain, or use -SkipJs."
+  }
+  if (-not (Test-Path $webJsLock)) {
+    throw "Missing '$webJsLock'. Web builds require the committed npm lockfile."
+  }
+  Ensure-Command npm "Install Node.js (npm) to build web JS dependencies."
+  Push-Location $webJsDir
+  try {
+    Invoke-Checked -Command 'npm' -Arguments @('ci', '--no-fund', '--no-audit')
+    Invoke-Checked -Command 'npm' -Arguments @('run', 'build')
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+$compiledBridge = Join-Path $webJsDir 'dist\web_bridge.js'
+if (-not (Test-Path -Path $compiledBridge -PathType Leaf)) {
+  throw "Missing compiled JS bridge: $compiledBridge"
+}
+
+# 4. Flutter build web
 $buildDate = $env:BUILD_DATE
 if ([string]::IsNullOrWhiteSpace($buildDate)) {
   $sourceDateEpoch = $env:SOURCE_DATE_EPOCH
@@ -185,7 +231,7 @@ function Get-SetState {
   return 'set'
 }
 
-Write-Host "Web build configuration: mode=$Mode run=$Run version=$appVersion build_date=$buildDate"
+Write-Host "Web build configuration: mode=$Mode base_href=$BaseHref run=$Run version=$appVersion build_date=$buildDate"
 Write-Host "Endpoint configuration: RS_PUB_KEY=$(Get-SetState $env:RS_PUB_KEY) RENDEZVOUS_SERVERS=$(Get-SetState $env:RENDEZVOUS_SERVERS) API_SERVER=$(Get-SetState $env:API_SERVER) APP_NAME=$(Get-SetState $env:APP_NAME)"
 
 $flutterArgs = @()
@@ -200,6 +246,9 @@ if ($Run) {
 }
 else {
   $flutterArgs = @("build", "web", "--$Mode", "--no-wasm-dry-run")
+  if (-not [string]::IsNullOrWhiteSpace($BaseHref)) {
+    $flutterArgs += "--base-href=$BaseHref"
+  }
   if ($Mode -eq 'release') {
     $flutterArgs += '--csp'
   }
@@ -250,6 +299,43 @@ if (-not $Run) {
   [IO.File]::WriteAllText(
     $sourceRevisionPath,
     "$sourceRevision $sourceState`n",
+    [Text.UTF8Encoding]::new($false)
+  )
+
+  # Generate canonical build_manifest.json
+  $webBuildDir = Join-Path $flutterRoot 'build\web'
+  $manifestFiles = @{}
+  $allFiles = Get-ChildItem -Path $webBuildDir -File -Recurse
+  foreach ($file in $allFiles) {
+    $rel = $file.FullName.Substring($webBuildDir.Length).TrimStart('\', '/').Replace('\', '/')
+    if ($rel -eq '.source_revision' -or $rel -eq 'build_manifest.json') {
+      continue
+    }
+    $sha = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestFiles[$rel] = @{
+      size = $file.Length
+      sha256 = $sha
+    }
+  }
+  $sortedKeys = $manifestFiles.Keys | Sort-Object
+  $digestLines = $sortedKeys | ForEach-Object { "$_`:$($manifestFiles[$_].size)`:$($manifestFiles[$_].sha256)" }
+  $rawDigestString = $digestLines -join "`n"
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  $rootDigestBytes = $hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($rawDigestString))
+  $rootDigest = ($rootDigestBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+
+  $buildManifest = [ordered]@{
+    schema_version = 1
+    source_revision = $sourceRevision
+    source_state = $sourceState
+    base_href = $BaseHref
+    root_digest = $rootDigest
+    files = $manifestFiles
+  }
+  $manifestJson = ConvertTo-Json -InputObject $buildManifest -Depth 4
+  [IO.File]::WriteAllText(
+    (Join-Path $webBuildDir 'build_manifest.json'),
+    "$manifestJson`n",
     [Text.UTF8Encoding]::new($false)
   )
 }

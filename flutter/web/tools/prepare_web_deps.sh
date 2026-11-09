@@ -4,29 +4,71 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-WEB_DEPS_URL="https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/web_deps.tar.gz"
-WEB_DEPS_API_ASSET_URL="https://api.github.com/repos/rustdesk/doc.rustdesk.com/releases/assets/305513689"
-WEB_DEPS_SHA256="b66011c4fc066b90c46ba0c78884fe5d1a7e5a7fad3dce401300ad893de63818"
+MANIFEST_FILE="${SCRIPT_DIR}/web_codec_manifest.json"
 
-have_web_deps() {
-  [[ -f "${WEB_DIR}/libopus.js" ]] &&
-    [[ -f "${WEB_DIR}/libopus.wasm" ]] &&
-    [[ -f "${WEB_DIR}/yuv-canvas-1.2.6.js" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.js" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-vp8-wasm.wasm" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.js" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-vp9-wasm.wasm" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-av1-wasm.js" ]] &&
-    [[ -f "${WEB_DIR}/ogvjs-1.8.6/ogv-decoder-video-av1-wasm.wasm" ]]
+if [[ ! -f "$MANIFEST_FILE" ]]; then
+  echo "Missing web codec manifest: $MANIFEST_FILE" >&2
+  exit 1
+fi
+
+VERIFY_ONLY=false
+if [[ "${1:-}" == "--verify-only" ]]; then
+  VERIFY_ONLY=true
+fi
+
+verify_web_deps() {
+  local target_dir="$1"
+  python3 -c '
+import hashlib, json, sys
+from pathlib import Path
+
+target_dir = Path(sys.argv[1])
+manifest_path = Path(sys.argv[2])
+with manifest_path.open("r", encoding="utf-8") as f:
+    manifest = json.load(f)
+
+files = manifest.get("files", {})
+if not files:
+    sys.exit(1)
+
+for rel_path, spec in files.items():
+    file_path = target_dir / rel_path
+    if not file_path.is_file():
+        sys.exit(2)
+    stat = file_path.stat()
+    if stat.st_size != spec["size"]:
+        sys.exit(3)
+    digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    if digest.lower() != spec["sha256"].lower():
+        sys.exit(4)
+sys.exit(0)
+' "$target_dir" "$MANIFEST_FILE"
 }
 
-if have_web_deps; then
-  echo "Web deps already present, skipping download."
+if verify_web_deps "$WEB_DIR"; then
+  echo "Web codec assets verified against web_codec_manifest.json, skipping download."
   exit 0
 fi
 
-temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/rustdesk-web-deps.XXXXXX")"
+if [[ "$VERIFY_ONLY" == "true" ]]; then
+  echo "Web codec verification failed." >&2
+  exit 1
+fi
+
+read -r WEB_DEPS_URL WEB_DEPS_API_ASSET_URL WEB_DEPS_SHA256 < <(
+  python3 -c '
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    m = json.load(f)["archive"]
+    print(f"{m[\"url\"]} {m[\"api_asset_url\"]} {m[\"sha256\"]}")
+' "$MANIFEST_FILE"
+)
+
+temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/camellia-web-deps.XXXXXX")"
 deps_tar="${temp_dir}/web_deps.tar.gz"
+extract_dir="${temp_dir}/extracted"
+mkdir -p "$extract_dir"
+
 cleanup() {
   rm -rf -- "$temp_dir"
 }
@@ -64,10 +106,18 @@ if tar -tvzf "$deps_tar" | awk '$1 ~ /^[lh]/ { found = 1 } END { exit !found }';
   exit 4
 fi
 
-tar -xzf "$deps_tar" -C "$WEB_DIR"
-if ! have_web_deps; then
-  echo "Web deps archive is incomplete after extraction." >&2
+tar -xzf "$deps_tar" -C "$extract_dir"
+
+if ! verify_web_deps "$extract_dir"; then
+  echo "Extracted web deps failed manifest verification." >&2
   exit 4
 fi
 
-echo "Verified Web codec dependencies."
+cp -a "$extract_dir"/. "$WEB_DIR"/
+
+if ! verify_web_deps "$WEB_DIR"; then
+  echo "Web deps directory verification failed after installation." >&2
+  exit 4
+fi
+
+echo "Verified Web codec dependencies against web_codec_manifest.json."

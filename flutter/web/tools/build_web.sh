@@ -6,6 +6,7 @@ MODE="${MODE:-release}"
 RUN=false
 SKIP_JS=false
 SKIP_DEPS=false
+BASE_HREF="${BASE_HREF:-/}"
 
 usage() {
   cat <<'EOF'
@@ -13,6 +14,7 @@ Usage: build_web.sh [options]
 
 Options:
   --mode release|profile|debug  Build mode (default: release)
+  --base-href PATH              Base href for web deployment (default: /)
   --run                         Run in Chrome instead of producing build/web
   --skip-js                     Reuse the existing compiled JS bridge
   --skip-deps                   Do not bootstrap optional codec assets
@@ -32,6 +34,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       MODE="$2"
+      shift 2
+      ;;
+    --base-href)
+      if [[ $# -lt 2 ]]; then
+        echo "--base-href requires a value" >&2
+        exit 1
+      fi
+      BASE_HREF="$2"
       shift 2
       ;;
     --run)
@@ -167,7 +177,7 @@ is_set() {
   fi
 }
 
-echo "Web build configuration: mode=$MODE run=$RUN version=${APP_VERSION_VALUE:-unset} build_date=$BUILD_DATE_VALUE"
+echo "Web build configuration: mode=$MODE base_href=$BASE_HREF run=$RUN version=${APP_VERSION_VALUE:-unset} build_date=$BUILD_DATE_VALUE"
 echo "Endpoint configuration: RS_PUB_KEY=$(is_set RS_PUB_KEY) RENDEZVOUS_SERVERS=$(is_set RENDEZVOUS_SERVERS) API_SERVER=$(is_set API_SERVER) APP_NAME=$(is_set APP_NAME)"
 
 FLUTTER_BUILD_ARGS=()
@@ -180,6 +190,9 @@ if [[ "$RUN" == "true" ]]; then
   fi
 else
   FLUTTER_BUILD_ARGS=("build" "web" "--${MODE}" "--no-wasm-dry-run")
+  if [[ -n "$BASE_HREF" ]]; then
+    FLUTTER_BUILD_ARGS+=("--base-href=${BASE_HREF}")
+  fi
   if [[ "$MODE" == "release" ]]; then
     FLUTTER_BUILD_ARGS+=("--csp")
   fi
@@ -222,4 +235,46 @@ if [[ "$RUN" == "false" ]]; then
     SOURCE_STATE="clean"
   fi
   printf '%s %s\n' "$SOURCE_REVISION" "$SOURCE_STATE" > "${FLUTTER_ROOT}/build/web/.source_revision"
+
+  python3 -c '
+import hashlib, json, os, sys
+from pathlib import Path
+
+web_build = Path(sys.argv[1])
+repo_root = Path(sys.argv[2])
+revision = sys.argv[3]
+state = sys.argv[4]
+base_href = sys.argv[5]
+
+files = {}
+for root, _, filenames in os.walk(web_build):
+    for fn in filenames:
+        fp = Path(root) / fn
+        rel = fp.relative_to(web_build).as_posix()
+        if rel in (".source_revision", "build_manifest.json"):
+            continue
+        data = fp.read_bytes()
+        files[rel] = {
+            "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest()
+        }
+
+sorted_files = sorted(files.keys())
+lines = [k + ":" + str(files[k]["size"]) + ":" + files[k]["sha256"] for k in sorted_files]
+root_digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+manifest = {
+    "schema_version": 1,
+    "source_revision": revision,
+    "source_state": state,
+    "base_href": base_href,
+    "root_digest": root_digest,
+    "files": files
+}
+
+manifest_file = web_build / "build_manifest.json"
+with manifest_file.open("w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2, sort_keys=True)
+    f.write("\n")
+' "${FLUTTER_ROOT}/build/web" "$REPO_ROOT" "$SOURCE_REVISION" "$SOURCE_STATE" "$BASE_HREF"
 fi
