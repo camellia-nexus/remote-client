@@ -71,10 +71,22 @@ FlValue* monitor_to_flvalue(GdkMonitor* monitor) {
 static FlMethodResponse* get_cursor_screen_point(ScreenRetrieverPlugin* self,
                                                  FlValue* args) {
   GdkDisplay* display = gdk_display_get_default();
+  if (display == nullptr) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "unavailable", "No default display available", nullptr));
+  }
   GdkSeat* seat = gdk_display_get_default_seat(display);
+  if (seat == nullptr) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "unavailable", "No default seat available", nullptr));
+  }
   GdkDevice* pointer = gdk_seat_get_pointer(seat);
+  if (pointer == nullptr) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "unavailable", "No pointer device available", nullptr));
+  }
 
-  int x, y;
+  int x = 0, y = 0;
   gdk_device_get_position(pointer, NULL, &x, &y);
 
   g_autoptr(FlValue) result_data = fl_value_new_map();
@@ -87,15 +99,23 @@ static FlMethodResponse* get_cursor_screen_point(ScreenRetrieverPlugin* self,
 static FlMethodResponse* get_primary_display(ScreenRetrieverPlugin* self,
                                              FlValue* args) {
   GdkDisplay* display = gdk_display_get_default();
+  if (display == nullptr) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "unavailable", "No default display available", nullptr));
+  }
   GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
 
   // opt: fallback if there's no primary monitor
   if (monitor == nullptr) {
     int monitor_count = gdk_display_get_n_monitors(display);
-    if (monitor_count == 0) {
-      return nullptr;
-    } else {
-      monitor = gdk_display_get_monitor(display, 0);
+    if (monitor_count <= 0) {
+      return FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "unavailable", "No monitors found on display", nullptr));
+    }
+    monitor = gdk_display_get_monitor(display, 0);
+    if (monitor == nullptr) {
+      return FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "unavailable", "Failed to retrieve fallback monitor 0", nullptr));
     }
   }
   g_autoptr(FlValue) result_data = monitor_to_flvalue(monitor);
@@ -105,17 +125,21 @@ static FlMethodResponse* get_primary_display(ScreenRetrieverPlugin* self,
 
 static FlMethodResponse* get_all_displays(ScreenRetrieverPlugin* self,
                                           FlValue* args) {
-  auto displays = fl_value_new_list();
+  g_autoptr(FlValue) displays = fl_value_new_list();
 
   GdkDisplay* display = gdk_display_get_default();
-  gint n_monitors = gdk_display_get_n_monitors(display);
-  for (gint i = 0; i < n_monitors; i++) {
-    GdkMonitor* monitor = gdk_display_get_monitor(display, i);
-    fl_value_append_take(displays, monitor_to_flvalue(monitor));
+  if (display != nullptr) {
+    gint n_monitors = gdk_display_get_n_monitors(display);
+    for (gint i = 0; i < n_monitors; i++) {
+      GdkMonitor* monitor = gdk_display_get_monitor(display, i);
+      if (monitor != nullptr) {
+        fl_value_append_take(displays, monitor_to_flvalue(monitor));
+      }
+    }
   }
 
   g_autoptr(FlValue) result_data = fl_value_new_map();
-  fl_value_set_string_take(result_data, "displays", displays);
+  fl_value_set_string_take(result_data, "displays", g_steal_pointer(&displays));
 
   return FL_METHOD_RESPONSE(fl_method_success_response_new(result_data));
 }
@@ -136,6 +160,11 @@ static void screen_retriever_plugin_handle_method_call(
     response = get_all_displays(self, args);
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+
+  if (response == nullptr) {
+    response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "internal_error", "ScreenRetriever generated empty response", nullptr));
   }
 
   fl_method_call_respond(method_call, response, nullptr);
@@ -191,12 +220,14 @@ void screen_retriever_plugin_register_with_registrar(
       channel, method_call_cb, g_object_ref(plugin), g_object_unref);
 
   GdkDisplay* display = gdk_display_get_default();
-  g_signal_connect_object(display, "monitor-added",
-                          G_CALLBACK(monitor_added_cb), channel,
-                          G_CONNECT_SWAPPED);
-  g_signal_connect_object(display, "monitor-removed",
-                          G_CALLBACK(monitor_removed_cb), channel,
-                          G_CONNECT_SWAPPED);
+  if (display != nullptr) {
+    g_signal_connect_object(display, "monitor-added",
+                            G_CALLBACK(monitor_added_cb), channel,
+                            G_CONNECT_SWAPPED);
+    g_signal_connect_object(display, "monitor-removed",
+                            G_CALLBACK(monitor_removed_cb), channel,
+                            G_CONNECT_SWAPPED);
+  }
 
   g_object_unref(plugin);
 }

@@ -88,17 +88,35 @@ static void side_buttons_init_for_window(GtkWindow* window, FlMethodChannel* cha
 }
 
 static void on_subwindow_created(FlPluginRegistry* registry) {
-#if defined(GDK_WINDOWING_WAYLAND) && defined(HAS_KEYBOARD_SHORTCUTS_INHIBIT)
-  wayland_shortcuts_inhibit_init_for_subwindow(registry);
-#endif
-  // Set up side button forwarding for sub-windows.
   if (registry == NULL || !FL_IS_VIEW(registry)) return;
   FlView* view = FL_VIEW(registry);
   GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
-  if (toplevel != NULL && GTK_IS_WINDOW(toplevel)) {
-    FlMethodChannel* channel = side_buttons_create_channel(fl_view_get_engine(view));
-    if (channel == NULL) return;
-    side_buttons_init_for_window(GTK_WINDOW(toplevel), channel);
+  if (toplevel == NULL || !GTK_IS_WINDOW(toplevel)) return;
+  GtkWindow* window = GTK_WINDOW(toplevel);
+
+#if defined(GDK_WINDOWING_WAYLAND) && defined(HAS_KEYBOARD_SHORTCUTS_INHIBIT)
+  wayland_shortcuts_inhibit_init_for_subwindow(view);
+#endif
+
+  // Set up host method channel on the subwindow view's engine so the subwindow isolate
+  // can invoke host channel calls (e.g. setWaylandShortcutsInhibit, bumpMouse).
+  g_autoptr(FlStandardMethodCodec) host_codec = fl_standard_method_codec_new();
+  FlMethodChannel* sub_host_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "com.camellia.remote/host",
+      FL_METHOD_CODEC(host_codec));
+  fl_method_channel_set_method_call_handler(
+      sub_host_channel,
+      host_channel_call_handler,
+      window,
+      nullptr);
+  g_object_set_data_full(G_OBJECT(window), "subwindow-host-channel",
+      sub_host_channel, g_object_unref);
+
+  // Set up side button forwarding for sub-windows.
+  FlMethodChannel* channel = side_buttons_create_channel(fl_view_get_engine(view));
+  if (channel != NULL) {
+    side_buttons_init_for_window(window, channel);
     g_object_unref(channel);  // window now owns a ref via g_object_set_data_full
   }
 }
@@ -247,6 +265,66 @@ void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_ca
   if (method_name == nullptr) {
     g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
         fl_method_error_response_new("invalid_method", "Method name is null", nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  GtkWindow* target_window = nullptr;
+  if (user_data != nullptr) {
+    if (GTK_IS_WINDOW(user_data)) {
+      target_window = GTK_WINDOW(user_data);
+    } else if (MY_IS_APPLICATION(user_data)) {
+      target_window = gtk_application_get_active_window(GTK_APPLICATION(user_data));
+    }
+  }
+
+  if (strcmp(method_name, "setWaylandShortcutsInhibit") == 0) {
+    FlValue *args = fl_method_call_get_args(method_call);
+    bool enabled = false;
+    if (args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
+      FlValue* val = fl_value_lookup_string(args, "enabled");
+      if (val != nullptr && fl_value_get_type(val) == FL_VALUE_TYPE_BOOL) {
+        enabled = fl_value_get_bool(val);
+      }
+    } else if (args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_BOOL) {
+      enabled = fl_value_get_bool(args);
+    }
+
+    bool success = false;
+    const char* state_str = "unsupported";
+#if defined(GDK_WINDOWING_WAYLAND) && defined(HAS_KEYBOARD_SHORTCUTS_INHIBIT)
+    if (target_window != nullptr) {
+      success = wayland_shortcuts_inhibit_set_enabled(target_window, enabled);
+      state_str = wayland_shortcuts_inhibit_get_state(target_window);
+    }
+#endif
+
+    g_autoptr(FlValue) result_map = fl_value_new_map();
+    fl_value_set_string_take(result_map, "success", fl_value_new_bool(success));
+    fl_value_set_string_take(result_map, "state", fl_value_new_string(state_str));
+
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+        fl_method_success_response_new(result_map));
+    fl_method_call_respond(method_call, response, nullptr);
+    return;
+  }
+
+  if (strcmp(method_name, "getWaylandShortcutsInhibitState") == 0) {
+    bool supported = false;
+    const char* state_str = "unsupported";
+#if defined(GDK_WINDOWING_WAYLAND) && defined(HAS_KEYBOARD_SHORTCUTS_INHIBIT)
+    if (target_window != nullptr) {
+      GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(target_window));
+      supported = wayland_shortcuts_inhibit_is_supported(display);
+      state_str = wayland_shortcuts_inhibit_get_state(target_window);
+    }
+#endif
+    g_autoptr(FlValue) result_map = fl_value_new_map();
+    fl_value_set_string_take(result_map, "supported", fl_value_new_bool(supported));
+    fl_value_set_string_take(result_map, "state", fl_value_new_string(state_str));
+
+    g_autoptr(FlMethodResponse) response = FL_METHOD_RESPONSE(
+        fl_method_success_response_new(result_map));
     fl_method_call_respond(method_call, response, nullptr);
     return;
   }

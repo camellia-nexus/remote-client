@@ -24,6 +24,7 @@ import '../widgets/remote_toolbar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
 import 'macos_full_screen_focus_recovery.dart';
+import '../../utils/platform_channel.dart';
 
 import 'package:camellia_remote_app/native/custom_cursor.dart'
     if (dart.library.html) 'package:camellia_remote_app/web/custom_cursor.dart';
@@ -194,6 +195,9 @@ class _RemotePageState extends State<RemotePage>
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
     WakelockManager.enable(_uniqueKey);
+    if (isLinux) {
+      unawaited(RdPlatformChannel.instance.setWaylandShortcutsInhibit(enabled: true));
+    }
 
     _ffi.ffiModel.updateEventListener(sessionId, widget.id);
     if (!isWeb) bind.pluginSyncUi(syncTo: kAppTypeDesktopRemote);
@@ -556,6 +560,9 @@ class _RemotePageState extends State<RemotePage>
       _isWindowBlur = false;
     }
     WakelockManager.enable(_uniqueKey);
+    if (isLinux) {
+      unawaited(RdPlatformChannel.instance.setWaylandShortcutsInhibit(enabled: true));
+    }
     // Update pointer lock center when window is restored
     _updatePointerLockCenterIfNeeded();
   }
@@ -565,6 +572,9 @@ class _RemotePageState extends State<RemotePage>
   void onWindowMaximize() {
     super.onWindowMaximize();
     WakelockManager.enable(_uniqueKey);
+    if (isLinux) {
+      unawaited(RdPlatformChannel.instance.setWaylandShortcutsInhibit(enabled: true));
+    }
     // Update pointer lock center when window is maximized
     _updatePointerLockCenterIfNeeded();
   }
@@ -605,6 +615,9 @@ class _RemotePageState extends State<RemotePage>
   void onWindowMinimize() {
     super.onWindowMinimize();
     WakelockManager.disable(_uniqueKey);
+    if (isLinux) {
+      unawaited(RdPlatformChannel.instance.setWaylandShortcutsInhibit(enabled: false));
+    }
     if (isMacOS) {
       _macOSFullScreenFocusRecovery.cancel();
       _isWindowBlur = true;
@@ -674,6 +687,9 @@ class _RemotePageState extends State<RemotePage>
     if (getSharedStateGeneration(widget.id) != myGen) return;
 
     WakelockManager.disable(_uniqueKey);
+    if (isLinux) {
+      unawaited(RdPlatformChannel.instance.setWaylandShortcutsInhibit(enabled: false));
+    }
     await deleteIfMatching<FFI>(widget.id, _ffi);
     removeSharedStates(widget.id, expectedGeneration: myGen);
   }

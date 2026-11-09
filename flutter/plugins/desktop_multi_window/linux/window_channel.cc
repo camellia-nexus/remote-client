@@ -59,7 +59,16 @@ std::unique_ptr<WindowChannel> WindowChannel::RegisterWithRegistrar(FlPluginRegi
 
         auto method_name = fl_method_call_get_name(call);
         auto args = fl_method_call_get_args(call);
-        auto target_window_id = fl_value_get_int(fl_value_lookup_string(args, "targetWindowId"));
+        if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+          fl_method_call_respond_error(call, "-1", "window channel arguments must be a map.", nullptr, nullptr);
+          return;
+        }
+        auto target_window_id_val = fl_value_lookup_string(args, "targetWindowId");
+        if (target_window_id_val == nullptr || fl_value_get_type(target_window_id_val) != FL_VALUE_TYPE_INT) {
+          fl_method_call_respond_error(call, "-1", "targetWindowId must be an integer.", nullptr, nullptr);
+          return;
+        }
+        auto target_window_id = fl_value_get_int(target_window_id_val);
         auto arguments = fl_value_lookup_string(args, "arguments");
 
         window_channel->handler_(window_channel->window_id_, target_window_id, method_name, arguments, call);

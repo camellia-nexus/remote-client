@@ -35,91 +35,132 @@ static void texture_rgba_renderer_plugin_handle_method_call(
   if (strcmp(method, "createTexture") == 0)
   {
     auto args = fl_method_call_get_args(method_call);
-    FlValue* key_val = fl_value_lookup_string(args, "key");
-    int64_t key = (key_val != nullptr && fl_value_get_type(key_val) == FL_VALUE_TYPE_INT)
-                      ? fl_value_get_int(key_val) : -1;
-    if (self->renderer_map != nullptr && self->renderer_map->find(key) != self->renderer_map->end())
-    {
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_int(-1)));
-    }
-    else
-    {
-      TextureRgba* texture_rgba = texture_rgba_new(self->texture_registrar);
-      auto texture_id = reinterpret_cast<int64_t>(FL_TEXTURE(texture_rgba));
-      texture_rgba->texture_id = texture_id;
-      if (self->renderer_map != nullptr) {
-        self->renderer_map->insert(std::make_pair(key, texture_rgba));
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid_arguments", "Arguments must be a map", nullptr));
+    } else {
+      FlValue* key_val = fl_value_lookup_string(args, "key");
+      if (key_val == nullptr || fl_value_get_type(key_val) != FL_VALUE_TYPE_INT) {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+            "invalid_key", "Key must be an integer", nullptr));
+      } else {
+        int64_t key = fl_value_get_int(key_val);
+        if (self->renderer_map != nullptr && self->renderer_map->find(key) != self->renderer_map->end())
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_int(-1)));
+        }
+        else
+        {
+          TextureRgba* texture_rgba = texture_rgba_new(self->texture_registrar);
+          auto texture_id = reinterpret_cast<int64_t>(FL_TEXTURE(texture_rgba));
+          texture_rgba->texture_id = texture_id;
+          if (self->renderer_map != nullptr) {
+            self->renderer_map->insert(std::make_pair(key, texture_rgba));
+          }
+          // Register to the registrar.
+          fl_texture_registrar_register_texture(self->texture_registrar, FL_TEXTURE(texture_rgba));
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_int(texture_id)));
+        }
       }
-      // Register to the registrar.
-      fl_texture_registrar_register_texture(self->texture_registrar, FL_TEXTURE(texture_rgba));
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_int(texture_id)));
     }
   }
   else if (strcmp(method, "closeTexture") == 0)
   {
     auto args = fl_method_call_get_args(method_call);
-    FlValue* key_val = fl_value_lookup_string(args, "key");
-    int64_t key = (key_val != nullptr && fl_value_get_type(key_val) == FL_VALUE_TYPE_INT)
-                      ? fl_value_get_int(key_val) : -1;
-    if (self->renderer_map != nullptr && self->renderer_map->find(key) != self->renderer_map->end())
-    {
-      TextureRgba* tex = (*self->renderer_map)[key];
-      self->renderer_map->erase(key);
-      if (tex != nullptr) {
-        fl_texture_registrar_unregister_texture(self->texture_registrar, FL_TEXTURE(tex));
-        texture_rgba_terminate(tex);
-        g_object_unref(tex);
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid_arguments", "Arguments must be a map", nullptr));
+    } else {
+      FlValue* key_val = fl_value_lookup_string(args, "key");
+      if (key_val == nullptr || fl_value_get_type(key_val) != FL_VALUE_TYPE_INT) {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+            "invalid_key", "Key must be an integer", nullptr));
+      } else {
+        int64_t key = fl_value_get_int(key_val);
+        if (self->renderer_map != nullptr && self->renderer_map->find(key) != self->renderer_map->end())
+        {
+          TextureRgba* tex = (*self->renderer_map)[key];
+          self->renderer_map->erase(key);
+          if (tex != nullptr) {
+            fl_texture_registrar_unregister_texture(self->texture_registrar, FL_TEXTURE(tex));
+            texture_rgba_terminate(tex);
+            g_object_unref(tex);
+          }
+        }
+        response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(true)));
       }
     }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(true)));
   }
   else if (strcmp(method, "onRgba") == 0)
   {
     auto args = fl_method_call_get_args(method_call);
-    FlValue* key_val = fl_value_lookup_string(args, "key");
-    int64_t key = (key_val != nullptr && fl_value_get_type(key_val) == FL_VALUE_TYPE_INT)
-                      ? fl_value_get_int(key_val) : -1;
-    auto data_val = fl_value_lookup_string(args, "data");
-    auto width_val = fl_value_lookup_string(args, "width");
-    auto height_val = fl_value_lookup_string(args, "height");
-    auto stride_val = fl_value_lookup_string(args, "stride_align");
-
-    if (data_val != nullptr && width_val != nullptr && height_val != nullptr &&
-        self->renderer_map != nullptr && self->renderer_map->find(key) != self->renderer_map->end()) {
-      auto data = fl_value_get_uint8_list(data_val);
-      auto data_length = fl_value_get_length(data_val);
-      auto width = fl_value_get_int(width_val);
-      auto height = fl_value_get_int(height_val);
-      auto stride_align = stride_val != nullptr ? fl_value_get_int(stride_val) : 0;
-      auto texture_rgba = (*self->renderer_map)[key];
-      if (texture_rgba != nullptr) {
-        FlutterRgbaRendererPluginOnRgba((void*)texture_rgba, data, data_length, width, height, stride_align);
-        response = FL_METHOD_RESPONSE(fl_method_success_response_new(
-            fl_value_new_bool(fl_texture_registrar_mark_texture_frame_available(self->texture_registrar, FL_TEXTURE(texture_rgba)))));
-      } else {
-        response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(false)));
-      }
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid_arguments", "Arguments must be a map", nullptr));
     } else {
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(fl_value_new_bool(false)));
+      FlValue* key_val = fl_value_lookup_string(args, "key");
+      auto data_val = fl_value_lookup_string(args, "data");
+      auto width_val = fl_value_lookup_string(args, "width");
+      auto height_val = fl_value_lookup_string(args, "height");
+      auto stride_val = fl_value_lookup_string(args, "stride_align");
+
+      if (key_val == nullptr || fl_value_get_type(key_val) != FL_VALUE_TYPE_INT ||
+          data_val == nullptr || fl_value_get_type(data_val) != FL_VALUE_TYPE_UINT8_LIST ||
+          width_val == nullptr || fl_value_get_type(width_val) != FL_VALUE_TYPE_INT ||
+          height_val == nullptr || fl_value_get_type(height_val) != FL_VALUE_TYPE_INT) {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+            "invalid_arguments", "Malformed onRgba arguments", nullptr));
+      } else {
+        int64_t key = fl_value_get_int(key_val);
+        if (self->renderer_map == nullptr || self->renderer_map->find(key) == self->renderer_map->end()) {
+          response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+              "not_found", "Texture key not found", nullptr));
+        } else {
+          auto data = fl_value_get_uint8_list(data_val);
+          auto data_length = fl_value_get_length(data_val);
+          auto width = fl_value_get_int(width_val);
+          auto height = fl_value_get_int(height_val);
+          auto stride_align = (stride_val != nullptr && fl_value_get_type(stride_val) == FL_VALUE_TYPE_INT)
+                                  ? fl_value_get_int(stride_val) : 0;
+          auto texture_rgba = (*self->renderer_map)[key];
+          if (texture_rgba != nullptr) {
+            FlutterRgbaRendererPluginOnRgba((void*)texture_rgba, data, data_length, width, height, stride_align);
+            response = FL_METHOD_RESPONSE(fl_method_success_response_new(
+                fl_value_new_bool(fl_texture_registrar_mark_texture_frame_available(self->texture_registrar, FL_TEXTURE(texture_rgba)))));
+          } else {
+            response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+                "invalid_state", "Texture instance is null", nullptr));
+          }
+        }
+      }
     }
   }
   else if (strcmp(method, "getTexturePtr") == 0)
   {
     auto args = fl_method_call_get_args(method_call);
-    FlValue* key_val = fl_value_lookup_string(args, "key");
-    int64_t key = (key_val != nullptr && fl_value_get_type(key_val) == FL_VALUE_TYPE_INT)
-                      ? fl_value_get_int(key_val) : -1;
-    if (self->renderer_map == nullptr || self->renderer_map->find(key) == self->renderer_map->end() ||
-        (*self->renderer_map)[key] == nullptr)
-    {
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(
-          fl_value_new_int(0)));
-    }
-    else
-    {
-      size_t rgba = reinterpret_cast<size_t>((void *)(*self->renderer_map)[key]);
-      response = FL_METHOD_RESPONSE(fl_method_success_response_new(
-          fl_value_new_int(rgba)));
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid_arguments", "Arguments must be a map", nullptr));
+    } else {
+      FlValue* key_val = fl_value_lookup_string(args, "key");
+      if (key_val == nullptr || fl_value_get_type(key_val) != FL_VALUE_TYPE_INT) {
+        response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+            "invalid_key", "Key must be an integer", nullptr));
+      } else {
+        int64_t key = fl_value_get_int(key_val);
+        if (self->renderer_map == nullptr || self->renderer_map->find(key) == self->renderer_map->end() ||
+            (*self->renderer_map)[key] == nullptr)
+        {
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(
+              fl_value_new_int(0)));
+        }
+        else
+        {
+          size_t rgba = reinterpret_cast<size_t>((void *)(*self->renderer_map)[key]);
+          response = FL_METHOD_RESPONSE(fl_method_success_response_new(
+              fl_value_new_int(rgba)));
+        }
+      }
     }
   }
   else

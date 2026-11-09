@@ -42,4 +42,39 @@ class RdPlatformChannel {
     assert(isMacOS);
     return _hostMethodChannel.invokeMethod("terminate");
   }
+
+  /// Request or release Wayland keyboard shortcuts inhibition.
+  /// Only RemoteDesktop control windows should request this when capturing keyboard.
+  Future<bool> setWaylandShortcutsInhibit({required bool enabled}) async {
+    if (!isLinux) return false;
+    try {
+      final res = await _hostMethodChannel.invokeMethod<dynamic>(
+        "setWaylandShortcutsInhibit",
+        {"enabled": enabled},
+      );
+      if (res is Map && res["success"] == true) {
+        return true;
+      }
+      return res == true;
+    } catch (e) {
+      debugPrint("setWaylandShortcutsInhibit failed: $e");
+      return false;
+    }
+  }
+
+  /// Query the current Wayland shortcuts inhibitor state.
+  Future<String?> getWaylandShortcutsInhibitState() async {
+    if (!isLinux) return null;
+    try {
+      final res = await _hostMethodChannel.invokeMethod<dynamic>(
+        "getWaylandShortcutsInhibitState",
+      );
+      if (res is Map) {
+        return res["state"]?.toString();
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 }

@@ -5,18 +5,56 @@ Future<Offset> calcWindowPosition(
   Size windowSize,
   Alignment alignment,
 ) async {
-  Display primaryDisplay = await screenRetriever.getPrimaryDisplay();
-  List<Display> allDisplays = await screenRetriever.getAllDisplays();
-  Offset cursorScreenPoint = await screenRetriever.getCursorScreenPoint();
+  Display? primaryDisplay;
+  List<Display> allDisplays = const <Display>[];
+  Offset? cursorScreenPoint;
+
+  try {
+    primaryDisplay = await screenRetriever
+        .getPrimaryDisplay()
+        .timeout(const Duration(seconds: 2));
+  } catch (e) {
+    debugPrint("Failed to get primary display: $e");
+  }
+
+  try {
+    allDisplays = await screenRetriever
+        .getAllDisplays()
+        .timeout(const Duration(seconds: 2));
+  } catch (e) {
+    debugPrint("Failed to get all displays: $e");
+  }
+
+  try {
+    cursorScreenPoint = await screenRetriever
+        .getCursorScreenPoint()
+        .timeout(const Duration(seconds: 2));
+  } catch (e) {
+    debugPrint("Failed to get cursor screen point: $e");
+  }
+
+  primaryDisplay ??= Display(
+    id: 0,
+    name: 'fallback',
+    size: const Size(1920, 1080),
+    visiblePosition: const Offset(0, 0),
+    visibleSize: const Size(1920, 1080),
+    scaleFactor: 1.0,
+  );
+
+  cursorScreenPoint ??= const Offset(0, 0);
 
   Display currentDisplay = allDisplays.firstWhere(
-    (display) => Rect.fromLTWH(
-      display.visiblePosition!.dx,
-      display.visiblePosition!.dy,
-      display.size.width,
-      display.size.height,
-    ).contains(cursorScreenPoint),
-    orElse: () => primaryDisplay,
+    (display) {
+      final pos = display.visiblePosition ?? const Offset(0, 0);
+      return Rect.fromLTWH(
+        pos.dx,
+        pos.dy,
+        display.size.width,
+        display.size.height,
+      ).contains(cursorScreenPoint!);
+    },
+    orElse: () => primaryDisplay!,
   );
 
   num visibleWidth = currentDisplay.size.width;
