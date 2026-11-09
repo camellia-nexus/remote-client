@@ -1,29 +1,16 @@
-#!/bin/bash
-
+#!/bin/sh
 set -e
 
-if [ "$1" = configure ]; then
-
-	INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
-	ln -f -s /usr/share/camellia/camellia /usr/bin/camellia
-
-	if [ "systemd" == "$INITSYS" ]; then
-
-		if [ -e /etc/systemd/system/camellia-remote.service ]; then
-			rm /etc/systemd/system/camellia-remote.service /usr/lib/systemd/system/camellia-remote.service /usr/lib/systemd/user/camellia-remote.service >/dev/null  2>&1
-		fi
-		version=$(python3 -V 2>&1 | grep -Po '(?<=Python )(.+)')
-		parsedVersion=$(echo "${version//./}")
-        mkdir -p /usr/lib/systemd/system/
-		cp /usr/share/camellia/files/systemd/camellia-remote.service /usr/lib/systemd/system/camellia-remote.service
-		# try fix error in Ubuntu 18.04
-		# Failed to reload camellia-remote.service: Unit camellia-remote.service is not loaded properly: Exec format error.
-		# systemd requires an absolute path for pkill in ExecStop.
-		if [ -e /usr/bin/pkill ]; then
-			sed -i "s|pkill|/usr/bin/pkill|g" /usr/lib/systemd/system/camellia-remote.service
-		fi
-		systemctl daemon-reload
-		systemctl enable camellia
-		systemctl start camellia
-	fi
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ]; then
+    if [ -d /run/systemd/system ]; then
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
+    fi
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q /usr/share/applications || true
+    fi
+    if command -v update-mime-database >/dev/null 2>&1; then
+        update-mime-database /usr/share/mime || true
+    fi
 fi
+
+exit 0

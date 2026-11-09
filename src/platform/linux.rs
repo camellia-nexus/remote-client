@@ -2211,12 +2211,14 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     log::info!("Uninstalling service...");
     let cp = switch_service(true);
     const SERVICE_UNIT: &str = "camellia-remote.service";
-    if !run_cmds_privileged(&format!(
-        "{cp} systemctl disable {SERVICE_UNIT}; systemctl stop {SERVICE_UNIT};"
-    )) {
+    let ok = run_cmds_privileged(&format!(
+        "{cp} systemctl stop {SERVICE_UNIT}; systemctl disable {SERVICE_UNIT};"
+    ));
+    if !ok {
         Config::set_option("stop-service".into(), "".into());
-        return true;
+        return false;
     }
+    Config::set_option("stop-service".into(), "Y".into());
     // systemctl stop will kill child processes, below may not be executed.
     if show_new_window {
         run_me_with(2);
@@ -2232,11 +2234,14 @@ pub fn install_service() -> bool {
     log::info!("Installing service...");
     let cp = switch_service(false);
     const SERVICE_UNIT: &str = "camellia-remote.service";
-    if !run_cmds_privileged(&format!(
-        "{cp} systemctl enable {SERVICE_UNIT}; systemctl start {SERVICE_UNIT};"
-    )) {
+    let ok = run_cmds_privileged(&format!(
+        "{cp} systemctl daemon-reload; systemctl enable {SERVICE_UNIT}; systemctl start {SERVICE_UNIT};"
+    ));
+    if !ok {
         Config::set_option("stop-service".into(), "Y".into());
+        return false;
     }
+    Config::set_option("stop-service".into(), "".into());
     true
 }
 

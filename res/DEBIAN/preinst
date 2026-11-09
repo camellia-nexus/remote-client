@@ -1,14 +1,11 @@
-#!/bin/bash
-
+#!/bin/sh
 set -e
 
-case $1 in
+case "$1" in
     install|upgrade)
-		INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
-		if [ "systemd" == "${INITSYS}" ]; then
-			service camellia stop || true
-      sleep 1
-		fi
+        if [ -d /run/systemd/system ]; then
+            systemctl stop camellia-remote.service >/dev/null 2>&1 || true
+        fi
         ;;
 esac
 

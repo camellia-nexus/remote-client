@@ -9,15 +9,15 @@ post_install() {
 	cp /usr/share/camellia/files/camellia-remote.desktop /usr/share/applications/
 	cp /usr/share/camellia/files/camellia-remote-link.desktop /usr/share/applications/
 	systemctl daemon-reload
-	systemctl enable camellia
-	systemctl start camellia
+	systemctl enable camellia-remote
+	systemctl start camellia-remote
 	update-desktop-database
 }
 
 # arg 1:  the new package version
 # arg 2:  the old package version
 pre_upgrade() {
-    systemctl stop camellia || true
+    systemctl stop camellia-remote || true
 }
 
 # arg 1:  the new package version
@@ -27,15 +27,15 @@ post_upgrade() {
 	cp /usr/share/camellia/files/camellia-remote.desktop /usr/share/applications/
 	cp /usr/share/camellia/files/camellia-remote-link.desktop /usr/share/applications/
 	systemctl daemon-reload
-	systemctl enable camellia
-	systemctl start camellia
+	systemctl enable camellia-remote
+	systemctl start camellia-remote
 	update-desktop-database
 }
 
 # arg 1:  the old package version
 pre_remove() {
-	systemctl stop camellia || true
-	systemctl disable camellia || true
+	systemctl stop camellia-remote || true
+	systemctl disable camellia-remote || true
 	rm /etc/systemd/system/camellia-remote.service || true
 }
 

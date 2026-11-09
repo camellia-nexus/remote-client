@@ -8,6 +8,7 @@ Terminal=false
 Type=Application
 StartupNotify=true
 Categories=Network;RemoteAccess;GTK;
+MimeType=x-scheme-handler/camellia-remote;
 Keywords=internet;linux;dart;rust;remote-control;p2p;teamviewer;rust-lang;rdp;remote-desktop;vnc;
 Actions=new-window;
 StartupWMClass=camellia-remote

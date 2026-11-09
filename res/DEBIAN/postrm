@@ -1,10 +1,30 @@
-#!/bin/bash
-
+#!/bin/sh
 set -e
 
-case $1 in
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+        fi
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime || true
+        fi
+        ;;
     purge)
-		rm -rf /root/.config/camellia || true
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null 2>&1 || true
+            systemctl --system reset-failed camellia-remote.service >/dev/null 2>&1 || true
+        fi
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime || true
+        fi
+        rm -rf /root/.config/camellia-remote /root/.config/camellia >/dev/null 2>&1 || true
         ;;
 esac
 

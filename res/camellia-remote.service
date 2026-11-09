@@ -1,17 +1,13 @@
 [Unit]
-Description=Camellia Remote
-Requires=network.target
-After=systemd-user-sessions.service
+Description=Camellia Remote Service
+After=network.target systemd-user-sessions.service
+Wants=network.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/camellia-remote --service
-# kill --tray and --server both
-ExecStop=pkill -f "camellia-remote --"
-# below two lines do not work, have to use above one line
-#ExecStop=pkill -f "camellia --tray"
-#ExecStop=pkill -f "camellia --server"
-PIDFile=/run/camellia-remote.pid
+Restart=on-failure
+RestartSec=5
 KillMode=mixed
 TimeoutStopSec=30
 User=root
