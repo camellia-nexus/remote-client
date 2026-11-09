@@ -45,6 +45,13 @@ type WorkerRequest =
   | DetachSurfaceMessage
   | CloseMessage;
 
+export type WorkerAckMessage = {
+  type: 'ack';
+  display: number;
+  bytes: number;
+  dropped?: boolean;
+};
+
 type WorkerResponse =
   | { type: 'ready'; canDecode: boolean; reason?: string }
   | {
@@ -58,7 +65,8 @@ type WorkerResponse =
       droppedStale: number;
     }
   | { type: 'need_refresh'; display: number }
-  | { type: 'log'; level: 'warn' | 'error'; message: string };
+  | { type: 'log'; level: 'warn' | 'error'; message: string }
+  | WorkerAckMessage;
 
 type DisplayPerf = {
   avgRenderMs: number;
@@ -104,6 +112,12 @@ let renderQualityPreference: 'low' | 'balanced' | 'best' | 'custom' = 'balanced'
 let customImageQuality = 100;
 let customFps = 60;
 let activeDisplay: number | null = null;
+
+const MAX_WORKER_QUEUE_FRAMES = 8;
+const MAX_WORKER_QUEUE_BYTES = 4 * 1024 * 1024;
+const workerDecodeQueue: DecodeMessage[] = [];
+let workerDecodeQueueBytes = 0;
+let isProcessingDecodeQueue = false;
 
 const workerSelf = self as any;
 const workerCapabilities = {
@@ -157,7 +171,7 @@ workerSelf.onmessage = (event: { data: WorkerRequest }) => {
       setActiveDisplay(message.display, Boolean(message.reset));
       break;
     case 'decode':
-      void decodeVideo(message);
+      enqueueWorkerDecode(message);
       break;
     case 'detach_surface':
       detachSurface();
@@ -237,6 +251,92 @@ function restoreSurfaceSnapshot(
   surfaceContext.drawImage(snapshot, 0, 0, targetWidth, targetHeight);
 }
 
+function enqueueWorkerDecode(message: DecodeMessage): void {
+  if (isClosed) {
+    postAck(message.display, message.data?.byteLength ?? 0, true);
+    return;
+  }
+  if (!surfaceCanvas || !surfaceContext || !shouldRenderDisplay(message.display)) {
+    postAck(message.display, message.data?.byteLength ?? 0, true);
+    return;
+  }
+  const byteLength = message.data?.byteLength ?? 0;
+  if (byteLength === 0) {
+    postAck(message.display, 0, true);
+    return;
+  }
+
+  // When a keyframe arrives, drop any queued deltas for this display to avoid stale decoding
+  if (message.key) {
+    for (let i = workerDecodeQueue.length - 1; i >= 0; i--) {
+      const pending = workerDecodeQueue[i];
+      if (pending.display === message.display && !pending.key) {
+        workerDecodeQueue.splice(i, 1);
+        workerDecodeQueueBytes = Math.max(0, workerDecodeQueueBytes - pending.data.byteLength);
+        postAck(pending.display, pending.data.byteLength, true);
+      }
+    }
+  }
+
+  // Enforce queue capacity bounds
+  if (
+    workerDecodeQueue.length >= MAX_WORKER_QUEUE_FRAMES ||
+    workerDecodeQueueBytes + byteLength > MAX_WORKER_QUEUE_BYTES
+  ) {
+    if (!message.key) {
+      markDisplayBackpressureDrop(message.display);
+      const key = decoderKey(message.display, message.codec);
+      requestRefresh(message.display, key);
+      postAck(message.display, byteLength, true);
+      return;
+    }
+  }
+
+  workerDecodeQueue.push(message);
+  workerDecodeQueueBytes += byteLength;
+
+  if (!isProcessingDecodeQueue) {
+    void processWorkerDecodeQueue();
+  }
+}
+
+async function processWorkerDecodeQueue(): Promise<void> {
+  if (isProcessingDecodeQueue) {
+    return;
+  }
+  isProcessingDecodeQueue = true;
+  try {
+    while (workerDecodeQueue.length > 0 && !isClosed) {
+      const message = workerDecodeQueue.shift()!;
+      workerDecodeQueueBytes = Math.max(0, workerDecodeQueueBytes - message.data.byteLength);
+      let dropped = false;
+      try {
+        if (!isClosed && surfaceCanvas && surfaceContext && shouldRenderDisplay(message.display)) {
+          await decodeVideo(message);
+        } else {
+          dropped = true;
+        }
+      } catch {
+        dropped = true;
+      } finally {
+        postAck(message.display, message.data.byteLength, dropped);
+      }
+    }
+  } finally {
+    isProcessingDecodeQueue = false;
+  }
+}
+
+function postAck(display: number, bytes: number, dropped = false): void {
+  const ack: WorkerResponse = {
+    type: 'ack',
+    display,
+    bytes,
+    dropped
+  };
+  workerSelf.postMessage(ack);
+}
+
 async function decodeVideo(message: DecodeMessage): Promise<void> {
   if (!workerCapabilities.videoDecoder || !workerCapabilities.encodedVideoChunk) {
     return;
@@ -248,7 +348,7 @@ async function decodeVideo(message: DecodeMessage): Promise<void> {
     return;
   }
   const decoder = await getDecoder(message.codec, message.display);
-  if (!decoder) {
+  if (!decoder || isClosed || !surfaceCanvas || !surfaceContext || !shouldRenderDisplay(message.display)) {
     return;
   }
   const key = decoderKey(message.display, message.codec);
@@ -659,6 +759,14 @@ function resetDisplayState(display: number): void {
 }
 
 function clearInactiveDisplayState(targetDisplay: number): void {
+  for (let i = workerDecodeQueue.length - 1; i >= 0; i--) {
+    const pending = workerDecodeQueue[i];
+    if (pending.display !== targetDisplay) {
+      workerDecodeQueue.splice(i, 1);
+      workerDecodeQueueBytes = Math.max(0, workerDecodeQueueBytes - pending.data.byteLength);
+      postAck(pending.display, pending.data.byteLength, true);
+    }
+  }
   for (const display of [...pendingFrames.keys()]) {
     if (display !== targetDisplay) {
       clearPendingFrame(display);
@@ -736,6 +844,11 @@ function clearInactiveDisplayState(targetDisplay: number): void {
 }
 
 function detachSurface(): void {
+  for (const pending of workerDecodeQueue) {
+    postAck(pending.display, pending.data?.byteLength ?? 0, true);
+  }
+  workerDecodeQueue.length = 0;
+  workerDecodeQueueBytes = 0;
   surfaceContext = null;
   surfaceCanvas = null;
   notifiedFrameSize.clear();
@@ -744,6 +857,11 @@ function detachSurface(): void {
 
 function closeWorker(): void {
   isClosed = true;
+  for (const pending of workerDecodeQueue) {
+    postAck(pending.display, pending.data?.byteLength ?? 0, true);
+  }
+  workerDecodeQueue.length = 0;
+  workerDecodeQueueBytes = 0;
   for (const decoder of decoders.values()) {
     try {
       decoder.close();

@@ -960,6 +960,10 @@ export class WebSession {
     if (!this.proto) {
       return;
     }
+    const optionPayload: Record<string, unknown> = { ...option };
+    // COMPAT-002: Web client explicitly does not support audio streaming; unconditionally request disableAudio
+    optionPayload.disableAudio = BoolOption.Yes;
+
     if (this.context?.policy) {
       if ('disableKeyboard' in option) {
         this.context.policy.disableKeyboard = option.disableKeyboard === BoolOption.Yes;
@@ -967,9 +971,7 @@ export class WebSession {
       if ('disableClipboard' in option) {
         this.context.policy.disableClipboard = option.disableClipboard === BoolOption.Yes;
       }
-      if ('disableAudio' in option) {
-        this.context.policy.disableAudio = option.disableAudio === BoolOption.Yes;
-      }
+      this.context.policy.disableAudio = true;
       if ('enableFileTransfer' in option) {
         this.context.policy.enableFileTransfer = option.enableFileTransfer === BoolOption.Yes;
       }
@@ -989,7 +991,7 @@ export class WebSession {
         this.context.policy.followRemoteWindow = option.followRemoteWindow === BoolOption.Yes;
       }
     }
-    this.sendMessage({ misc: { option } });
+    this.sendMessage({ misc: { option: optionPayload } });
   }
 
   setImageQuality(value: string, customQuality?: number, customFps?: number): void {
@@ -1591,6 +1593,10 @@ export class WebSession {
     if (msg.peerInfo) {
       this.emitPeerInfoDelta(msg.peerInfo as Record<string, unknown>);
     }
+    if (msg.audioFrame) {
+      // COMPAT-002: Web client explicitly does not support audio playback; safely discard stray AudioFrame
+      return;
+    }
     if (msg.videoFrame) {
       this.handleVideoFrame(msg.videoFrame as Record<string, unknown>);
     }
@@ -1724,7 +1730,6 @@ export class WebSession {
     if (policy) {
       option.disableKeyboard = boolOption(policy.disableKeyboard);
       option.disableClipboard = boolOption(policy.disableClipboard);
-      option.disableAudio = boolOption(policy.disableAudio);
       option.enableFileTransfer = boolOption(policy.enableFileTransfer);
       option.lockAfterSessionEnd = boolOption(policy.lockAfterSessionEnd);
       option.showRemoteCursor = boolOption(policy.showRemoteCursor);
@@ -1732,6 +1737,8 @@ export class WebSession {
       option.followRemoteCursor = boolOption(policy.followRemoteCursor);
       option.followRemoteWindow = boolOption(policy.followRemoteWindow);
     }
+    // COMPAT-002: Web client explicitly declares audio unsupported and unconditionally requests disableAudio
+    option.disableAudio = BoolOption.Yes;
     return option;
   }
 

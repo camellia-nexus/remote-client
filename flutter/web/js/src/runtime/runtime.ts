@@ -84,10 +84,58 @@ type ConnectionCandidate = {
   relayServer: string;
 };
 
+export const MAX_DROP_DESCRIPTORS = 200;
+export const MAX_DROP_FILE_BYTES = 500 * 1024 * 1024;
+export const MAX_DROP_BATCH_BYTES = 500 * 1024 * 1024;
+export const MAX_DROP_FETCH_CONCURRENCY = 4;
+export const MAX_DIR_TRAVERSAL_DEPTH = 32;
+export const MAX_DIR_TRAVERSAL_ENTRIES = 5000;
+export const MAX_DIR_PATH_LENGTH = 1024;
+export const MAX_DIR_TRAVERSAL_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACTIVE_FILE_HANDLES = 16;
+export const MAX_FILE_HANDLES_TOTAL_BYTES = 1024 * 1024 * 1024;
+export const FILE_HANDLE_TTL_MS = 10 * 60 * 1000;
+
+export type ManagedFileHandle = {
+  token: symbol;
+  handleIndex: number;
+  files: File[];
+  totalBytes: number;
+  createdAt: number;
+  expiresAt: number;
+};
+
 const FALLBACK_DEFAULT_ID_PORT = 21116;
 
 export { SessionPolicyGuard } from './policy.ts';
 import { decodeOnlineStates } from './online_states.ts';
+
+export function isAllowedDropUri(uri: string, baseHref?: string): boolean {
+  try {
+    const base =
+      baseHref ??
+      (typeof window !== 'undefined' && window.location?.href
+        ? window.location.href
+        : 'http://localhost');
+    const parsed = new URL(uri, base);
+    if (parsed.protocol === 'blob:') {
+      return true;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : new URL(base).origin;
+    if (origin !== 'null' && parsed.origin === origin) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly config: RuntimeConfig;
@@ -102,7 +150,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private policyGuard: SessionPolicyGuard | null = null;
   private initialized = false;
   private nextFileHandle = 1;
-  private readonly fileHandles = new Map<number, File[]>();
+  private readonly fileHandles = new Map<number, ManagedFileHandle>();
+  private inFlightSelectionAbortController?: AbortController;
   private protoPromise?: Promise<ProtoRoots>;
   private accountAuthNonce = 0;
   private accountAuthAbort?: AbortController;
@@ -121,6 +170,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private connectStatusProbeInFlight = false;
   private readonly ephemeralSessionSecrets = new Map<string, string>();
   private sessionGeneration = 0;
+  private onlineQueryGeneration = 0;
 
   constructor() {
     this.config = loadConfig();
@@ -164,8 +214,12 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       case 'session_close':
       case 'close':
         this.sessionGeneration += 1;
+        this.onlineQueryGeneration += 1;
+        this.pendingOnlineQueryIds = undefined;
         this.inputSource1PointerInside = false;
         this.releaseInputSource1PressedKeys();
+        this.cancelInFlightFileSelection();
+        this.clearFileHandles();
         this.currentSession?.detachVideoSurface(this.videoSurfaceElementId);
         this.currentSession?.close();
         this.policyGuard = null;
@@ -1617,6 +1671,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     if (!this.currentSession) {
       return;
     }
+    if (name === 'disable-audio') {
+      if (this.policyGuard) {
+        this.policyGuard.updatePolicy({ disableAudio: true });
+      }
+      this.currentSession.sendOption({ disableAudio: this.boolOption(true) });
+      return;
+    }
     const field = this.toggleOptionField(name);
     if (!field) {
       return;
@@ -2178,11 +2239,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return;
     }
     const handleIndex = Number(payload.handle_index ?? 0);
-    const files = this.fileHandles.get(handleIndex);
-    if (!files || files.length === 0) {
+    this.evictExpiredFileHandles();
+    const handle = this.fileHandles.get(handleIndex);
+    if (!handle || handle.files.length === 0) {
       this.emitJobError(payload.id, 'file-not-found');
       return;
     }
+    const files = handle.files;
     const desired = String(payload.path ?? '');
     const file =
       files.find((item) => {
@@ -2200,6 +2263,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     const idx = files.indexOf(file);
     if (idx >= 0) {
       files.splice(idx, 1);
+      handle.totalBytes = Math.max(0, handle.totalBytes - (file.size || 0));
       if (files.length === 0) {
         this.fileHandles.delete(handleIndex);
       }
@@ -2220,16 +2284,63 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     if (descriptors.length === 0) {
       return;
     }
-    const files = await Promise.all(
-      descriptors.map((file) => this.rehydrateDroppedFile(file))
-    );
-    const ready = files.filter((file): file is File => file !== null);
-    if (ready.length === 0) {
+    if (descriptors.length > MAX_DROP_DESCRIPTORS) {
+      this.logger.warn(
+        `Dropped files count (${descriptors.length}) exceeds maximum limit (${MAX_DROP_DESCRIPTORS})`
+      );
       return;
     }
-    const handleIndex = this.nextFileHandle++;
-    this.fileHandles.set(handleIndex, ready);
-    this.emitSelectedFiles(handleIndex, ready);
+
+    this.cancelInFlightFileSelection();
+    const abortController = new AbortController();
+    this.inFlightSelectionAbortController = abortController;
+    const signal = abortController.signal;
+
+    try {
+      const ready: File[] = [];
+      let totalBytes = 0;
+      let cursor = 0;
+
+      const worker = async (): Promise<void> => {
+        while (cursor < descriptors.length && !signal.aborted) {
+          const idx = cursor++;
+          const desc = descriptors[idx];
+          const file = await this.rehydrateDroppedFile(desc, signal);
+          if (signal.aborted) {
+            return;
+          }
+          if (file) {
+            if (totalBytes + file.size > MAX_DROP_BATCH_BYTES) {
+              this.logger.warn(
+                `Dropped files cumulative batch size exceeds limit (${MAX_DROP_BATCH_BYTES})`
+              );
+              break;
+            }
+            ready.push(file);
+            totalBytes += file.size;
+          }
+        }
+      };
+
+      const concurrency = Math.min(MAX_DROP_FETCH_CONCURRENCY, descriptors.length);
+      const workers = Array.from({ length: concurrency }, () => worker());
+      await Promise.all(workers);
+
+      if (signal.aborted || ready.length === 0) {
+        return;
+      }
+
+      const handleIndex = this.allocateFileHandle(ready, totalBytes);
+      if (handleIndex === null) {
+        this.logger.warn('Failed to allocate file handle for dropped files: storage budget exceeded');
+        return;
+      }
+      this.emitSelectedFiles(handleIndex, ready);
+    } finally {
+      if (this.inFlightSelectionAbortController === abortController) {
+        this.inFlightSelectionAbortController = undefined;
+      }
+    }
   }
 
   private async handleSelectFiles(isFolder: boolean): Promise<void> {
@@ -2254,28 +2365,46 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     input: HTMLInputElement,
     isFolder: boolean
   ): Promise<void> {
-    const fallbackFiles = input.files ? Array.from(input.files) : [];
-    let files = fallbackFiles;
-    let emptyDirs: string[] = [];
-    if (isFolder) {
-      const selected = await this.collectSelectedDirectoryEntries(input);
-      if (selected.files.length > 0) {
-        files = selected.files;
+    this.cancelInFlightFileSelection();
+    const abortController = new AbortController();
+    this.inFlightSelectionAbortController = abortController;
+    const signal = abortController.signal;
+
+    try {
+      const fallbackFiles = input.files ? Array.from(input.files) : [];
+      let files = fallbackFiles;
+      let emptyDirs: string[] = [];
+      if (isFolder) {
+        const selected = await this.collectSelectedDirectoryEntries(input, signal);
+        if (selected.files.length > 0) {
+          files = selected.files;
+        }
+        emptyDirs = selected.emptyDirs;
       }
-      emptyDirs = selected.emptyDirs;
+      if (signal.aborted) {
+        return;
+      }
+      if (emptyDirs.length > 0) {
+        this.events.emit({
+          name: 'send_empty_dirs',
+          dirs: JSON.stringify(emptyDirs)
+        });
+      }
+      if (files.length === 0) {
+        return;
+      }
+      const totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
+      const handleIndex = this.allocateFileHandle(files, totalBytes);
+      if (handleIndex === null) {
+        this.logger.warn('Failed to allocate file handle for selected files: storage budget exceeded');
+        return;
+      }
+      this.emitSelectedFiles(handleIndex, files);
+    } finally {
+      if (this.inFlightSelectionAbortController === abortController) {
+        this.inFlightSelectionAbortController = undefined;
+      }
     }
-    if (emptyDirs.length > 0) {
-      this.events.emit({
-        name: 'send_empty_dirs',
-        dirs: JSON.stringify(emptyDirs)
-      });
-    }
-    if (files.length === 0) {
-      return;
-    }
-    const handleIndex = this.nextFileHandle++;
-    this.fileHandles.set(handleIndex, files);
-    this.emitSelectedFiles(handleIndex, files);
   }
 
   private emitSelectedFiles(handleIndex: number, files: File[]): void {
@@ -2298,46 +2427,97 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private async collectSelectedDirectoryEntries(
-    input: HTMLInputElement
+    input: HTMLInputElement,
+    signal?: AbortSignal
   ): Promise<{ files: File[]; emptyDirs: string[] }> {
     const rootEntries = input.webkitEntries ? Array.from(input.webkitEntries) : [];
     if (rootEntries.length === 0) {
-      return { files: input.files ? Array.from(input.files) : [], emptyDirs: [] };
+      const inputFiles = input.files ? Array.from(input.files) : [];
+      let total = 0;
+      const boundedFiles: File[] = [];
+      for (const f of inputFiles) {
+        if (
+          boundedFiles.length >= MAX_DIR_TRAVERSAL_ENTRIES ||
+          total + f.size > MAX_DIR_TRAVERSAL_BYTES
+        ) {
+          break;
+        }
+        boundedFiles.push(f);
+        total += f.size;
+      }
+      return { files: boundedFiles, emptyDirs: [] };
     }
+
     const files: File[] = [];
     const emptyDirs: string[] = [];
-    for (const entry of rootEntries) {
-      await this.walkFileSystemEntry(entry, '', files, emptyDirs);
+    let totalBytes = 0;
+    let entryCount = 0;
+
+    const queue: Array<{ entry: FileSystemEntry; parentPath: string; depth: number }> =
+      rootEntries.map((entry) => ({ entry, parentPath: '', depth: 0 }));
+
+    while (queue.length > 0 && !signal?.aborted) {
+      const item = queue.shift()!;
+      entryCount++;
+      if (entryCount > MAX_DIR_TRAVERSAL_ENTRIES) {
+        this.logger.warn(
+          `Directory traversal exceeded maximum entries (${MAX_DIR_TRAVERSAL_ENTRIES})`
+        );
+        break;
+      }
+
+      const currentPath = item.parentPath
+        ? `${item.parentPath}/${item.entry.name}`
+        : item.entry.name;
+
+      if (currentPath.length > MAX_DIR_PATH_LENGTH) {
+        this.logger.warn(`Directory traversal skipped path exceeding max length: ${currentPath.slice(0, 50)}...`);
+        continue;
+      }
+
+      if (item.entry.isFile) {
+        try {
+          const file = await this.readFileSystemEntry(
+            item.entry as FileSystemFileEntry,
+            currentPath
+          );
+          if (totalBytes + file.size > MAX_DIR_TRAVERSAL_BYTES) {
+            this.logger.warn(
+              `Directory traversal exceeded max total bytes (${MAX_DIR_TRAVERSAL_BYTES})`
+            );
+            break;
+          }
+          files.push(file);
+          totalBytes += file.size;
+        } catch (err) {
+          this.logger.warn(`Failed reading file entry: ${currentPath}`, err);
+        }
+        continue;
+      }
+
+      if (item.depth >= MAX_DIR_TRAVERSAL_DEPTH) {
+        this.logger.warn(
+          `Directory traversal reached max depth ${MAX_DIR_TRAVERSAL_DEPTH} at ${currentPath}`
+        );
+        continue;
+      }
+
+      const children = await this.readAllDirectoryEntries(
+        item.entry as FileSystemDirectoryEntry
+      );
+      if (children.length === 0) {
+        emptyDirs.push(currentPath);
+      } else {
+        for (const child of children) {
+          queue.push({ entry: child, parentPath: currentPath, depth: item.depth + 1 });
+        }
+      }
     }
+
     return { files, emptyDirs };
   }
 
-  private async walkFileSystemEntry(
-    entry: FileSystemEntry,
-    parentPath: string,
-    files: File[],
-    emptyDirs: string[]
-  ): Promise<void> {
-    const currentPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
-    if (entry.isFile) {
-      files.push(
-        await this.readFileSystemEntry(entry as FileSystemFileEntry, currentPath)
-      );
-      return;
-    }
-    const children = await this.readAllDirectoryEntries(
-      entry as FileSystemDirectoryEntry
-    );
-    if (children.length === 0) {
-      emptyDirs.push(currentPath);
-      return;
-    }
-    for (const child of children) {
-      await this.walkFileSystemEntry(child, currentPath, files, emptyDirs);
-    }
-  }
-
-  private readAllDirectoryEntries(
+  private async readAllDirectoryEntries(
     entry: FileSystemDirectoryEntry
   ): Promise<FileSystemEntry[]> {
     const reader = entry.createReader();
@@ -2346,15 +2526,22 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       new Promise((resolve, reject) => {
         reader.readEntries(resolve, reject);
       });
-    const loop = async (): Promise<FileSystemEntry[]> => {
-      const batch = await readBatch();
-      if (batch.length === 0) {
-        return collected;
+
+    for (let batchIdx = 0; batchIdx < 100; batchIdx++) {
+      try {
+        const batch = await readBatch();
+        if (!batch || batch.length === 0) {
+          break;
+        }
+        collected.push(...batch);
+        if (collected.length >= MAX_DIR_TRAVERSAL_ENTRIES) {
+          break;
+        }
+      } catch {
+        break;
       }
-      collected.push(...batch);
-      return loop();
-    };
-    return loop();
+    }
+    return collected;
   }
 
   private readFileSystemEntry(
@@ -2370,19 +2557,38 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   }
 
   private async rehydrateDroppedFile(
-    file: DroppedFilePayload
+    file: DroppedFilePayload,
+    signal?: AbortSignal
   ): Promise<File | null> {
     const uri = String(file.uri ?? '').trim();
     const name = String(file.name ?? '').trim();
     if (!uri || !name) {
       return null;
     }
+    if (!this.isAllowedDropUri(uri)) {
+      this.logger.warn(`Rejected dropped file with disallowed URI scheme or origin: ${uri}`);
+      return null;
+    }
     try {
-      const response = await fetch(uri);
+      const fetchSignal = signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+        : AbortSignal.timeout(15000);
+      const response = await fetch(uri, { signal: fetchSignal });
       if (!response.ok) {
         throw new Error(`failed to fetch dropped file: ${response.status}`);
       }
+      const declaredLength = Number(response.headers.get('content-length') ?? 0);
+      if (declaredLength > MAX_DROP_FILE_BYTES) {
+        throw new Error(
+          `dropped file size (${declaredLength}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
+        );
+      }
       const blob = await response.blob();
+      if (blob.size > MAX_DROP_FILE_BYTES) {
+        throw new Error(
+          `dropped file blob size (${blob.size}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
+        );
+      }
       const next = new File([blob], name, {
         type: String(file.mime_type ?? ''),
         lastModified: Number(file.last_modified ?? Date.now())
@@ -2398,6 +2604,88 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     }
   }
 
+  private isAllowedDropUri(uri: string): boolean {
+    return isAllowedDropUri(uri);
+  }
+
+  private cancelInFlightFileSelection(): void {
+    if (this.inFlightSelectionAbortController) {
+      this.inFlightSelectionAbortController.abort();
+      this.inFlightSelectionAbortController = undefined;
+    }
+  }
+
+  private evictExpiredFileHandles(): void {
+    const now = Date.now();
+    for (const [key, handle] of this.fileHandles.entries()) {
+      if (now >= handle.expiresAt) {
+        this.fileHandles.delete(key);
+      }
+    }
+  }
+
+  private allocateFileHandle(files: File[], totalBytes?: number): number | null {
+    this.evictExpiredFileHandles();
+    const bytes = totalBytes ?? files.reduce((acc, f) => acc + (f.size || 0), 0);
+    if (bytes > MAX_FILE_HANDLES_TOTAL_BYTES) {
+      return null;
+    }
+
+    while (this.fileHandles.size >= MAX_ACTIVE_FILE_HANDLES) {
+      const oldestKey = this.fileHandles.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.fileHandles.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
+
+    let currentTotalBytes = 0;
+    for (const h of this.fileHandles.values()) {
+      currentTotalBytes += h.totalBytes;
+    }
+    while (currentTotalBytes + bytes > MAX_FILE_HANDLES_TOTAL_BYTES && this.fileHandles.size > 0) {
+      const oldestKey = this.fileHandles.keys().next().value;
+      if (oldestKey !== undefined) {
+        const removed = this.fileHandles.get(oldestKey);
+        if (removed) {
+          currentTotalBytes -= removed.totalBytes;
+        }
+        this.fileHandles.delete(oldestKey);
+      } else {
+        break;
+      }
+    }
+
+    const handleIndex = this.nextFileHandle++;
+    if (this.nextFileHandle > 1000000000) {
+      this.nextFileHandle = 1;
+    }
+    const token = Symbol(`file_handle_${handleIndex}`);
+    this.fileHandles.set(handleIndex, {
+      token,
+      handleIndex,
+      files: [...files],
+      totalBytes: bytes,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + FILE_HANDLE_TTL_MS
+    });
+    return handleIndex;
+  }
+
+  private clearFileHandles(): void {
+    this.fileHandles.clear();
+  }
+
+  getFileHandlesCount(): number {
+    this.evictExpiredFileHandles();
+    return this.fileHandles.size;
+  }
+
+  getOnlineQueryGeneration(): number {
+    return this.onlineQueryGeneration;
+  }
+
   private attachRelativePath(file: File, relativePath: string): void {
     if (!relativePath || relativePath === file.name) {
       return;
@@ -2411,6 +2699,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private handleQueryOnlines(arg0?: unknown): void {
     const ids = this.normalizeIdList(this.parseIdList(arg0));
     if (ids.length === 0) {
+      this.onlineQueryGeneration++;
+      this.pendingOnlineQueryIds = undefined;
       this.closeOnlineQueryTransport();
       this.emitQueryOnlines([], []);
       return;
@@ -2458,11 +2748,15 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return;
     }
     this.queryOnlinesInFlight = true;
+    const currentGen = this.onlineQueryGeneration;
     try {
       while (this.pendingOnlineQueryIds && this.pendingOnlineQueryIds.length > 0) {
+        if (this.onlineQueryGeneration !== currentGen) {
+          break;
+        }
         const ids = this.pendingOnlineQueryIds;
         this.pendingOnlineQueryIds = undefined;
-        await this.queryOnlineStates(ids);
+        await this.queryOnlineStates(ids, currentGen);
       }
     } finally {
       this.queryOnlinesInFlight = false;
@@ -2477,12 +2771,17 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     });
   }
 
-  private async queryOnlineStates(ids: string[]): Promise<void> {
+  private async queryOnlineStates(ids: string[], expectedGen: number): Promise<void> {
+    if (this.onlineQueryGeneration !== expectedGen) {
+      return;
+    }
     const context = this.buildSessionContext();
     const rendezvousServer =
       this.resolveRendezvousServer() || context.rendezvousServer;
     if (!rendezvousServer) {
-      this.emitQueryOnlines([], ids);
+      if (this.onlineQueryGeneration === expectedGen) {
+        this.emitQueryOnlines([], ids);
+      }
       return;
     }
     const onlineServer = this.deriveOnlineServer(rendezvousServer);
@@ -2495,18 +2794,27 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       context.defaultIdPort
     );
     if (!endpoint) {
-      this.emitQueryOnlines([], ids);
+      if (this.onlineQueryGeneration === expectedGen) {
+        this.emitQueryOnlines([], ids);
+      }
       return;
     }
     const proto = await this.ensureProto();
+    if (this.onlineQueryGeneration !== expectedGen) {
+      return;
+    }
     let transport: WebSocketTransport | undefined;
     let inbox: MessageInbox | undefined;
     try {
       transport = await this.ensureOnlineQueryTransport(
         endpoint,
         proto,
-        context.key
+        context.key,
+        expectedGen
       );
+      if (this.onlineQueryGeneration !== expectedGen) {
+        return;
+      }
       inbox = new MessageInbox(transport);
       const request = {
         onlineRequest: {
@@ -2521,7 +2829,12 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         try {
           data = await inbox.next(3000);
         } catch {
-          continue;
+          // Timeout or transport error: close transport to prevent stale response leak
+          this.closeOnlineQueryTransport();
+          break;
+        }
+        if (this.onlineQueryGeneration !== expectedGen) {
+          return;
         }
         const msg = decodeProtoObject<Record<string, unknown>>(
           proto.rendezvousType,
@@ -2545,7 +2858,9 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           onlineResponse.states,
           ids
         );
-        this.emitQueryOnlines(onlines, offlines);
+        if (this.onlineQueryGeneration === expectedGen) {
+          this.emitQueryOnlines(onlines, offlines);
+        }
         return;
       }
     } catch (err) {
@@ -2554,10 +2869,16 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return;
     } finally {
       inbox?.close();
-      this.scheduleOnlineQueryTransportClose();
+      if (this.onlineQueryGeneration === expectedGen) {
+        this.scheduleOnlineQueryTransportClose();
+      } else {
+        this.closeOnlineQueryTransport();
+      }
     }
 
-    this.emitQueryOnlines([], ids);
+    if (this.onlineQueryGeneration === expectedGen) {
+      this.emitQueryOnlines([], ids);
+    }
   }
 
   private clearOnlineQueryCloseTimer(): void {
@@ -2578,7 +2899,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private closeOnlineQueryTransport(): void {
     this.clearOnlineQueryCloseTimer();
     if (this.onlineQueryTransport) {
-      this.onlineQueryTransport.close();
+      try {
+        this.onlineQueryTransport.close();
+      } catch {
+        // ignore
+      }
       this.onlineQueryTransport = undefined;
     }
     this.onlineQueryEndpoint = '';
@@ -2587,7 +2912,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private async ensureOnlineQueryTransport(
     endpoint: string,
     proto: ProtoRoots,
-    key: string
+    key: string,
+    expectedGen?: number
   ): Promise<WebSocketTransport> {
     this.clearOnlineQueryCloseTimer();
     if (!this.onlineQueryTransport || this.onlineQueryEndpoint !== endpoint) {
@@ -2595,22 +2921,31 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       this.onlineQueryTransport = new WebSocketTransport('online');
       this.onlineQueryEndpoint = endpoint;
     }
-    if (this.onlineQueryTransport.getState() !== 'open') {
-      const handshakeInbox = new MessageInbox(this.onlineQueryTransport);
+    const transport = this.onlineQueryTransport;
+    if (transport.getState() !== 'open') {
+      const handshakeInbox = new MessageInbox(transport);
       try {
-        await this.onlineQueryTransport.connect(endpoint, 5000);
+        await transport.connect(endpoint, 5000);
+        if (expectedGen !== undefined && this.onlineQueryGeneration !== expectedGen) {
+          transport.close();
+          throw new Error('Online query aborted due to generation change during connect');
+        }
         await secureRendezvousTransport(
-          this.onlineQueryTransport,
+          transport,
           handshakeInbox,
           proto,
           key,
           this.logger
         );
+        if (expectedGen !== undefined && this.onlineQueryGeneration !== expectedGen) {
+          transport.close();
+          throw new Error('Online query aborted due to generation change during handshake');
+        }
       } finally {
         handshakeInbox.close();
       }
     }
-    return this.onlineQueryTransport;
+    return transport;
   }
 
   private decodeOnlineStates(
@@ -4165,6 +4500,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       const generation = this.sessionGeneration;
       this.inputSource1PointerInside = false;
       this.releaseInputSource1PressedKeys();
+      this.cancelInFlightFileSelection();
+      this.clearFileHandles();
       this.currentSession?.close();
       this.ephemeralSessionSecrets.clear();
       this.currentSession = new WebSession(
@@ -4609,7 +4946,11 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     }
     this.cleanupHandlersBound = true;
     const cleanup = () => {
+      this.onlineQueryGeneration += 1;
+      this.pendingOnlineQueryIds = undefined;
       this.closeOnlineQueryTransport();
+      this.cancelInFlightFileSelection();
+      this.clearFileHandles();
       this.currentSession?.close();
     };
     window.addEventListener('beforeunload', cleanup);

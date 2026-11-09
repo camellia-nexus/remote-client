@@ -64,11 +64,19 @@ type WorkerSetActiveDisplayMessage = {
   display: number;
   reset?: boolean;
 };
+export type WorkerAckMessage = {
+  type: 'ack';
+  display: number;
+  bytes: number;
+  dropped?: boolean;
+};
+
 type WorkerMessage =
   | WorkerReadyMessage
   | WorkerFrameMessage
   | WorkerNeedRefreshMessage
-  | WorkerLogMessage;
+  | WorkerLogMessage
+  | WorkerAckMessage;
 type WorkerMode = 'module' | 'classic';
 type RenderQualityProfile = {
   dprCapDefault: number;
@@ -248,13 +256,29 @@ const ADAPTIVE_DECREASE_CONFIRMATION_COUNT = 2;
 const BACKPRESSURE_KEYFRAME_TRIGGER_OVERFLOWS = 2;
 const BACKPRESSURE_OVERFLOW_WINDOW_MS = 1800;
 
+export const MAX_WORKER_IN_FLIGHT_FRAMES = 8;
+export const MAX_WORKER_IN_FLIGHT_BYTES = 4 * 1024 * 1024;
+export const MAX_PENDING_SOFTWARE_FRAMES = 8;
+export const MAX_PENDING_SOFTWARE_BYTES = 4 * 1024 * 1024;
+export const MAX_SOFTWARE_DECODER_QUEUE_FRAMES = 4;
+export const MAX_SOFTWARE_DECODER_QUEUE_BYTES = 2 * 1024 * 1024;
+export const MAX_PENDING_WEBCODECS_BYTES = 4 * 1024 * 1024;
+
 export class VideoPipeline {
   private readonly logger = new Logger('video');
+  private generation = 0;
+  private isClosed = false;
+  private workerInFlightFrames = 0;
+  private workerInFlightBytes = 0;
   private readonly decoders = new Map<string, VideoDecoder>();
   private readonly softwareDecoders = new Map<string, Promise<SoftwareDecoder>>();
   private readonly decoderConfigCache = new Map<CodecType, VideoDecoderConfig>();
   private readonly decoderBooting = new Map<string, Promise<void>>();
   private readonly pendingDecodeInputs = new Map<string, DecodeInput[]>();
+  private readonly pendingDecodeBytes = new Map<string, number>();
+  private readonly pendingSoftwareInputs = new Map<string, DecodeInput[]>();
+  private readonly pendingSoftwareBytes = new Map<string, number>();
+  private readonly softwarePumps = new Map<string, Promise<void>>();
   private readonly decoderNeedsKeyFrame = new Map<string, boolean>();
   private readonly decoderLastPts = new Map<string, number>();
   private readonly decoderBackpressureOverflowState = new Map<
@@ -391,7 +415,42 @@ export class VideoPipeline {
     this.syncWorkerRenderPolicy();
   }
 
+  getGeneration(): number {
+    return this.generation;
+  }
+
+  isPipelineClosed(): boolean {
+    return this.isClosed;
+  }
+
+  getWorkerInFlightFrames(): number {
+    return this.workerInFlightFrames;
+  }
+
+  getWorkerInFlightBytes(): number {
+    return this.workerInFlightBytes;
+  }
+
+  getPendingSoftwareFrames(key: string): number {
+    return this.pendingSoftwareInputs.get(key)?.length ?? 0;
+  }
+
+  getPendingSoftwareBytes(key: string): number {
+    return this.pendingSoftwareBytes.get(key) ?? 0;
+  }
+
+  getPendingDecodeFrames(key: string): number {
+    return this.pendingDecodeInputs.get(key)?.length ?? 0;
+  }
+
+  getPendingDecodeBytes(key: string): number {
+    return this.pendingDecodeBytes.get(key) ?? 0;
+  }
+
   decode(input: DecodeInput): void {
+    if (this.isClosed) {
+      return;
+    }
     if (!this.isActiveDisplay(input.display)) {
       return;
     }
@@ -402,7 +461,7 @@ export class VideoPipeline {
       return;
     }
     if (typeof VideoDecoder === 'undefined') {
-      void this.decodeWithSoftwareFallback(input);
+      this.decodeWithSoftwareFallback(input);
       return;
     }
     const key = this.decoderKey(input.display, input.codec);
@@ -415,13 +474,28 @@ export class VideoPipeline {
     if (this.decoderBooting.has(key)) {
       return;
     }
+    const currentGen = this.generation;
     const booting = this.ensureDecoder(input.codec, input.display)
       .then((ready) => {
+        if (this.generation !== currentGen || this.isClosed) {
+          if (ready) {
+            try {
+              ready.close();
+            } catch {
+              // ignore
+            }
+          }
+          this.decoders.delete(key);
+          this.pendingDecodeInputs.delete(key);
+          this.pendingDecodeBytes.delete(key);
+          return;
+        }
         const buffered = this.pendingDecodeInputs.get(key) ?? [];
         this.pendingDecodeInputs.delete(key);
+        this.pendingDecodeBytes.delete(key);
         if (!ready) {
           for (const entry of buffered) {
-            void this.decodeWithSoftwareFallback(entry);
+            this.decodeWithSoftwareFallback(entry);
           }
           return;
         }
@@ -441,6 +515,7 @@ export class VideoPipeline {
       .catch((err) => {
         this.logger.error('Decoder bootstrap failed', err);
         this.pendingDecodeInputs.delete(key);
+        this.pendingDecodeBytes.delete(key);
       })
       .finally(() => {
         this.decoderBooting.delete(key);
@@ -449,11 +524,21 @@ export class VideoPipeline {
   }
 
   close(): void {
+    this.generation++;
+    this.isClosed = true;
     for (const decoder of this.decoders.values()) {
-      decoder.close();
+      try {
+        decoder.close();
+      } catch {
+        // ignore
+      }
     }
     for (const frame of this.pendingFrames.values()) {
-      frame.close();
+      try {
+        frame.close();
+      } catch {
+        // ignore
+      }
     }
     this.decoders.clear();
     for (const decoder of this.softwareDecoders.values()) {
@@ -461,6 +546,10 @@ export class VideoPipeline {
     }
     this.decoderBooting.clear();
     this.pendingDecodeInputs.clear();
+    this.pendingDecodeBytes.clear();
+    this.pendingSoftwareInputs.clear();
+    this.pendingSoftwareBytes.clear();
+    this.softwarePumps.clear();
     this.decoderNeedsKeyFrame.clear();
     this.decoderLastPts.clear();
     this.decoderBackpressureOverflowState.clear();
@@ -519,6 +608,7 @@ export class VideoPipeline {
       this.directSurfaceActiveDisplay = normalized;
     }
     if (changed) {
+      this.generation++;
       this.clearInactiveDisplayState(normalized);
     }
     this.syncWorkerActiveDisplay(false);
@@ -529,6 +619,7 @@ export class VideoPipeline {
     if (normalized === null) {
       return;
     }
+    this.generation++;
     this.activeDisplay = normalized;
     this.directSurfaceActiveDisplay = normalized;
     this.clearInactiveDisplayState(normalized);
@@ -615,34 +706,126 @@ export class VideoPipeline {
     return null;
   }
 
-  private async decodeWithSoftwareFallback(input: DecodeInput): Promise<void> {
+  private decodeWithSoftwareFallback(input: DecodeInput): void {
+    if (this.isClosed) {
+      return;
+    }
+    if (!this.isActiveDisplay(input.display)) {
+      return;
+    }
     const key = this.decoderKey(input.display, input.codec);
     if (this.shouldWaitForKeyframe(key, input.display, input.key)) {
       return;
     }
-    const softwareDecoder = await this.ensureSoftwareDecoder(
-      input.codec,
-      input.display
-    );
-    if (!softwareDecoder) {
-      this.logger.error(`No video decoder available for ${input.codec}`);
-      this.decoderNeedsKeyFrame.set(key, true);
-      this.needRefreshLastSentAt.delete(key);
-      this.requestRefresh(input.display, key);
+    const inputBytes = input.data.byteLength;
+    let queue = this.pendingSoftwareInputs.get(key);
+    if (!queue) {
+      queue = [];
+      this.pendingSoftwareInputs.set(key, queue);
+    }
+    let currentBytes = this.pendingSoftwareBytes.get(key) ?? 0;
+
+    if (input.key) {
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (!queue[i].key) {
+          currentBytes = Math.max(0, currentBytes - queue[i].data.byteLength);
+          queue.splice(i, 1);
+        }
+      }
+    }
+
+    if (
+      queue.length >= MAX_PENDING_SOFTWARE_FRAMES ||
+      currentBytes + inputBytes > MAX_PENDING_SOFTWARE_BYTES
+    ) {
+      if (!input.key) {
+        this.markDisplayBackpressureDrop(input.display);
+        this.requestRefresh(input.display, key);
+        return;
+      }
+      while (
+        queue.length > 0 &&
+        (queue.length >= MAX_PENDING_SOFTWARE_FRAMES ||
+          currentBytes + inputBytes > MAX_PENDING_SOFTWARE_BYTES)
+      ) {
+        const dropped = queue.shift()!;
+        currentBytes = Math.max(0, currentBytes - dropped.data.byteLength);
+      }
+    }
+
+    queue.push(input);
+    currentBytes += inputBytes;
+    this.pendingSoftwareBytes.set(key, currentBytes);
+
+    this.drainSoftwareQueue(key, input.display, input.codec);
+  }
+
+  private drainSoftwareQueue(key: string, display: number, codec: CodecType): void {
+    if (this.softwarePumps.has(key)) {
       return;
     }
-    if (!this.isActiveDisplay(input.display)) {
-      softwareDecoder.close();
-      this.softwareDecoders.delete(key);
-      return;
-    }
-    const ok = await softwareDecoder.decode(input);
-    if (!ok) {
-      this.clearDisplayCodecState(input.display, input.codec);
-      this.decoderNeedsKeyFrame.set(key, true);
-      this.needRefreshLastSentAt.delete(key);
-      this.requestRefresh(input.display, key);
-    }
+    const pumpGen = this.generation;
+    let pump: Promise<void> | undefined;
+    pump = (async () => {
+      try {
+        const softwareDecoder = await this.ensureSoftwareDecoder(codec, display);
+        if (this.generation !== pumpGen || this.isClosed) {
+          if (softwareDecoder) {
+            softwareDecoder.close();
+          }
+          this.pendingSoftwareInputs.delete(key);
+          this.pendingSoftwareBytes.delete(key);
+          return;
+        }
+        if (!softwareDecoder) {
+          this.logger.error(`No video decoder available for ${codec}`);
+          this.pendingSoftwareInputs.delete(key);
+          this.pendingSoftwareBytes.delete(key);
+          this.decoderNeedsKeyFrame.set(key, true);
+          this.needRefreshLastSentAt.delete(key);
+          this.requestRefresh(display, key);
+          return;
+        }
+
+        while (!this.isClosed && this.generation === pumpGen) {
+          const queue = this.pendingSoftwareInputs.get(key);
+          if (!queue || queue.length === 0) {
+            break;
+          }
+          const item = queue.shift()!;
+          const currentBytes = Math.max(
+            0,
+            (this.pendingSoftwareBytes.get(key) ?? 0) - item.data.byteLength
+          );
+          this.pendingSoftwareBytes.set(key, currentBytes);
+
+          if (!this.isActiveDisplay(display)) {
+            softwareDecoder.close();
+            this.softwareDecoders.delete(key);
+            this.pendingSoftwareInputs.delete(key);
+            this.pendingSoftwareBytes.delete(key);
+            return;
+          }
+
+          const ok = await softwareDecoder.decode(item);
+          if (this.generation !== pumpGen || this.isClosed) {
+            return;
+          }
+          if (!ok) {
+            this.clearDisplayCodecState(display, codec);
+            this.decoderNeedsKeyFrame.set(key, true);
+            this.needRefreshLastSentAt.delete(key);
+            this.requestRefresh(display, key);
+            break;
+          }
+        }
+      } finally {
+        if (pump && this.softwarePumps.get(key) === pump) {
+          this.softwarePumps.delete(key);
+        }
+      }
+    })();
+    this.softwarePumps.set(key, pump);
   }
 
   private async ensureSoftwareDecoder(
@@ -1662,24 +1845,45 @@ export class VideoPipeline {
     ) {
       return false;
     }
+    const inputBytes = input.data.byteLength;
+    if (
+      this.workerInFlightFrames >= MAX_WORKER_IN_FLIGHT_FRAMES ||
+      this.workerInFlightBytes + inputBytes > MAX_WORKER_IN_FLIGHT_BYTES
+    ) {
+      if (!input.key) {
+        this.markDisplayBackpressureDrop(input.display);
+        const key = this.decoderKey(input.display, input.codec);
+        this.requestRefresh(input.display, key);
+        return true;
+      }
+    }
     const payload = this.toTransferablePayload(input.data);
-    this.worker.postMessage(
-      {
-        type: 'decode',
-        codec: input.codec,
-        display: input.display,
-        key: input.key,
-        pts:
-          typeof input.pts === 'string'
-            ? Number(input.pts)
-            : Number.isFinite(input.pts)
-            ? Number(input.pts)
-            : 0,
-        data: payload
-      },
-      [payload.buffer]
-    );
-    return true;
+    this.workerInFlightFrames++;
+    this.workerInFlightBytes += payload.byteLength;
+    try {
+      this.worker.postMessage(
+        {
+          type: 'decode',
+          codec: input.codec,
+          display: input.display,
+          key: input.key,
+          pts:
+            typeof input.pts === 'string'
+              ? Number(input.pts)
+              : Number.isFinite(input.pts)
+              ? Number(input.pts)
+              : 0,
+          data: payload
+        },
+        [payload.buffer]
+      );
+      return true;
+    } catch (err) {
+      this.workerInFlightFrames = Math.max(0, this.workerInFlightFrames - 1);
+      this.workerInFlightBytes = Math.max(0, this.workerInFlightBytes - payload.byteLength);
+      this.logger.error('Failed to post decode message to worker', err);
+      return false;
+    }
   }
 
   private toTransferablePayload(data: Uint8Array): Uint8Array {
@@ -1933,6 +2137,14 @@ export class VideoPipeline {
       }
       return;
     }
+    if (message.type === 'ack') {
+      this.workerInFlightFrames = Math.max(0, this.workerInFlightFrames - 1);
+      this.workerInFlightBytes = Math.max(
+        0,
+        this.workerInFlightBytes - (message.bytes || 0)
+      );
+      return;
+    }
     if (message.type === 'log') {
       if (
         message.message.startsWith('Worker decode failed') ||
@@ -1964,6 +2176,8 @@ export class VideoPipeline {
     this.workerReady = false;
     this.workerSurfaceAttached = false;
     this.directSurfaceUseWorker = false;
+    this.workerInFlightFrames = 0;
+    this.workerInFlightBytes = 0;
     this.workerDecodeFailureWindowStart = 0;
     this.workerDecodeFailureCount = 0;
   }
@@ -2008,6 +2222,26 @@ export class VideoPipeline {
         this.pendingDecodeInputs.delete(key);
       }
     }
+    for (const key of [...this.pendingDecodeBytes.keys()]) {
+      if (key.startsWith(prefix) && key !== keepKey) {
+        this.pendingDecodeBytes.delete(key);
+      }
+    }
+    for (const key of [...this.pendingSoftwareInputs.keys()]) {
+      if (key.startsWith(prefix) && key !== keepKey) {
+        this.pendingSoftwareInputs.delete(key);
+      }
+    }
+    for (const key of [...this.pendingSoftwareBytes.keys()]) {
+      if (key.startsWith(prefix) && key !== keepKey) {
+        this.pendingSoftwareBytes.delete(key);
+      }
+    }
+    for (const key of [...this.softwarePumps.keys()]) {
+      if (key.startsWith(prefix) && key !== keepKey) {
+        this.softwarePumps.delete(key);
+      }
+    }
     for (const key of [...this.decoderNeedsKeyFrame.keys()]) {
       if (key.startsWith(prefix) && key !== keepKey) {
         this.decoderNeedsKeyFrame.delete(key);
@@ -2031,18 +2265,37 @@ export class VideoPipeline {
   }
 
   private enqueuePendingDecodeInput(key: string, input: DecodeInput): void {
-    const queue = this.pendingDecodeInputs.get(key) ?? [];
+    let queue = this.pendingDecodeInputs.get(key);
+    if (!queue) {
+      queue = [];
+      this.pendingDecodeInputs.set(key, queue);
+    }
+    let bytes = this.pendingDecodeBytes.get(key) ?? 0;
+    const inputBytes = input.data.byteLength;
+
     if (input.key) {
       queue.length = 0;
+      bytes = 0;
       queue.push(input);
-      this.pendingDecodeInputs.set(key, queue);
+      bytes += inputBytes;
+      this.pendingDecodeBytes.set(key, bytes);
       return;
     }
-    if (queue.length >= 8) {
-      queue.shift();
+
+    while (
+      queue.length >= 8 ||
+      bytes + inputBytes > MAX_PENDING_WEBCODECS_BYTES
+    ) {
+      const dropped = queue.shift();
+      if (dropped) {
+        bytes = Math.max(0, bytes - dropped.data.byteLength);
+      } else {
+        break;
+      }
     }
     queue.push(input);
-    this.pendingDecodeInputs.set(key, queue);
+    bytes += inputBytes;
+    this.pendingDecodeBytes.set(key, bytes);
   }
 
   private decodeWithDecoder(decoder: VideoDecoder, input: DecodeInput): void {
@@ -2595,6 +2848,26 @@ export class VideoPipeline {
         this.pendingDecodeInputs.delete(key);
       }
     }
+    for (const key of [...this.pendingDecodeBytes.keys()]) {
+      if (!key.startsWith(prefix)) {
+        this.pendingDecodeBytes.delete(key);
+      }
+    }
+    for (const key of [...this.pendingSoftwareInputs.keys()]) {
+      if (!key.startsWith(prefix)) {
+        this.pendingSoftwareInputs.delete(key);
+      }
+    }
+    for (const key of [...this.pendingSoftwareBytes.keys()]) {
+      if (!key.startsWith(prefix)) {
+        this.pendingSoftwareBytes.delete(key);
+      }
+    }
+    for (const key of [...this.softwarePumps.keys()]) {
+      if (!key.startsWith(prefix)) {
+        this.softwarePumps.delete(key);
+      }
+    }
     for (const key of [...this.decoderNeedsKeyFrame.keys()]) {
       if (!key.startsWith(prefix)) {
         this.decoderNeedsKeyFrame.delete(key);
@@ -2698,7 +2971,7 @@ export class VideoPipeline {
   }
 }
 
-class SoftwareDecoder {
+export class SoftwareDecoder {
   private readonly display: number;
   private readonly module: OgvDecoderModule;
   private readonly logger: Logger;
@@ -2712,6 +2985,9 @@ class SoftwareDecoder {
   ) => void;
   private readonly ready: Promise<void>;
   private queue = Promise.resolve(true);
+  private closed = false;
+  private queueFrames = 0;
+  private queueBytes = 0;
 
   constructor(
     display: number,
@@ -2735,22 +3011,78 @@ class SoftwareDecoder {
     });
   }
 
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  getQueueFrames(): number {
+    return this.queueFrames;
+  }
+
+  getQueueBytes(): number {
+    return this.queueBytes;
+  }
+
   close(): void {
-    this.module.close();
+    this.closed = true;
+    this.queueFrames = 0;
+    this.queueBytes = 0;
+    try {
+      this.module.close();
+    } catch {
+      // ignore
+    }
   }
 
   async decode(input: DecodeInput): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
     await this.ready;
-    this.queue = this.queue.then(() => this.decodeFrame(input));
+    if (this.closed) {
+      return false;
+    }
+    const byteLength = input.data.byteLength;
+    if (
+      this.queueFrames >= MAX_SOFTWARE_DECODER_QUEUE_FRAMES ||
+      this.queueBytes + byteLength > MAX_SOFTWARE_DECODER_QUEUE_BYTES
+    ) {
+      if (!input.key) {
+        return false;
+      }
+    }
+    this.queueFrames++;
+    this.queueBytes += byteLength;
+    this.queue = this.queue.then(async () => {
+      try {
+        if (this.closed) {
+          return false;
+        }
+        return await this.decodeFrame(input);
+      } finally {
+        this.queueFrames = Math.max(0, this.queueFrames - 1);
+        this.queueBytes = Math.max(0, this.queueBytes - byteLength);
+      }
+    });
     return this.queue;
   }
 
   private async decodeFrame(input: DecodeInput): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
     const ok = await new Promise<boolean>((resolve) => {
-      this.module.processFrame(copyToArrayBuffer(input.data), (success) =>
-        resolve(success)
-      );
+      try {
+        this.module.processFrame(copyToArrayBuffer(input.data), (success) =>
+          resolve(success)
+        );
+      } catch {
+        resolve(false);
+      }
     });
+    if (this.closed) {
+      return false;
+    }
     if (!ok) {
       if (input.key) {
         this.logger.warn(`Software ${input.codec} decoder rejected a key frame`);
