@@ -262,6 +262,7 @@ export const MAX_PENDING_SOFTWARE_FRAMES = 8;
 export const MAX_PENDING_SOFTWARE_BYTES = 4 * 1024 * 1024;
 export const MAX_SOFTWARE_DECODER_QUEUE_FRAMES = 4;
 export const MAX_SOFTWARE_DECODER_QUEUE_BYTES = 2 * 1024 * 1024;
+export const MAX_PENDING_WEBCODECS_FRAMES = 8;
 export const MAX_PENDING_WEBCODECS_BYTES = 4 * 1024 * 1024;
 
 export class VideoPipeline {
@@ -726,12 +727,8 @@ export class VideoPipeline {
     let currentBytes = this.pendingSoftwareBytes.get(key) ?? 0;
 
     if (input.key) {
-      for (let i = queue.length - 1; i >= 0; i--) {
-        if (!queue[i].key) {
-          currentBytes = Math.max(0, currentBytes - queue[i].data.byteLength);
-          queue.splice(i, 1);
-        }
-      }
+      queue.length = 0;
+      currentBytes = 0;
     }
 
     if (
@@ -2131,9 +2128,9 @@ export class VideoPipeline {
     if (message.type === 'need_refresh') {
       if (this.onNeedRefresh && this.isActiveDisplay(message.display)) {
         const display = Number(message.display);
-        this.onNeedRefresh(
-          Number.isFinite(display) && display >= 0 ? Math.floor(display) : 0
-        );
+        const normDisplay =
+          Number.isFinite(display) && display >= 0 ? Math.floor(display) : 0;
+        this.requestRefresh(normDisplay, `worker:${normDisplay}`);
       }
       return;
     }
@@ -2282,15 +2279,25 @@ export class VideoPipeline {
       return;
     }
 
-    while (
-      queue.length >= 8 ||
+    if (
+      queue.length >= MAX_PENDING_WEBCODECS_FRAMES ||
       bytes + inputBytes > MAX_PENDING_WEBCODECS_BYTES
     ) {
-      const dropped = queue.shift();
-      if (dropped) {
-        bytes = Math.max(0, bytes - dropped.data.byteLength);
-      } else {
-        break;
+      if (queue.length > 0 && queue[0].key) {
+        this.markDisplayBackpressureDrop(input.display);
+        this.requestRefresh(input.display, key);
+        return;
+      }
+      while (
+        queue.length >= MAX_PENDING_WEBCODECS_FRAMES ||
+        bytes + inputBytes > MAX_PENDING_WEBCODECS_BYTES
+      ) {
+        const dropped = queue.shift();
+        if (dropped) {
+          bytes = Math.max(0, bytes - dropped.data.byteLength);
+        } else {
+          break;
+        }
       }
     }
     queue.push(input);
@@ -3053,7 +3060,7 @@ export class SoftwareDecoder {
     }
     this.queueFrames++;
     this.queueBytes += byteLength;
-    this.queue = this.queue.then(async () => {
+    this.queue = this.queue.catch(() => false).then(async () => {
       try {
         if (this.closed) {
           return false;

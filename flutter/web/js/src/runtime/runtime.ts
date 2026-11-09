@@ -118,16 +118,19 @@ export function isAllowedDropUri(uri: string, baseHref?: string): boolean {
         ? window.location.href
         : 'http://localhost');
     const parsed = new URL(uri, base);
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : new URL(base).origin;
     if (parsed.protocol === 'blob:') {
+      if (parsed.origin !== 'null' && parsed.origin !== origin) {
+        return false;
+      }
       return true;
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return false;
     }
-    const origin =
-      typeof window !== 'undefined' && window.location?.origin
-        ? window.location.origin
-        : new URL(base).origin;
     if (origin !== 'null' && parsed.origin === origin) {
       return true;
     }
@@ -171,6 +174,16 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly ephemeralSessionSecrets = new Map<string, string>();
   private sessionGeneration = 0;
   private onlineQueryGeneration = 0;
+  private onlineQueryToken = 0;
+  private activeOnlineQueryToken = 0;
+
+  getOnlineQueryGeneration(): number {
+    return this.onlineQueryGeneration;
+  }
+
+  getActiveOnlineQueryToken(): number {
+    return this.activeOnlineQueryToken;
+  }
 
   constructor() {
     this.config = loadConfig();
@@ -215,6 +228,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       case 'close':
         this.sessionGeneration += 1;
         this.onlineQueryGeneration += 1;
+        this.activeOnlineQueryToken = ++this.onlineQueryToken;
         this.pendingOnlineQueryIds = undefined;
         this.inputSource1PointerInside = false;
         this.releaseInputSource1PressedKeys();
@@ -2300,17 +2314,19 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       const ready: File[] = [];
       let totalBytes = 0;
       let cursor = 0;
+      let batchBudgetExceeded = false;
 
       const worker = async (): Promise<void> => {
-        while (cursor < descriptors.length && !signal.aborted) {
+        while (cursor < descriptors.length && !signal.aborted && !batchBudgetExceeded) {
           const idx = cursor++;
           const desc = descriptors[idx];
           const file = await this.rehydrateDroppedFile(desc, signal);
-          if (signal.aborted) {
+          if (signal.aborted || batchBudgetExceeded) {
             return;
           }
           if (file) {
             if (totalBytes + file.size > MAX_DROP_BATCH_BYTES) {
+              batchBudgetExceeded = true;
               this.logger.warn(
                 `Dropped files cumulative batch size exceeds limit (${MAX_DROP_BATCH_BYTES})`
               );
@@ -2326,7 +2342,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       const workers = Array.from({ length: concurrency }, () => worker());
       await Promise.all(workers);
 
-      if (signal.aborted || ready.length === 0) {
+      if (signal.aborted || ready.length === 0 || !this.canTransferFiles()) {
         return;
       }
 
@@ -2358,6 +2374,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       },
       { once: true }
     );
+    input.addEventListener(
+      'cancel',
+      () => {
+        this.cancelInFlightFileSelection();
+      },
+      { once: true }
+    );
     input.click();
   }
 
@@ -2381,7 +2404,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         }
         emptyDirs = selected.emptyDirs;
       }
-      if (signal.aborted) {
+      if (signal.aborted || !this.canTransferFiles()) {
         return;
       }
       if (emptyDirs.length > 0) {
@@ -2436,6 +2459,9 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       let total = 0;
       const boundedFiles: File[] = [];
       for (const f of inputFiles) {
+        if (signal?.aborted) {
+          return { files: [], emptyDirs: [] };
+        }
         if (
           boundedFiles.length >= MAX_DIR_TRAVERSAL_ENTRIES ||
           total + f.size > MAX_DIR_TRAVERSAL_BYTES
@@ -2450,16 +2476,48 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
 
     const files: File[] = [];
     const emptyDirs: string[] = [];
-    let totalBytes = 0;
-    let entryCount = 0;
+    const stats = { entryCount: 0, totalBytes: 0 };
+    const visitedPaths = new Set<string>();
 
-    const queue: Array<{ entry: FileSystemEntry; parentPath: string; depth: number }> =
-      rootEntries.map((entry) => ({ entry, parentPath: '', depth: 0 }));
+    for (const entry of rootEntries) {
+      if (
+        signal?.aborted ||
+        stats.entryCount >= MAX_DIR_TRAVERSAL_ENTRIES ||
+        stats.totalBytes >= MAX_DIR_TRAVERSAL_BYTES
+      ) {
+        break;
+      }
+      await this.walkFileSystemEntry(
+        entry,
+        '',
+        files,
+        emptyDirs,
+        signal,
+        stats,
+        visitedPaths
+      );
+    }
+
+    return { files, emptyDirs };
+  }
+
+  private async walkFileSystemEntry(
+    rootEntry: FileSystemEntry,
+    initialParentPath: string,
+    files: File[],
+    emptyDirs: string[],
+    signal?: AbortSignal,
+    stats: { entryCount: number; totalBytes: number } = { entryCount: 0, totalBytes: 0 },
+    visitedPaths: Set<string> = new Set<string>()
+  ): Promise<void> {
+    const queue: Array<{ entry: FileSystemEntry; parentPath: string; depth: number }> = [
+      { entry: rootEntry, parentPath: initialParentPath, depth: 0 }
+    ];
 
     while (queue.length > 0 && !signal?.aborted) {
       const item = queue.shift()!;
-      entryCount++;
-      if (entryCount > MAX_DIR_TRAVERSAL_ENTRIES) {
+      stats.entryCount++;
+      if (stats.entryCount > MAX_DIR_TRAVERSAL_ENTRIES) {
         this.logger.warn(
           `Directory traversal exceeded maximum entries (${MAX_DIR_TRAVERSAL_ENTRIES})`
         );
@@ -2470,8 +2528,17 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         ? `${item.parentPath}/${item.entry.name}`
         : item.entry.name;
 
+      const canonicalKey = (item.entry as any).fullPath || currentPath;
+      if (visitedPaths.has(canonicalKey)) {
+        this.logger.warn(`Directory traversal detected cycle or duplicate entry at ${canonicalKey}`);
+        continue;
+      }
+      visitedPaths.add(canonicalKey);
+
       if (currentPath.length > MAX_DIR_PATH_LENGTH) {
-        this.logger.warn(`Directory traversal skipped path exceeding max length: ${currentPath.slice(0, 50)}...`);
+        this.logger.warn(
+          `Directory traversal skipped path exceeding max length: ${currentPath.slice(0, 50)}...`
+        );
         continue;
       }
 
@@ -2481,14 +2548,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
             item.entry as FileSystemFileEntry,
             currentPath
           );
-          if (totalBytes + file.size > MAX_DIR_TRAVERSAL_BYTES) {
+          if (stats.totalBytes + file.size > MAX_DIR_TRAVERSAL_BYTES) {
             this.logger.warn(
               `Directory traversal exceeded max total bytes (${MAX_DIR_TRAVERSAL_BYTES})`
             );
             break;
           }
           files.push(file);
-          totalBytes += file.size;
+          stats.totalBytes += file.size;
         } catch (err) {
           this.logger.warn(`Failed reading file entry: ${currentPath}`, err);
         }
@@ -2513,15 +2580,19 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         }
       }
     }
-
-    return { files, emptyDirs };
   }
 
   private async readAllDirectoryEntries(
     entry: FileSystemDirectoryEntry
   ): Promise<FileSystemEntry[]> {
-    const reader = entry.createReader();
+    let reader: FileSystemDirectoryReader;
+    try {
+      reader = entry.createReader();
+    } catch {
+      return [];
+    }
     const collected: FileSystemEntry[] = [];
+    const seenNames = new Set<string>();
     const readBatch = (): Promise<FileSystemEntry[]> =>
       new Promise((resolve, reject) => {
         reader.readEntries(resolve, reject);
@@ -2533,8 +2604,15 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         if (!batch || batch.length === 0) {
           break;
         }
-        collected.push(...batch);
-        if (collected.length >= MAX_DIR_TRAVERSAL_ENTRIES) {
+        let addedInBatch = 0;
+        for (const item of batch) {
+          if (item && item.name && !seenNames.has(item.name)) {
+            seenNames.add(item.name);
+            collected.push(item);
+            addedInBatch++;
+          }
+        }
+        if (addedInBatch === 0 || collected.length >= MAX_DIR_TRAVERSAL_ENTRIES) {
           break;
         }
       } catch {
@@ -2570,9 +2648,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       return null;
     }
     try {
-      const fetchSignal = signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
-        : AbortSignal.timeout(15000);
+      let fetchSignal: AbortSignal;
+      if (typeof AbortSignal !== 'undefined' && typeof (AbortSignal as any).any === 'function') {
+        fetchSignal = signal
+          ? (AbortSignal as any).any([signal, AbortSignal.timeout(15000)])
+          : AbortSignal.timeout(15000);
+      } else {
+        fetchSignal = signal ?? new AbortController().signal;
+      }
       const response = await fetch(uri, { signal: fetchSignal });
       if (!response.ok) {
         throw new Error(`failed to fetch dropped file: ${response.status}`);
@@ -2583,11 +2666,39 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           `dropped file size (${declaredLength}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
         );
       }
-      const blob = await response.blob();
-      if (blob.size > MAX_DROP_FILE_BYTES) {
-        throw new Error(
-          `dropped file blob size (${blob.size}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
-        );
+      let blob: Blob;
+      if (response.body && typeof (response.body as any).getReader === 'function') {
+        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            if (value) {
+              received += value.byteLength;
+              if (received > MAX_DROP_FILE_BYTES) {
+                await reader.cancel();
+                throw new Error(
+                  `dropped file stream size (${received}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
+                );
+              }
+              chunks.push(value);
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        blob = new Blob(chunks as BlobPart[], { type: String(file.mime_type ?? '') });
+      } else {
+        blob = await response.blob();
+        if (blob.size > MAX_DROP_FILE_BYTES) {
+          throw new Error(
+            `dropped file blob size (${blob.size}) exceeds single-file limit (${MAX_DROP_FILE_BYTES})`
+          );
+        }
       }
       const next = new File([blob], name, {
         type: String(file.mime_type ?? ''),
@@ -2682,10 +2793,6 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     return this.fileHandles.size;
   }
 
-  getOnlineQueryGeneration(): number {
-    return this.onlineQueryGeneration;
-  }
-
   private attachRelativePath(file: File, relativePath: string): void {
     if (!relativePath || relativePath === file.name) {
       return;
@@ -2698,6 +2805,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
 
   private handleQueryOnlines(arg0?: unknown): void {
     const ids = this.normalizeIdList(this.parseIdList(arg0));
+    const token = ++this.onlineQueryToken;
+    this.activeOnlineQueryToken = token;
     if (ids.length === 0) {
       this.onlineQueryGeneration++;
       this.pendingOnlineQueryIds = undefined;
@@ -2751,12 +2860,16 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     const currentGen = this.onlineQueryGeneration;
     try {
       while (this.pendingOnlineQueryIds && this.pendingOnlineQueryIds.length > 0) {
-        if (this.onlineQueryGeneration !== currentGen) {
+        const queryToken = this.activeOnlineQueryToken;
+        if (
+          this.onlineQueryGeneration !== currentGen ||
+          this.activeOnlineQueryToken !== queryToken
+        ) {
           break;
         }
         const ids = this.pendingOnlineQueryIds;
         this.pendingOnlineQueryIds = undefined;
-        await this.queryOnlineStates(ids, currentGen);
+        await this.queryOnlineStates(ids, currentGen, queryToken);
       }
     } finally {
       this.queryOnlinesInFlight = false;
@@ -2771,15 +2884,25 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     });
   }
 
-  private async queryOnlineStates(ids: string[], expectedGen: number): Promise<void> {
-    if (this.onlineQueryGeneration !== expectedGen) {
+  private async queryOnlineStates(
+    ids: string[],
+    expectedGen: number,
+    queryToken: number
+  ): Promise<void> {
+    if (
+      this.onlineQueryGeneration !== expectedGen ||
+      this.activeOnlineQueryToken !== queryToken
+    ) {
       return;
     }
     const context = this.buildSessionContext();
     const rendezvousServer =
       this.resolveRendezvousServer() || context.rendezvousServer;
     if (!rendezvousServer) {
-      if (this.onlineQueryGeneration === expectedGen) {
+      if (
+        this.onlineQueryGeneration === expectedGen &&
+        this.activeOnlineQueryToken === queryToken
+      ) {
         this.emitQueryOnlines([], ids);
       }
       return;
@@ -2794,13 +2917,19 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       context.defaultIdPort
     );
     if (!endpoint) {
-      if (this.onlineQueryGeneration === expectedGen) {
+      if (
+        this.onlineQueryGeneration === expectedGen &&
+        this.activeOnlineQueryToken === queryToken
+      ) {
         this.emitQueryOnlines([], ids);
       }
       return;
     }
     const proto = await this.ensureProto();
-    if (this.onlineQueryGeneration !== expectedGen) {
+    if (
+      this.onlineQueryGeneration !== expectedGen ||
+      this.activeOnlineQueryToken !== queryToken
+    ) {
       return;
     }
     let transport: WebSocketTransport | undefined;
@@ -2812,7 +2941,10 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         context.key,
         expectedGen
       );
-      if (this.onlineQueryGeneration !== expectedGen) {
+      if (
+        this.onlineQueryGeneration !== expectedGen ||
+        this.activeOnlineQueryToken !== queryToken
+      ) {
         return;
       }
       inbox = new MessageInbox(transport);
@@ -2833,7 +2965,10 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           this.closeOnlineQueryTransport();
           break;
         }
-        if (this.onlineQueryGeneration !== expectedGen) {
+        if (
+          this.onlineQueryGeneration !== expectedGen ||
+          this.activeOnlineQueryToken !== queryToken
+        ) {
           return;
         }
         const msg = decodeProtoObject<Record<string, unknown>>(
@@ -2858,7 +2993,10 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           onlineResponse.states,
           ids
         );
-        if (this.onlineQueryGeneration === expectedGen) {
+        if (
+          this.onlineQueryGeneration === expectedGen &&
+          this.activeOnlineQueryToken === queryToken
+        ) {
           this.emitQueryOnlines(onlines, offlines);
         }
         return;
@@ -2876,7 +3014,10 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       }
     }
 
-    if (this.onlineQueryGeneration === expectedGen) {
+    if (
+      this.onlineQueryGeneration === expectedGen &&
+      this.activeOnlineQueryToken === queryToken
+    ) {
       this.emitQueryOnlines([], ids);
     }
   }
@@ -3368,7 +3509,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     this.userDefaultOptionDefaults.set('follow_remote_window', 'N');
     this.userDefaultOptionDefaults.set('zoom-cursor', 'N');
     this.userDefaultOptionDefaults.set('show_quality_monitor', 'N');
-    this.userDefaultOptionDefaults.set('disable_audio', 'N');
+    // COMPAT-002: Web client explicitly does not support audio playback; default disable_audio to Y
+    this.userDefaultOptionDefaults.set('disable_audio', 'Y');
     this.userDefaultOptionDefaults.set('enable-file-copy-paste', 'Y');
     this.userDefaultOptionDefaults.set('disable_clipboard', 'N');
     this.userDefaultOptionDefaults.set('lock_after_session_end', 'N');
@@ -4947,6 +5089,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     this.cleanupHandlersBound = true;
     const cleanup = () => {
       this.onlineQueryGeneration += 1;
+      this.activeOnlineQueryToken = ++this.onlineQueryToken;
       this.pendingOnlineQueryIds = undefined;
       this.closeOnlineQueryTransport();
       this.cancelInFlightFileSelection();

@@ -266,11 +266,11 @@ function enqueueWorkerDecode(message: DecodeMessage): void {
     return;
   }
 
-  // When a keyframe arrives, drop any queued deltas for this display to avoid stale decoding
+  // When a keyframe arrives, drop all older queued frames (deltas and obsolete keyframes) for this display
   if (message.key) {
     for (let i = workerDecodeQueue.length - 1; i >= 0; i--) {
       const pending = workerDecodeQueue[i];
-      if (pending.display === message.display && !pending.key) {
+      if (pending.display === message.display) {
         workerDecodeQueue.splice(i, 1);
         workerDecodeQueueBytes = Math.max(0, workerDecodeQueueBytes - pending.data.byteLength);
         postAck(pending.display, pending.data.byteLength, true);
@@ -278,8 +278,8 @@ function enqueueWorkerDecode(message: DecodeMessage): void {
     }
   }
 
-  // Enforce queue capacity bounds
-  if (
+  // Enforce queue capacity bounds strictly
+  while (
     workerDecodeQueue.length >= MAX_WORKER_QUEUE_FRAMES ||
     workerDecodeQueueBytes + byteLength > MAX_WORKER_QUEUE_BYTES
   ) {
@@ -289,6 +289,18 @@ function enqueueWorkerDecode(message: DecodeMessage): void {
       requestRefresh(message.display, key);
       postAck(message.display, byteLength, true);
       return;
+    }
+    // For keyframes under queue pressure, drop the oldest queued non-key frame or oldest frame to enforce bounds
+    let droppedIdx = workerDecodeQueue.findIndex((f) => !f.key);
+    if (droppedIdx < 0) {
+      droppedIdx = 0;
+    }
+    const dropped = workerDecodeQueue.splice(droppedIdx, 1)[0];
+    if (dropped) {
+      workerDecodeQueueBytes = Math.max(0, workerDecodeQueueBytes - dropped.data.byteLength);
+      postAck(dropped.display, dropped.data.byteLength, true);
+    } else {
+      break;
     }
   }
 

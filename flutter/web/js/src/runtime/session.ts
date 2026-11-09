@@ -416,6 +416,10 @@ export class WebSession {
     }
     this.detachTransportMessageHandler();
     this.context = context;
+    if (this.context?.policy) {
+      // COMPAT-002: Web client explicitly declares audio unsupported upon initial connect
+      this.context.policy.disableAudio = true;
+    }
     this.video.setRenderQualityPreference(
       normalizeRenderQualityPreference(context.imageQuality)
     );
@@ -1595,7 +1599,6 @@ export class WebSession {
     }
     if (msg.audioFrame) {
       // COMPAT-002: Web client explicitly does not support audio playback; safely discard stray AudioFrame
-      return;
     }
     if (msg.videoFrame) {
       this.handleVideoFrame(msg.videoFrame as Record<string, unknown>);
