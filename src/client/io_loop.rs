@@ -1169,14 +1169,23 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.elevation_requested = true;
             }
             Data::NewVoiceCall => {
-                let msg = new_voice_call_request(true);
-                // Save the voice call request timestamp for the further validation.
-                self.voice_call_request_timestamp = Some(
-                    NonZeroI64::new(msg.voice_call_request().req_timestamp)
-                        .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
-                );
-                allow_err!(peer.send(&msg).await);
-                self.handler.on_voice_call_waiting();
+                #[cfg(target_os = "ios")]
+                {
+                    log::warn!("Voice call request blocked on iOS (not supported)");
+                    self.handler
+                        .on_voice_call_closed("Voice call is not supported on iOS");
+                }
+                #[cfg(not(target_os = "ios"))]
+                {
+                    let msg = new_voice_call_request(true);
+                    // Save the voice call request timestamp for the further validation.
+                    self.voice_call_request_timestamp = Some(
+                        NonZeroI64::new(msg.voice_call_request().req_timestamp)
+                            .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
+                    );
+                    allow_err!(peer.send(&msg).await);
+                    self.handler.on_voice_call_waiting();
+                }
             }
             Data::CloseVoiceCall => {
                 self.stop_voice_call();
@@ -2424,7 +2433,21 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 Some(message::Union::VoiceCallRequest(request)) => {
                     if request.is_connect {
-                        // TODO: maybe we will do a voice call from the peer in the future.
+                        #[cfg(target_os = "ios")]
+                        {
+                            log::warn!(
+                                "Rejecting incoming voice call on unsupported platform (iOS)"
+                            );
+                            let msg = crate::client::new_voice_call_response(
+                                request.req_timestamp,
+                                false,
+                            );
+                            allow_err!(peer.send(&msg).await);
+                        }
+                        #[cfg(not(target_os = "ios"))]
+                        {
+                            // TODO: maybe we will do a voice call from the peer in the future.
+                        }
                     } else {
                         log::debug!("The remote has requested to close the voice call");
                         self.stop_voice_call();
@@ -2440,8 +2463,19 @@ impl<T: InvokeUiSession> Remote<T> {
                             if response.accepted {
                                 // The peer accepted the voice call.
                                 self.stop_voice_call();
-                                self.handler.on_voice_call_started();
-                                self.voice_call_worker = self.start_voice_call();
+                                if let Some(worker) = self.start_voice_call() {
+                                    self.voice_call_worker = Some(worker);
+                                    self.handler.on_voice_call_started();
+                                } else {
+                                    log::warn!(
+                                        "Voice call accepted by peer, but local audio capture failed or is unsupported"
+                                    );
+                                    let msg = new_voice_call_request(false);
+                                    allow_err!(peer.send(&msg).await);
+                                    self.handler.on_voice_call_closed(
+                                        "Voice call is not supported on this platform",
+                                    );
+                                }
                             } else {
                                 // The peer refused the voice call.
                                 self.stop_voice_call();

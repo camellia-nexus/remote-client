@@ -650,13 +650,23 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           future: gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
           builder: (context, snapshot) {
             final supportsVoice = snapshot.data == true;
-            return _RemoteDockButton(
-              icon: Icons.forum_outlined,
-              label: translate('Chat'),
-              onPressed: () => isAndroid && supportsVoice
-                  ? showChatOptions(widget.id)
-                  : onPressedTextChat(widget.id),
-            );
+            return Obx(() {
+              final isInVoice = [
+                VoiceCallStatus.waitingForResponse,
+                VoiceCallStatus.connected,
+              ].contains(gFFI.chatModel.voiceCallStatus.value);
+              return _RemoteDockButton(
+                icon: Icons.forum_outlined,
+                label: translate('Chat'),
+                onPressed: () {
+                  if ((isAndroid && supportsVoice) || isInVoice) {
+                    showChatOptions(widget.id);
+                  } else {
+                    onPressedTextChat(widget.id);
+                  }
+                },
+              );
+            });
           },
         ),
       _RemoteDockButton(
@@ -894,6 +904,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       onPressed: onPressed,
     );
 
+    final supportsVoice =
+        isAndroid &&
+        (await gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL") ==
+            true);
+    if (!mounted) return;
+
     final isInVoice = [
       VoiceCallStatus.waitingForResponse,
       VoiceCallStatus.connected,
@@ -904,27 +920,28 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         Icon(Icons.message, color: MyTheme.accent),
         () => onPressedTextChat(widget.id),
       ),
-      isInVoice
-          ? makeTextMenu(
-              'End voice call',
-              SvgPicture.asset(
-                'assets/call_wait.svg',
-                colorFilter: ColorFilter.mode(
-                  Colors.redAccent,
-                  BlendMode.srcIn,
-                ),
-              ),
-              onPressEndVoiceCall,
-              labelStyle: TextStyle(color: Colors.redAccent),
-            )
-          : makeTextMenu(
-              'Voice call',
-              SvgPicture.asset(
-                'assets/call_wait.svg',
-                colorFilter: ColorFilter.mode(MyTheme.accent, BlendMode.srcIn),
-              ),
-              onPressVoiceCall,
+      if (isInVoice)
+        makeTextMenu(
+          'End voice call',
+          SvgPicture.asset(
+            'assets/call_wait.svg',
+            colorFilter: ColorFilter.mode(
+              Colors.redAccent,
+              BlendMode.srcIn,
             ),
+          ),
+          onPressEndVoiceCall,
+          labelStyle: TextStyle(color: Colors.redAccent),
+        )
+      else if (isAndroid && supportsVoice)
+        makeTextMenu(
+          'Voice call',
+          SvgPicture.asset(
+            'assets/call_wait.svg',
+            colorFilter: ColorFilter.mode(MyTheme.accent, BlendMode.srcIn),
+          ),
+          onPressVoiceCall,
+        ),
     ];
 
     final menuItems = menus

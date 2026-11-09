@@ -74,6 +74,8 @@
   <string>This app needs camera access to scan QR codes</string>
   <key>NSPhotoLibraryUsageDescription</key>
   <string>This app needs photo library access to get QR codes from image</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Camellia Remote uses the local network to discover and connect to nearby devices.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

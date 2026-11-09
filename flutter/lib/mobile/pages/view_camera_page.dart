@@ -374,21 +374,32 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                             "get_value",
                             "KEY_IS_SUPPORT_VOICE_CALL",
                           ),
-                          hasData: (isSupportVoiceCall) => IconButton(
-                            color: Colors.white,
-                            icon: isAndroid && isSupportVoiceCall
-                                ? SvgPicture.asset(
-                                    'assets/chat.svg',
-                                    colorFilter: ColorFilter.mode(
-                                      Colors.white,
-                                      BlendMode.srcIn,
-                                    ),
-                                  )
-                                : Icon(Icons.message),
-                            onPressed: () => isAndroid && isSupportVoiceCall
-                                ? showChatOptions(widget.id)
-                                : onPressedTextChat(widget.id),
-                          ),
+                          hasData: (isSupportVoiceCall) => Obx(() {
+                            final isInVoice = [
+                              VoiceCallStatus.waitingForResponse,
+                              VoiceCallStatus.connected,
+                            ].contains(gFFI.chatModel.voiceCallStatus.value);
+                            return IconButton(
+                              color: Colors.white,
+                              icon: (isAndroid && isSupportVoiceCall) || isInVoice
+                                  ? SvgPicture.asset(
+                                      'assets/chat.svg',
+                                      colorFilter: ColorFilter.mode(
+                                        Colors.white,
+                                        BlendMode.srcIn,
+                                      ),
+                                    )
+                                  : Icon(Icons.message),
+                              onPressed: () {
+                                if ((isAndroid && isSupportVoiceCall) ||
+                                    isInVoice) {
+                                  showChatOptions(widget.id);
+                                } else {
+                                  onPressedTextChat(widget.id);
+                                }
+                              },
+                            );
+                          }),
                         ),
                       ]) +
                 [
@@ -579,6 +590,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       onPressed: onPressed,
     );
 
+    final supportsVoiceCall =
+        isAndroid &&
+        (await gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL") ==
+            true);
+    if (!mounted) return;
+
     final isInVoice = [
       VoiceCallStatus.waitingForResponse,
       VoiceCallStatus.connected,
@@ -589,27 +606,28 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         Icon(Icons.message, color: MyTheme.accent),
         () => onPressedTextChat(widget.id),
       ),
-      isInVoice
-          ? makeTextMenu(
-              'End voice call',
-              SvgPicture.asset(
-                'assets/call_wait.svg',
-                colorFilter: ColorFilter.mode(
-                  Colors.redAccent,
-                  BlendMode.srcIn,
-                ),
-              ),
-              onPressEndVoiceCall,
-              labelStyle: TextStyle(color: Colors.redAccent),
-            )
-          : makeTextMenu(
-              'Voice call',
-              SvgPicture.asset(
-                'assets/call_wait.svg',
-                colorFilter: ColorFilter.mode(MyTheme.accent, BlendMode.srcIn),
-              ),
-              onPressVoiceCall,
+      if (isInVoice)
+        makeTextMenu(
+          'End voice call',
+          SvgPicture.asset(
+            'assets/call_wait.svg',
+            colorFilter: ColorFilter.mode(
+              Colors.redAccent,
+              BlendMode.srcIn,
             ),
+          ),
+          onPressEndVoiceCall,
+          labelStyle: TextStyle(color: Colors.redAccent),
+        )
+      else if (isAndroid && supportsVoiceCall)
+        makeTextMenu(
+          'Voice call',
+          SvgPicture.asset(
+            'assets/call_wait.svg',
+            colorFilter: ColorFilter.mode(MyTheme.accent, BlendMode.srcIn),
+          ),
+          onPressVoiceCall,
+        ),
     ];
 
     final menuItems = menus

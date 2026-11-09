@@ -29,12 +29,23 @@ typedef FCopyRgbaNative =
 typedef FCopyRgba = int Function(Pointer<Utf8>, int, Pointer<Uint8>, int);
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
+/// NativeModel alias for PlatformFFI.
+typedef NativeModel = PlatformFFI;
+
 /// FFI wrapper around the native Rust core.
 /// Hides the platform differences.
 class PlatformFFI {
   String _dir = '';
   // _homeDir is only needed for Android and IOS.
   String _homeDir = '';
+
+  String get dir => _dir;
+  String get homeDir => _homeDir;
+  @visibleForTesting
+  set dir(String value) => _dir = value;
+  @visibleForTesting
+  set homeDir(String value) => _homeDir = value;
+
   final _eventHandlers = <String, Map<String, HandleEvent>>{};
   RustdeskImpl _ffiBind = const RustdeskImpl();
   String _appType = '';
@@ -187,11 +198,32 @@ class PlatformFFI {
       } catch (e) {
         debugPrint('session_copy_rgba lookup optional: $e');
       }
+      String docDir = '';
       try {
         // SYSTEM user failed
-        _dir = (await getApplicationDocumentsDirectory()).path;
+        docDir = (await getApplicationDocumentsDirectory()).path;
       } catch (e) {
         debugPrint('Failed to get documents directory: $e');
+      }
+
+      if (isIOS) {
+        try {
+          final supportDir = await getApplicationSupportDirectory();
+          _dir = supportDir.path;
+          if (!await supportDir.exists()) {
+            await supportDir.create(recursive: true);
+          }
+          if (docDir.isNotEmpty) {
+            await migrateIosLegacyStorage(docDir, _dir);
+          }
+        } catch (e) {
+          debugPrint('Failed to setup iOS application support directory: $e');
+          if (_dir.isEmpty) {
+            _dir = docDir;
+          }
+        }
+      } else {
+        _dir = docDir;
       }
       await RustLib.init(externalLibrary: externalLibrary);
       _ffiBind = const RustdeskImpl();
@@ -215,10 +247,10 @@ class PlatformFFI {
             _homeDir = directories[0];
           }
         } else if (isIOS) {
-          // The previous code was `_homeDir = (await getDownloadsDirectory())?.path ?? '';`,
-          // which provided the `downloads` path in the sandbox.
-          // It is unclear why we now use the `data` directory in the sandbox instead.
-          _homeDir = _ffiBind.mainGetDataDirIos(appDir: _dir);
+          // CRED-011: User downloads and received data live in Documents/data
+          _homeDir = _ffiBind.mainGetDataDirIos(
+            appDir: docDir.isNotEmpty ? docDir : _dir,
+          );
         } else {
           // no need to set home dir
         }
@@ -390,4 +422,251 @@ class PlatformFFI {
   }
 
   void setFullscreenCallback(void Function(bool) fun) {}
+
+  /// CRED-011: Migrate legacy configuration and credentials from shareable
+  /// Documents root to Application Support directory on iOS.
+  static Future<void> migrateIosLegacyStorage(
+    String docDir,
+    String supportDir,
+  ) async {
+    final legacyItems = <String>{
+      'camellia_remote.toml',
+      'rustdesk.toml',
+      'peers',
+      'config2.toml',
+      'LocalConfig',
+      'LocalConfig.json',
+      'peer_settings',
+      'management-operation-journal-v1',
+      'audit-evidence-outbox-v1',
+      'audit_outbox',
+      'camellia_remote_ab',
+      'rustdesk_ab',
+      'camellia_remote_group',
+      'rustdesk_group',
+    };
+
+    final docDirectory = Directory(docDir);
+    if (!await docDirectory.exists()) return;
+
+    final supportDirectory = Directory(supportDir);
+    if (!await supportDirectory.exists()) {
+      await supportDirectory.create(recursive: true);
+    }
+
+    try {
+      await for (final entity in docDirectory.list(recursive: false)) {
+        try {
+          final name =
+              entity.uri.pathSegments.where((s) => s.isNotEmpty).last;
+
+          // Never migrate or remove the data directory (user downloads / received data)
+          if (name == 'data') continue;
+
+          // Clean up leftover scratch/tmp files from prior interrupted attempts
+          if (name.contains('.tmp.')) {
+            try {
+              await entity.delete(recursive: true);
+            } catch (_) {}
+            continue;
+          }
+
+          final isLegacyTarget =
+              legacyItems.contains(name) || name.endsWith('.toml');
+          if (!isLegacyTarget) continue;
+
+          final targetPath = '$supportDir/$name';
+
+          if (entity is File) {
+            final targetFile = File(targetPath);
+            final bool targetExists = await targetFile.exists();
+            final bool targetHasData =
+                targetExists && (await targetFile.length()) > 0;
+
+            if (!targetExists || !targetHasData) {
+              final srcLength = await entity.length();
+              final tmpPath =
+                  '$targetPath.tmp.${DateTime.now().microsecondsSinceEpoch}';
+              final tmpFile = File(tmpPath);
+              try {
+                await entity.copy(tmpPath);
+                if (await tmpFile.exists() &&
+                    (await tmpFile.length()) == srcLength) {
+                  await tmpFile.rename(targetPath);
+                  if (await targetFile.exists() &&
+                      (await targetFile.length()) == srcLength) {
+                    await entity.delete();
+                    debugPrint(
+                      'CRED-011: Successfully migrated $name to Application Support',
+                    );
+                  } else {
+                    debugPrint(
+                      'CRED-011: Verification failed after rename for $name',
+                    );
+                  }
+                } else {
+                  if (await tmpFile.exists()) await tmpFile.delete();
+                  debugPrint(
+                    'CRED-011: Verification failed during copy of $name',
+                  );
+                }
+              } catch (e) {
+                if (await tmpFile.exists()) {
+                  try {
+                    await tmpFile.delete();
+                  } catch (_) {}
+                }
+                debugPrint('CRED-011: Error copying $name: $e');
+              }
+            } else {
+              // Target already exists with valid data - remove legacy copy from shareable Documents root
+              try {
+                await entity.delete();
+                debugPrint(
+                  'CRED-011: Removed duplicate legacy file $name from Documents',
+                );
+              } catch (e) {
+                debugPrint(
+                  'CRED-011: Failed to remove duplicate legacy file $name: $e',
+                );
+              }
+            }
+          } else if (entity is Directory) {
+            final targetDir = Directory(targetPath);
+            if (!await targetDir.exists()) {
+              final tmpPath =
+                  '$targetPath.tmp.${DateTime.now().microsecondsSinceEpoch}';
+              final tmpDir = Directory(tmpPath);
+              try {
+                await tmpDir.create(recursive: true);
+                await _copyDirRecursive(entity, tmpDir);
+                await tmpDir.rename(targetPath);
+                if (await targetDir.exists()) {
+                  await entity.delete(recursive: true);
+                  debugPrint(
+                    'CRED-011: Successfully migrated directory $name to Application Support',
+                  );
+                }
+              } catch (e) {
+                if (await tmpDir.exists()) {
+                  try {
+                    await tmpDir.delete(recursive: true);
+                  } catch (_) {}
+                }
+                debugPrint(
+                  'CRED-011: Failed migrating directory $name: $e',
+                );
+              }
+            } else {
+              // Target directory exists, migrate any missing entries inside
+              try {
+                await _migrateDirContents(entity, targetDir);
+                if (await entity.list().isEmpty) {
+                  await entity.delete(recursive: true);
+                  debugPrint(
+                    'CRED-011: Removed migrated directory $name from Documents',
+                  );
+                }
+              } catch (e) {
+                debugPrint(
+                  'CRED-011: Error migrating dir contents for $name: $e',
+                );
+              }
+            }
+          }
+        } catch (itemErr) {
+          debugPrint('CRED-011: Error processing entity during migration: $itemErr');
+        }
+      }
+    } catch (e) {
+      debugPrint('CRED-011: Error during iOS legacy storage migration: $e');
+    }
+  }
+
+  static Future<void> _copyDirRecursive(Directory src, Directory dst) async {
+    await for (final child in src.list(recursive: false)) {
+      final childName =
+          child.uri.pathSegments.where((s) => s.isNotEmpty).last;
+      final newPath = '${dst.path}/$childName';
+      if (child is Directory) {
+        final subDir = Directory(newPath);
+        await subDir.create(recursive: true);
+        await _copyDirRecursive(child, subDir);
+      } else if (child is File) {
+        final len = await child.length();
+        final tmpPath =
+            '$newPath.tmp.${DateTime.now().microsecondsSinceEpoch}';
+        final tmpFile = File(tmpPath);
+        try {
+          await child.copy(tmpPath);
+          if (await tmpFile.exists() && (await tmpFile.length()) == len) {
+            await tmpFile.rename(newPath);
+          } else {
+            if (await tmpFile.exists()) await tmpFile.delete();
+            throw StateError('Failed to copy $childName atomically');
+          }
+        } catch (e) {
+          if (await tmpFile.exists()) {
+            try {
+              await tmpFile.delete();
+            } catch (_) {}
+          }
+          rethrow;
+        }
+      }
+    }
+  }
+
+  static Future<void> _migrateDirContents(Directory src, Directory dst) async {
+    await for (final child in src.list(recursive: false)) {
+      final childName =
+          child.uri.pathSegments.where((s) => s.isNotEmpty).last;
+      final targetPath = '${dst.path}/$childName';
+      if (child is File) {
+        final targetFile = File(targetPath);
+        final bool targetExists = await targetFile.exists();
+        final bool targetHasData =
+            targetExists && (await targetFile.length()) > 0;
+
+        if (!targetExists || !targetHasData) {
+          final len = await child.length();
+          final tmpPath =
+              '$targetPath.tmp.${DateTime.now().microsecondsSinceEpoch}';
+          final tmpFile = File(tmpPath);
+          try {
+            await child.copy(tmpPath);
+            if (await tmpFile.exists() && (await tmpFile.length()) == len) {
+              await tmpFile.rename(targetPath);
+              if (await targetFile.exists() &&
+                  (await targetFile.length()) == len) {
+                await child.delete();
+              }
+            } else {
+              if (await tmpFile.exists()) await tmpFile.delete();
+            }
+          } catch (e) {
+            if (await tmpFile.exists()) {
+              try {
+                await tmpFile.delete();
+              } catch (_) {}
+            }
+            debugPrint('CRED-011: Error migrating child $childName: $e');
+          }
+        } else {
+          try {
+            await child.delete();
+          } catch (_) {}
+        }
+      } else if (child is Directory) {
+        final targetSubDir = Directory(targetPath);
+        if (!await targetSubDir.exists()) {
+          await targetSubDir.create(recursive: true);
+        }
+        await _migrateDirContents(child, targetSubDir);
+        if (await child.list().isEmpty) {
+          await child.delete(recursive: true);
+        }
+      }
+    }
+  }
 }

@@ -152,12 +152,20 @@ pub fn discover() -> ResultType<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn discover_impl() -> ResultType<()> {
-    let sockets = send_query()?;
+    let sockets = match send_query() {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("LAN discovery query failed: {}", e);
+            return Ok(());
+        }
+    };
     let deadline = Instant::now() + DISCOVERY_DEADLINE;
     let (rx, worker_handles) = spawn_wait_responses(sockets, deadline);
 
     // Drain and process responses directly on current thread to prevent bounded channel deadlock
-    handle_received_peers(rx).await?;
+    if let Err(e) = handle_received_peers(rx).await {
+        log::warn!("Failed handling received LAN discovery peers: {}", e);
+    }
 
     for handle in worker_handles {
         let _ = handle.join();
@@ -271,9 +279,17 @@ fn create_broadcast_sockets() -> Vec<UdpSocket> {
     let mut sockets = Vec::new();
     for v4_addr in ipv4s {
         // removing v4_addr.is_private() check, https://github.com/rustdesk/rustdesk/issues/4663
-        if let Ok(s) = UdpSocket::bind(SocketAddr::from((v4_addr, 0))) {
-            if s.set_broadcast(true).is_ok() {
-                sockets.push(s);
+        match UdpSocket::bind(SocketAddr::from((v4_addr, 0))) {
+            Ok(s) => match s.set_broadcast(true) {
+                Ok(()) => {
+                    sockets.push(s);
+                }
+                Err(e) => {
+                    log::warn!("Failed to set_broadcast on {}: {}", v4_addr, e);
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to bind broadcast UDP socket on {}: {}", v4_addr, e);
             }
         }
     }
@@ -283,6 +299,7 @@ fn create_broadcast_sockets() -> Vec<UdpSocket> {
 fn send_query() -> ResultType<Vec<UdpSocket>> {
     let sockets = create_broadcast_sockets();
     if sockets.is_empty() {
+        log::warn!("Found no bindable ipv4 addresses for LAN discovery");
         bail!("Found no bindable ipv4 addresses");
     }
 
@@ -307,7 +324,9 @@ fn send_query() -> ResultType<Vec<UdpSocket>> {
     let out = msg_out.write_to_bytes()?;
     let maddr = SocketAddr::from(([255, 255, 255, 255], get_broadcast_port()));
     for socket in &sockets {
-        allow_err!(socket.send_to(&out, maddr));
+        if let Err(e) = socket.send_to(&out, maddr) {
+            log::warn!("Failed to send LAN discovery query to {}: {}", maddr, e);
+        }
     }
     log::info!("discover ping sent");
     Ok(sockets)
