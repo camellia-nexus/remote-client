@@ -1925,6 +1925,9 @@ class AndroidPermissionManager {
   static Completer<bool>? _completer;
   static Timer? _timer;
   static var _current = "";
+  static int _requestId = 0;
+  static int _currentRequestId = 0;
+  static bool debugForceMobilePlatform = false;
 
   static bool isWaitingFile() {
     if (_completer != null) {
@@ -1934,7 +1937,7 @@ class AndroidPermissionManager {
   }
 
   static Future<bool> check(String type) {
-    if (isDesktop || isWeb) {
+    if (!debugForceMobilePlatform && (isDesktop || isWeb)) {
       return Future.value(true);
     }
     return gFFI.invokeMethod("check_permission", type);
@@ -1947,12 +1950,10 @@ class AndroidPermissionManager {
 
   /// We use XXPermissions to request permissions,
   /// for supported types, see https://github.com/getActivity/XXPermissions/blob/e46caea32a64ad7819df62d448fb1c825481cd28/library/src/main/java/com/hjq/permissions/Permission.java
-  static Future<bool> request(String type) {
-    if (isDesktop || isWeb) {
+  static Future<bool> request(String type, {Duration timeout = const Duration(seconds: 15)}) {
+    if (!debugForceMobilePlatform && (isDesktop || isWeb)) {
       return Future.value(true);
     }
-
-    gFFI.invokeMethod("request_permission", type);
 
     // clear last task
     if (_completer?.isCompleted == false) {
@@ -1961,25 +1962,47 @@ class AndroidPermissionManager {
     _timer?.cancel();
 
     _current = type;
-    _completer = Completer<bool>();
+    final reqId = ++_requestId;
+    _currentRequestId = reqId;
+    final completer = Completer<bool>();
+    _completer = completer;
 
-    _timer = Timer(Duration(seconds: 120), () {
-      if (_completer == null) return;
-      if (!_completer!.isCompleted) {
-        _completer!.complete(false);
+    try {
+      gFFI.invokeMethod("request_permission", {
+        "type": type,
+        "request_id": reqId.toString(),
+      });
+    } catch (_) {}
+
+    _timer = Timer(timeout, () {
+      if (_currentRequestId != reqId) return;
+      if (!completer.isCompleted) {
+        completer.complete(false);
       }
-      _completer = null;
-      _current = "";
+      if (_completer == completer) {
+        _completer = null;
+        _current = "";
+      }
     });
-    return _completer!.future;
+    return completer.future;
   }
 
-  static complete(String type, bool res) {
+  static complete(String type, bool res, {String? requestId}) {
+    if (requestId != null && requestId.isNotEmpty) {
+      final id = int.tryParse(requestId);
+      if (id != null && id != _currentRequestId) {
+        return;
+      }
+    }
     if (type != _current) {
-      res = false;
+      return;
     }
     _timer?.cancel();
-    _completer?.complete(res);
+    _timer = null;
+    if (_completer != null && !_completer!.isCompleted) {
+      _completer!.complete(res);
+    }
+    _completer = null;
     _current = "";
   }
 }

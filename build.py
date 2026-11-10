@@ -80,10 +80,21 @@ def build_android(args):
     )
     jni_libs = FLUTTER_DIR / "android/app/src/main/jniLibs/arm64-v8a"
     jni_libs.mkdir(parents=True, exist_ok=True)
+    # Remove stale legacy name if present
+    legacy_so = jni_libs / "camellia_remote.so"
+    if legacy_so.exists():
+        legacy_so.unlink()
     shutil.copy2(
         ROOT / "target/aarch64-linux-android/release/libcamellia_remote.so",
-        jni_libs / "camellia_remote.so",
+        jni_libs / "libcamellia_remote.so",
     )
+    ndk_home = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("NDK_HOME")
+    if ndk_home:
+        cxx_candidates = list(
+            Path(ndk_home).glob("**/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so")
+        )
+        if cxx_candidates:
+            shutil.copy2(cxx_candidates[0], jni_libs / "libc++_shared.so")
     build_flutter("apk", ["--target-platform", "android-arm64"])
     build_flutter("appbundle", ["--target-platform", "android-arm64"])
 

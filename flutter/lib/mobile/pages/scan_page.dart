@@ -149,6 +149,10 @@ class _ScanPageState extends State<ScanPage> {
     _openDialogTimer = null;
     scanSubscription?.cancel();
     scanSubscription = null;
+    try {
+      controller?.dispose();
+    } catch (_) {}
+    controller = null;
     super.dispose();
   }
 

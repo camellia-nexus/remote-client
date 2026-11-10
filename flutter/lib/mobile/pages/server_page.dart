@@ -880,7 +880,8 @@ void androidChannelInit() {
           {
             var type = arguments["type"] as String;
             var result = arguments["result"] as bool;
-            AndroidPermissionManager.complete(type, result);
+            var requestId = arguments["request_id"] as String?;
+            AndroidPermissionManager.complete(type, result, requestId: requestId);
             break;
           }
         case "on_media_projection_canceled":

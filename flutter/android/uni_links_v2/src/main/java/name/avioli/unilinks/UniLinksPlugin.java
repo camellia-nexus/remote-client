@@ -26,6 +26,10 @@ public class UniLinksPlugin
     private static final String MESSAGES_CHANNEL = "uni_links/messages";
     private static final String EVENTS_CHANNEL = "uni_links/events";
 
+    private MethodChannel methodChannel;
+    private EventChannel eventChannel;
+    private ActivityPluginBinding activityPluginBinding;
+
     private BroadcastReceiver changeReceiver;
     private String initialLink;
     private String latestLink;
@@ -71,15 +75,25 @@ public class UniLinksPlugin
     }
 
     private void register(BinaryMessenger messenger) {
-        MethodChannel methodChannel = new MethodChannel(messenger, MESSAGES_CHANNEL);
+        methodChannel = new MethodChannel(messenger, MESSAGES_CHANNEL);
         methodChannel.setMethodCallHandler(this);
 
-        EventChannel eventChannel = new EventChannel(messenger, EVENTS_CHANNEL);
+        eventChannel = new EventChannel(messenger, EVENTS_CHANNEL);
         eventChannel.setStreamHandler(this);
     }
 
     @Override
-    public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {}
+    public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+        if (methodChannel != null) {
+            methodChannel.setMethodCallHandler(null);
+            methodChannel = null;
+        }
+        if (eventChannel != null) {
+            eventChannel.setStreamHandler(null);
+            eventChannel = null;
+        }
+        context = null;
+    }
 
     @Override
     public void onListen(Object arguments, EventChannel.EventSink events) {
@@ -110,19 +124,29 @@ public class UniLinksPlugin
 
     @Override
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
+        activityPluginBinding = binding;
         binding.addOnNewIntentListener(this);
         handleIntent(context, binding.getActivity().getIntent());
     }
 
     @Override
-    public void onDetachedFromActivityForConfigChanges() {}
+    public void onDetachedFromActivityForConfigChanges() {
+        if (activityPluginBinding != null) {
+            activityPluginBinding.removeOnNewIntentListener(this);
+            activityPluginBinding = null;
+        }
+    }
 
     @Override
     public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
-        binding.addOnNewIntentListener(this);
-        handleIntent(context, binding.getActivity().getIntent());
+        onAttachedToActivity(binding);
     }
 
     @Override
-    public void onDetachedFromActivity() {}
+    public void onDetachedFromActivity() {
+        if (activityPluginBinding != null) {
+            activityPluginBinding.removeOnNewIntentListener(this);
+            activityPluginBinding = null;
+        }
+    }
 }

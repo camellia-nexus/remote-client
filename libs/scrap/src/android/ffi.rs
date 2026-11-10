@@ -19,9 +19,27 @@ use lazy_static::lazy_static;
 use serde::Deserialize;
 use std::ops::Not;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicPtr, Ordering::SeqCst};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering::SeqCst};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
+
+static MAIN_SERVICE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn main_service_generation() -> u64 {
+    MAIN_SERVICE_GENERATION.load(SeqCst)
+}
+
+fn get_main_service_handles() -> Option<(JavaVM, GlobalRef)> {
+    let jvm = JVM.read().ok()?.as_ref()?.clone();
+    let ctx = MAIN_SERVICE_CTX.read().ok()?.as_ref()?.clone();
+    Some((jvm, ctx))
+}
+
+fn get_clipboard_handles() -> Option<(JavaVM, GlobalRef)> {
+    let jvm = JVM.read().ok()?.as_ref()?.clone();
+    let cm = CLIPBOARD_MANAGER.read().ok()?.as_ref()?.clone();
+    Some((jvm, cm))
+}
 
 lazy_static! {
     static ref JVM: RwLock<Option<JavaVM>> = RwLock::new(None);
@@ -93,6 +111,7 @@ pub extern "system" fn Java_ffi_FFI_onAudioFrameUpdate(
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_cleanupMainService(_env: JNIEnv, _class: JClass) {
     log::debug!("cleanupMainService from jvm");
+    MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
     *MAIN_SERVICE_CTX.write().unwrap() = None;
     if let Ok(mut raw) = VIDEO_RAW.lock() {
         raw.set_enable(false);
@@ -145,6 +164,7 @@ pub extern "system" fn Java_ffi_FFI_setFrameRawEnable(
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_init(env: JNIEnv, _class: JClass, ctx: JObject) {
     log::debug!("MainService init from java");
+    MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
     if let Ok(jvm) = env.get_java_vm() {
         let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
         let mut jvm_lock = JVM.write().unwrap();
@@ -246,14 +266,11 @@ pub fn clear_codec_info() {
         })?;
 */
 pub fn call_main_service_pointer_input(kind: &str, mask: i32, x: i32, y: i32) -> JniResult<()> {
-    if let (Some(jvm), Some(ctx)) = (
-        JVM.read().unwrap().as_ref(),
-        MAIN_SERVICE_CTX.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, ctx)) = get_main_service_handles() {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         let kind = if kind == "touch" { 0 } else { 1 };
         env.call_method(
-            ctx,
+            &ctx,
             "rustPointerInput",
             "(IIII)V",
             &[
@@ -270,15 +287,12 @@ pub fn call_main_service_pointer_input(kind: &str, mask: i32, x: i32, y: i32) ->
 }
 
 pub fn call_main_service_key_event(data: &[u8]) -> JniResult<()> {
-    if let (Some(jvm), Some(ctx)) = (
-        JVM.read().unwrap().as_ref(),
-        MAIN_SERVICE_CTX.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, ctx)) = get_main_service_handles() {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         let data = env.byte_array_from_slice(data)?;
 
         env.call_method(
-            ctx,
+            &ctx,
             "rustKeyEventInput",
             "([B)V",
             &[JValue::Object(&JObject::from(data))],
@@ -294,12 +308,9 @@ where
     S: Into<JNIString>,
     T: Into<JNIString> + AsRef<str>,
 {
-    if let (Some(jvm), Some(cm)) = (
-        JVM.read().unwrap().as_ref(),
-        CLIPBOARD_MANAGER.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, cm)) = get_clipboard_handles() {
         let mut env = jvm.attach_current_thread()?;
-        env.call_method(cm, name, sig, args)?;
+        env.call_method(&cm, name, sig, args)?;
         return Ok(());
     } else {
         return Err(JniError::ThrowFailed(-1));
@@ -307,15 +318,12 @@ where
 }
 
 pub fn call_clipboard_manager_update_clipboard(data: &[u8]) -> JniResult<()> {
-    if let (Some(jvm), Some(cm)) = (
-        JVM.read().unwrap().as_ref(),
-        CLIPBOARD_MANAGER.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, cm)) = get_clipboard_handles() {
         let mut env = jvm.attach_current_thread()?;
         let data = env.byte_array_from_slice(data)?;
 
         env.call_method(
-            cm,
+            &cm,
             "rustUpdateClipboard",
             "([B)V",
             &[JValue::Object(&JObject::from(data))],
@@ -335,16 +343,13 @@ pub fn call_clipboard_manager_enable_client_clipboard(enable: bool) -> JniResult
 }
 
 pub fn call_main_service_get_by_name(name: &str) -> JniResult<String> {
-    if let (Some(jvm), Some(ctx)) = (
-        JVM.read().unwrap().as_ref(),
-        MAIN_SERVICE_CTX.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, ctx)) = get_main_service_handles() {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         let res = env.with_local_frame(10, |env| -> JniResult<String> {
             let name = env.new_string(name)?;
             let res = env
                 .call_method(
-                    ctx,
+                    &ctx,
                     "rustGetByName",
                     "(Ljava/lang/String;)Ljava/lang/String;",
                     &[JValue::Object(&JObject::from(name))],
@@ -366,10 +371,7 @@ pub fn call_main_service_set_by_name(
     arg1: Option<&str>,
     arg2: Option<&str>,
 ) -> JniResult<()> {
-    if let (Some(jvm), Some(ctx)) = (
-        JVM.read().unwrap().as_ref(),
-        MAIN_SERVICE_CTX.read().unwrap().as_ref(),
-    ) {
+    if let Some((jvm, ctx)) = get_main_service_handles() {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         env.with_local_frame(10, |env| -> JniResult<()> {
             let name = env.new_string(name)?;
@@ -377,7 +379,7 @@ pub fn call_main_service_set_by_name(
             let arg2 = env.new_string(arg2.unwrap_or(""))?;
 
             env.call_method(
-                ctx,
+                &ctx,
                 "rustSetByName",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
                 &[

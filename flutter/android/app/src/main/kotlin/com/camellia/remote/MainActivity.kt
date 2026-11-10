@@ -49,13 +49,12 @@ class MainActivity : FlutterActivity() {
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
+    private var isBound = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         if (MainService.isReady) {
-            Intent(activity, MainService::class.java).also {
-                bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-            }
+            bindMainService()
         }
         flutterMethodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -69,6 +68,12 @@ class MainActivity : FlutterActivity() {
                 Log.e("MainActivity", "Failed to setCodecInfo: ${e.message}", e)
             }
         }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        flutterMethodChannel?.setMethodCallHandler(null)
+        flutterMethodChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     override fun onResume() {
@@ -106,9 +111,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         Log.e(logTag, "onDestroy")
-        mainService?.let {
-            unbindService(serviceConnection)
-        }
+        audioRecordHandle.destroy()
+        unbindMainService()
+        flutterMethodChannel?.setMethodCallHandler(null)
+        flutterMethodChannel = null
         super.onDestroy()
     }
 
@@ -117,10 +123,37 @@ class MainActivity : FlutterActivity() {
             Log.d(logTag, "onServiceConnected")
             val binder = service as MainService.LocalBinder
             mainService = binder.getService()
+            isBound = true
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.d(logTag, "onServiceDisconnected")
+            mainService = null
+            isBound = false
+        }
+    }
+
+    private fun bindMainService() {
+        if (!isBound) {
+            Intent(activity, MainService::class.java).also {
+                try {
+                    isBound = bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
+                } catch (e: Exception) {
+                    Log.e(logTag, "Failed to bind MainService: ${e.message}", e)
+                    isBound = false
+                }
+            }
+        }
+    }
+
+    private fun unbindMainService() {
+        if (isBound) {
+            try {
+                unbindService(serviceConnection)
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to unbind MainService: ${e.message}")
+            }
+            isBound = false
             mainService = null
         }
     }
@@ -128,21 +161,20 @@ class MainActivity : FlutterActivity() {
     private fun initFlutterChannel(flutterMethodChannel: MethodChannel) {
         flutterMethodChannel.setMethodCallHandler { call, result ->
             // make sure result will be invoked, otherwise flutter will await forever
-            when (call.method) {
-                "init_service" -> {
-                    Intent(activity, MainService::class.java).also {
-                        bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
+            try {
+                when (call.method) {
+                    "init_service" -> {
+                        bindMainService()
+                        if (MainService.isReady) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+                        requestMediaProjection()
+                        result.success(true)
                     }
-                    if (MainService.isReady) {
-                        result.success(false)
-                        return@setMethodCallHandler
-                    }
-                    requestMediaProjection()
-                    result.success(true)
-                }
-                "start_capture" -> {
-                    mainService?.let {
-                        result.success(it.startCapture())
+                    "start_capture" -> {
+                        mainService?.let {
+                            result.success(it.startCapture())
                     } ?: let {
                         result.success(false)
                     }
@@ -170,8 +202,18 @@ class MainActivity : FlutterActivity() {
                     if (call.arguments is String) {
                         requestPermission(context, call.arguments as String)
                         result.success(true)
+                    } else if (call.arguments is Map<*, *>) {
+                        val map = call.arguments as Map<*, *>
+                        val type = map["type"] as? String ?: ""
+                        val reqId = map["request_id"] as? String
+                        if (type.isNotEmpty()) {
+                            requestPermission(context, type, reqId)
+                            result.success(true)
+                        } else {
+                            result.error("invalid_argument", "Permission type is empty", null)
+                        }
                     } else {
-                        result.success(false)
+                        result.error("invalid_argument", "Expected String or Map argument", null)
                     }
                 }
                 START_ACTION -> {
@@ -179,7 +221,7 @@ class MainActivity : FlutterActivity() {
                         startAction(context, call.arguments as String)
                         result.success(true)
                     } else {
-                        result.success(false)
+                        result.error("invalid_argument", "Expected String argument", null)
                     }
                 }
                 "check_video_permission" -> {
@@ -216,19 +258,24 @@ class MainActivity : FlutterActivity() {
                     if (call.arguments is Int) {
                         val id = call.arguments as Int
                         mainService?.cancelNotification(id)
-                    } else {
                         result.success(true)
+                    } else {
+                        result.error("invalid_argument", "Expected Int notification ID", null)
                     }
                 }
                 "enable_soft_keyboard" -> {
-                    // https://blog.csdn.net/hanye2020/article/details/105553780
-                    if (call.arguments as Boolean) {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+                    val enabled = (call.arguments as? Boolean)
+                        ?: (call.argument<Boolean>("enabled"))
+                    if (enabled == null) {
+                        result.error("invalid_argument", "Expected Boolean argument", null)
                     } else {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+                        if (enabled) {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+                        } else {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
+                        }
+                        result.success(true)
                     }
-                    result.success(true)
-
                 }
                 "try_sync_clipboard" -> {
                     rdClipboardManager?.syncClipboard(true)
@@ -246,7 +293,7 @@ class MainActivity : FlutterActivity() {
                         edit.apply()
                         result.success(true)
                     } else {
-                        result.success(false)
+                        result.error("invalid_argument", "Expected Boolean argument", null)
                     }
                 }
                 SYNC_APP_DIR_CONFIG_PATH -> {
@@ -257,7 +304,7 @@ class MainActivity : FlutterActivity() {
                         edit.apply()
                         result.success(true)
                     } else {
-                        result.success(false)
+                        result.error("invalid_argument", "Expected String argument", null)
                     }
                 }
                 GET_VALUE -> {
@@ -268,20 +315,26 @@ class MainActivity : FlutterActivity() {
                             result.error("-1", "No such key", null)
                         }
                     } else {
-                        result.success(null)
+                        result.error("invalid_argument", "Expected String argument", null)
                     }
                 }
                 "on_voice_call_started" -> {
-                    onVoiceCallStarted()
+                    val res = onVoiceCallStarted()
+                    result.success(res)
                 }
                 "on_voice_call_closed" -> {
-                    onVoiceCallClosed()
+                    val res = onVoiceCallClosed()
+                    result.success(res)
                 }
                 else -> {
                     result.error("-1", "No such method", null)
                 }
             }
+        } catch (e: Exception) {
+            Log.e(logTag, "Unhandled exception in method call ${call.method}: ${e.message}", e)
+            result.error("internal_error", e.message, null)
         }
+    }
     }
 
     private fun setCodecInfo() {
@@ -364,7 +417,7 @@ class MainActivity : FlutterActivity() {
         FFI.setCodecInfo(result.toString())
     }
 
-    private fun onVoiceCallStarted() {
+    private fun onVoiceCallStarted(): Boolean {
         var ok = false
         mainService?.let {
             ok = it.onVoiceCallStarted()
@@ -382,9 +435,10 @@ class MainActivity : FlutterActivity() {
         } else {
             Log.d(logTag, "onVoiceCallStarted success")
         }
+        return ok
     }
 
-    private fun onVoiceCallClosed() {
+    private fun onVoiceCallClosed(): Boolean {
         var ok = false
         mainService?.let {
             ok = it.onVoiceCallClosed()
@@ -402,6 +456,7 @@ class MainActivity : FlutterActivity() {
         } else {
             Log.d(logTag, "onVoiceCallClosed success")
         }
+        return ok
     }
 
     override fun onStop() {

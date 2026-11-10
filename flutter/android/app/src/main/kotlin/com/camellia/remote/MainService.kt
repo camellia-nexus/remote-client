@@ -543,6 +543,7 @@ class MainService : Service() {
         _isAudioStart = false
 
         stopCapture()
+        audioRecordHandle.destroy()
 
         if (reuseVirtualDisplay) {
             try {
