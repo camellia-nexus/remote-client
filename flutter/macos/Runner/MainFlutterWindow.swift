@@ -20,19 +20,292 @@ import window_manager
 import window_size
 import texture_rgba_renderer
 
-// Global state for relative mouse mode
+// Global state and coordinator for relative mouse mode.
 // All properties and methods must be accessed on the main thread since they
 // interact with NSEvent monitors, CoreGraphics APIs, and Flutter channels.
+struct RelativeMouseOwner: Equatable {
+    let windowId: Int64
+    let sessionId: String
+    let generation: UInt64
+}
+
 class RelativeMouseState {
     static let shared = RelativeMouseState()
 
-    var enabled = false
+    var enabled: Bool {
+        return isLocked
+    }
+
+    private(set) var isLocked = false
+    private(set) var currentOwner: RelativeMouseOwner?
+    private(set) var activeGeneration: UInt64 = 0
+
     var eventMonitor: Any?
     var deltaChannel: FlutterMethodChannel?
+    weak var ownerWindow: NSWindow?
     var accumulatedDeltaX: CGFloat = 0
     var accumulatedDeltaY: CGFloat = 0
 
-    private init() {}
+    // Monotonic generation counter for re-association retries so outdated callbacks never unlock active mode
+    private(set) var retryGeneration: UInt64 = 0
+    private var windowCloseObserver: Any?
+    private var appTerminateObserver: Any?
+
+    private init() {
+        setupLifecycleObservers()
+    }
+
+    deinit {
+        if let observer = windowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appTerminateObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func setupLifecycleObservers() {
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleWindowWillClose(notification)
+        }
+
+        appTerminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppWillTerminate()
+        }
+    }
+
+    private func handleWindowWillClose(_ notification: Notification) {
+        assert(Thread.isMainThread)
+        guard isLocked, let owner = currentOwner else { return }
+        guard let closingWindow = notification.object as? NSWindow else { return }
+
+        // If the closing window is the active owner's window, auto-release relative mouse mode
+        if (ownerWindow != nil && closingWindow == ownerWindow) || (owner.windowId == 0 && closingWindow is MainFlutterWindow) {
+            NSLog("[Camellia] Owner window closing for sessionId=%@ windowId=%lld gen=%llu, auto-releasing relative mouse mode",
+                  owner.sessionId, owner.windowId, owner.generation)
+            forceRelease()
+        }
+    }
+
+    private func handleAppWillTerminate() {
+        if isLocked {
+            NSLog("[Camellia] App terminating while relative mouse active, force re-associating cursor")
+            forceRelease()
+        }
+    }
+
+    func forceRelease() {
+        assert(Thread.isMainThread)
+        guard isLocked else { return }
+
+        retryGeneration &+= 1
+
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+
+        deltaChannel = nil
+        ownerWindow = nil
+        accumulatedDeltaX = 0
+        accumulatedDeltaY = 0
+        currentOwner = nil
+        isLocked = false
+
+        let result = CGAssociateMouseAndMouseCursorPosition(1)
+        if result != CGError.success {
+            NSLog("[Camellia] forceRelease failed to re-associate mouse: %d, scheduling bounded retry", result.rawValue)
+            scheduleBoundedRetry(retryGen: self.retryGeneration, remainingAttempts: 3)
+        }
+    }
+
+    func scheduleBoundedRetry(retryGen: UInt64, remainingAttempts: Int) {
+        guard remainingAttempts > 0 else {
+            NSLog("[Camellia] Re-association retry budget exhausted. Cursor may remain locked.")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self else { return }
+            assert(Thread.isMainThread)
+            guard self.retryGeneration == retryGen && !self.isLocked else {
+                NSLog("[Camellia] Stale cursor re-association retry ignored (retryGen=%llu, currentGen=%llu, isLocked=%d)",
+                      retryGen, self.retryGeneration, self.isLocked ? 1 : 0)
+                return
+            }
+            let retryResult = CGAssociateMouseAndMouseCursorPosition(1)
+            if retryResult != CGError.success {
+                NSLog("[Camellia] Retry failed to re-associate mouse: %d, remaining attempts: %d", retryResult.rawValue, remainingAttempts - 1)
+                self.scheduleBoundedRetry(retryGen: retryGen, remainingAttempts: remainingAttempts - 1)
+            } else {
+                NSLog("[Camellia] Mouse cursor successfully re-associated on retry.")
+            }
+        }
+    }
+
+    enum EnableError: Error {
+        case conflict(owner: RelativeMouseOwner)
+        case cgError(code: Int32)
+        case monitorError
+    }
+
+    func enable(channel: FlutterMethodChannel,
+                window: NSWindow?,
+                windowId: Int64,
+                sessionId: String,
+                generation: UInt64) -> Result<Bool, EnableError> {
+        assert(Thread.isMainThread, "enable must be called on the main thread")
+
+        // Cancel any pending re-association retry from previous release
+        retryGeneration &+= 1
+
+        if isLocked {
+            guard let owner = currentOwner else {
+                isLocked = false
+                return .failure(.conflict(owner: RelativeMouseOwner(windowId: -1, sessionId: "unknown", generation: 0)))
+            }
+
+            // Same session and window re-enabling or updating channel
+            if owner.windowId == windowId && owner.sessionId == sessionId {
+                currentOwner = RelativeMouseOwner(windowId: windowId, sessionId: sessionId, generation: generation)
+                activeGeneration = generation
+                deltaChannel = channel
+                if window != nil {
+                    ownerWindow = window
+                }
+                return .success(true)
+            } else {
+                // Different owner attempted to take over: reject with typed conflict
+                NSLog("[Camellia] Relative mouse enable rejected: locked by windowId=%lld sessionId=%@ gen=%llu; requested by windowId=%lld sessionId=%@ gen=%llu",
+                      owner.windowId, owner.sessionId, owner.generation, windowId, sessionId, generation)
+                return .failure(.conflict(owner: owner))
+            }
+        }
+
+        // Dissociate mouse from cursor position FIRST before mutating state
+        let cgResult = CGAssociateMouseAndMouseCursorPosition(0)
+        if cgResult != CGError.success {
+            NSLog("[Camellia] Failed to dissociate mouse from cursor position: %d", cgResult.rawValue)
+            return .failure(.cgError(code: cgResult.rawValue))
+        }
+
+        deltaChannel = channel
+        ownerWindow = window
+        accumulatedDeltaX = 0
+        accumulatedDeltaY = 0
+        currentOwner = RelativeMouseOwner(windowId: windowId, sessionId: sessionId, generation: generation)
+        activeGeneration = generation
+
+        // Event monitor capturing relative deltas
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { [weak self] event in
+            guard let self = self else { return event }
+            guard self.isLocked, let owner = self.currentOwner else { return event }
+            // Verify generation hasn't changed
+            guard owner.generation == self.activeGeneration else { return event }
+
+            let deltaX = event.deltaX
+            let deltaY = event.deltaY
+
+            if deltaX != 0 || deltaY != 0 {
+                self.accumulatedDeltaX += deltaX
+                self.accumulatedDeltaY += deltaY
+
+                let intX = Int(self.accumulatedDeltaX)
+                let intY = Int(self.accumulatedDeltaY)
+
+                if intX != 0 || intY != 0 {
+                    self.accumulatedDeltaX -= CGFloat(intX)
+                    self.accumulatedDeltaY -= CGFloat(intY)
+
+                    // Deliver delta to active owner channel with generation fencing
+                    self.deltaChannel?.invokeMethod("onMouseDelta", arguments: [
+                        "dx": intX,
+                        "dy": intY,
+                        "sessionId": owner.sessionId,
+                        "generation": owner.generation
+                    ])
+                }
+            }
+
+            return event
+        }
+
+        if eventMonitor == nil {
+            NSLog("[Camellia] Failed to create event monitor for relative mouse mode")
+            CGAssociateMouseAndMouseCursorPosition(1)
+            deltaChannel = nil
+            ownerWindow = nil
+            currentOwner = nil
+            return .failure(.monitorError)
+        }
+
+        isLocked = true
+        return .success(true)
+    }
+
+    enum DisableError: Error {
+        case notOwner(owner: RelativeMouseOwner)
+        case staleGeneration(activeGen: UInt64)
+        case cgError(code: Int32)
+    }
+
+    func disable(windowId: Int64,
+                 sessionId: String,
+                 generation: UInt64) -> Result<Bool, DisableError> {
+        assert(Thread.isMainThread, "disable must be called on the main thread")
+
+        if !isLocked {
+            return .success(true)
+        }
+
+        guard let owner = currentOwner else {
+            forceRelease()
+            return .success(true)
+        }
+
+        // Only the active owner can release
+        if owner.windowId != windowId || owner.sessionId != sessionId {
+            NSLog("[Camellia] Non-owner attempted to disable relative mouse: owner=(windowId=%lld sessionId=%@ gen=%llu), caller=(windowId=%lld sessionId=%@ gen=%llu)",
+                  owner.windowId, owner.sessionId, owner.generation, windowId, sessionId, generation)
+            return .failure(.notOwner(owner: owner))
+        }
+
+        if generation < owner.generation {
+            NSLog("[Camellia] Stale disable generation: caller gen=%llu < active owner gen=%llu", generation, owner.generation)
+            return .failure(.staleGeneration(activeGen: owner.generation))
+        }
+
+        // Invalidate any previous or current retry timers
+        retryGeneration &+= 1
+
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+
+        deltaChannel = nil
+        ownerWindow = nil
+        accumulatedDeltaX = 0
+        accumulatedDeltaY = 0
+        currentOwner = nil
+        isLocked = false
+
+        let cgResult = CGAssociateMouseAndMouseCursorPosition(1)
+        if cgResult != CGError.success {
+            NSLog("[Camellia] Failed to re-associate mouse cursor: %d, scheduling bounded retry...", cgResult.rawValue)
+            scheduleBoundedRetry(retryGen: self.retryGeneration, remainingAttempts: 3)
+            return .failure(.cgError(code: cgResult.rawValue))
+        }
+
+        return .success(true)
+    }
 }
 
 class MainFlutterWindow: NSWindow {
@@ -81,102 +354,24 @@ class MainFlutterWindow: NSWindow {
         window.appearance = NSAppearance(named: themeName == "light" ? .aqua : .darkAqua)
     }
 
-    private func enableNativeRelativeMouseMode(channel: FlutterMethodChannel) -> Bool {
-        assert(Thread.isMainThread, "enableNativeRelativeMouseMode must be called on the main thread")
-        let state = RelativeMouseState.shared
-        if state.enabled {
-            // Already enabled: update the channel so this caller receives deltas.
-            state.deltaChannel = channel
-            return true
-        }
-
-        // Dissociate mouse from cursor position - this locks the cursor in place
-        // Do this FIRST before setting any state
-        let result = CGAssociateMouseAndMouseCursorPosition(0)
-        if result != CGError.success {
-            NSLog("[Camellia] Failed to dissociate mouse from cursor position: %d", result.rawValue)
-            return false
-        }
-
-        // Only set state after CG call succeeds
-        state.deltaChannel = channel
-        state.accumulatedDeltaX = 0
-        state.accumulatedDeltaY = 0
-
-        // Add local event monitor to capture mouse delta.
-        // Note: Local event monitors are always called on the main thread,
-        // so accessing main-thread-only state is safe here.
-        state.eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { [weak state] event in
-            guard let state = state else { return event }
-            // Guard against race: mode may be disabled between weak capture and this check.
-            guard state.enabled else { return event }
-            let deltaX = event.deltaX
-            let deltaY = event.deltaY
-
-            if deltaX != 0 || deltaY != 0 {
-                // Accumulate delta (main thread only - NSEvent local monitors always run on main thread)
-                state.accumulatedDeltaX += deltaX
-                state.accumulatedDeltaY += deltaY
-
-                // Only send if we have integer movement
-                let intX = Int(state.accumulatedDeltaX)
-                let intY = Int(state.accumulatedDeltaY)
-
-                if intX != 0 || intY != 0 {
-                    state.accumulatedDeltaX -= CGFloat(intX)
-                    state.accumulatedDeltaY -= CGFloat(intY)
-
-                    // Send delta to Flutter (already on main thread)
-                    state.deltaChannel?.invokeMethod("onMouseDelta", arguments: ["dx": intX, "dy": intY])
-                }
-            }
-
-            return event
-        }
-
-        // Check if monitor was created successfully
-        if state.eventMonitor == nil {
-            NSLog("[Camellia] Failed to create event monitor for relative mouse mode")
-            // Re-associate mouse since we failed
-            CGAssociateMouseAndMouseCursorPosition(1)
-            state.deltaChannel = nil
-            return false
-        }
-
-        // Set enabled LAST after everything succeeds
-        state.enabled = true
-        return true
+    private func enableNativeRelativeMouseMode(channel: FlutterMethodChannel,
+                                               window: NSWindow?,
+                                               windowId: Int64,
+                                               sessionId: String,
+                                               generation: UInt64) -> Result<Bool, RelativeMouseState.EnableError> {
+        return RelativeMouseState.shared.enable(channel: channel,
+                                                window: window,
+                                                windowId: windowId,
+                                                sessionId: sessionId,
+                                                generation: generation)
     }
 
-    private func disableNativeRelativeMouseMode() {
-        assert(Thread.isMainThread, "disableNativeRelativeMouseMode must be called on the main thread")
-        let state = RelativeMouseState.shared
-        if !state.enabled { return }
-
-        state.enabled = false
-
-        // Remove event monitor
-        if let monitor = state.eventMonitor {
-            NSEvent.removeMonitor(monitor)
-            state.eventMonitor = nil
-        }
-
-        state.deltaChannel = nil
-        state.accumulatedDeltaX = 0
-        state.accumulatedDeltaY = 0
-
-        // Re-associate mouse with cursor position (non-blocking with async retry)
-        let result = CGAssociateMouseAndMouseCursorPosition(1)
-        if result != CGError.success {
-            NSLog("[Camellia] Failed to re-associate mouse with cursor position: %d, scheduling retry...", result.rawValue)
-            // Non-blocking retry after 50ms
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                let retryResult = CGAssociateMouseAndMouseCursorPosition(1)
-                if retryResult != CGError.success {
-                    NSLog("[Camellia] Retry failed to re-associate mouse: %d. Cursor may remain locked.", retryResult.rawValue)
-                }
-            }
-        }
+    private func disableNativeRelativeMouseMode(windowId: Int64,
+                                                sessionId: String,
+                                                generation: UInt64) -> Result<Bool, RelativeMouseState.DisableError> {
+        return RelativeMouseState.shared.disable(windowId: windowId,
+                                                 sessionId: sessionId,
+                                                 generation: generation)
     }
 
     public func setMethodHandler(registrar: FlutterPluginRegistrar) {
@@ -272,12 +467,80 @@ class MainFlutterWindow: NSWindow {
                     result(true)
 
                 case "enableNativeRelativeMouseMode":
-                    let success = self.enableNativeRelativeMouseMode(channel: channel)
-                    result(success)
+                    guard let argMap = call.arguments as? [String: Any],
+                          let windowId = (argMap["windowId"] as? NSNumber)?.int64Value,
+                          let sessionId = argMap["sessionId"] as? String,
+                          let generation = (argMap["generation"] as? NSNumber)?.uint64Value else {
+                        result(FlutterError(code: "INVALID_ARGUMENT",
+                                            message: "enableNativeRelativeMouseMode requires windowId, sessionId, and generation",
+                                            details: nil))
+                        break
+                    }
+                    let targetWindow = registrar.view?.window ?? (self as NSWindow)
+                    let enableResult = self.enableNativeRelativeMouseMode(channel: channel,
+                                                                         window: targetWindow,
+                                                                         windowId: windowId,
+                                                                         sessionId: sessionId,
+                                                                         generation: generation)
+                    switch enableResult {
+                    case .success(let val):
+                        result(val)
+                    case .failure(let err):
+                        switch err {
+                        case .conflict(let owner):
+                            result(FlutterError(code: "OWNER_CONFLICT",
+                                                message: "Relative mouse is locked by windowId=\(owner.windowId) sessionId=\(owner.sessionId) gen=\(owner.generation)",
+                                                details: [
+                                                    "ownerWindowId": owner.windowId,
+                                                    "ownerSessionId": owner.sessionId,
+                                                    "ownerGeneration": owner.generation
+                                                ]))
+                        case .cgError(let code):
+                            result(FlutterError(code: "CG_ERROR",
+                                                message: "Failed to dissociate mouse from cursor position: \(code)",
+                                                details: ["errorCode": code]))
+                        case .monitorError:
+                            result(FlutterError(code: "MONITOR_ERROR",
+                                                message: "Failed to create event monitor for relative mouse mode",
+                                                details: nil))
+                        }
+                    }
 
                 case "disableNativeRelativeMouseMode":
-                    self.disableNativeRelativeMouseMode()
-                    result(true)
+                    guard let argMap = call.arguments as? [String: Any],
+                          let windowId = (argMap["windowId"] as? NSNumber)?.int64Value,
+                          let sessionId = argMap["sessionId"] as? String,
+                          let generation = (argMap["generation"] as? NSNumber)?.uint64Value else {
+                        result(FlutterError(code: "INVALID_ARGUMENT",
+                                            message: "disableNativeRelativeMouseMode requires windowId, sessionId, and generation",
+                                            details: nil))
+                        break
+                    }
+                    let disableResult = self.disableNativeRelativeMouseMode(windowId: windowId,
+                                                                           sessionId: sessionId,
+                                                                           generation: generation)
+                    switch disableResult {
+                    case .success(let val):
+                        result(val)
+                    case .failure(let err):
+                        switch err {
+                        case .notOwner(let owner):
+                            result(FlutterError(code: "NOT_OWNER",
+                                                message: "Caller windowId=\(windowId) sessionId=\(sessionId) is not the active owner",
+                                                details: [
+                                                    "ownerWindowId": owner.windowId,
+                                                    "ownerSessionId": owner.sessionId
+                                                ]))
+                        case .staleGeneration(let activeGen):
+                            result(FlutterError(code: "STALE_GENERATION",
+                                                message: "Caller generation \(generation) is older than active generation \(activeGen)",
+                                                details: ["activeGeneration": activeGen]))
+                        case .cgError(let code):
+                            result(FlutterError(code: "CG_ASSOCIATE_FAILED",
+                                                message: "Failed to re-associate mouse cursor: \(code)",
+                                                details: ["errorCode": code]))
+                        }
+                    }
 
                 default:
                     result(FlutterMethodNotImplemented)
