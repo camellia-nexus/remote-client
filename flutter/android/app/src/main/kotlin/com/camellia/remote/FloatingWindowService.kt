@@ -389,7 +389,11 @@ class FloatingWindowService : Service(), View.OnTouchListener {
     }
 
     private fun syncClipboard() {
-        MainActivity.rdClipboardManager?.syncClipboard(false)
+        try {
+            MainActivity.getOrCreateRdClipboardManager(applicationContext).syncClipboard(false)
+        } catch (e: Exception) {
+            Log.w(logTag, "Failed to syncClipboard: $e")
+        }
     }
 
     private fun stopMainService() {

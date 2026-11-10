@@ -7,6 +7,8 @@ import java.util.TimerTask
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.annotation.Keep
 
@@ -18,6 +20,7 @@ import ffi.FFI
 
 class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     private val logTag = "RdClipboardManager"
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val supportedMimeTypes = arrayOf(
         ClipDescription.MIMETYPE_TEXT_PLAIN,
         ClipDescription.MIMETYPE_TEXT_HTML
@@ -34,15 +37,24 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     //
     // It's okay to that `rustEnableClientClipboard(false)` is called after `rustUpdateClipboard`,
     // though the `lastUpdatedClipData` will be set to null once.
+    @Volatile
     private var lastUpdatedClipData: ClipData? = null
-    private var isClientEnabled = true;
-    private var _isCaptureStarted = false;
+    @Volatile
+    private var isClientEnabled = true
+    @Volatile
+    private var _isCaptureStarted = false
 
     val isCaptureStarted: Boolean
         get() = _isCaptureStarted
 
     fun checkPrimaryClip(isClient: Boolean) {
-        val clipData = clipboardManager.primaryClip
+        val clipData = try {
+            clipboardManager.primaryClip
+        } catch (e: Exception) {
+            Log.w(logTag, "Failed to getPrimaryClip: $e")
+            null
+        }
+
         if (clipData != null && clipData.itemCount > 0) {
             // Only handle the first item in the clipboard for now.
             val clip = clipData.getItemAt(0)
@@ -54,27 +66,29 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
                     return
                 }
             }
-            val mimeTypeCount = clipData.description.getMimeTypeCount()
+            val mimeTypeCount = clipData.description?.mimeTypeCount ?: 0
             val mimeTypes = mutableListOf<String>()
             for (i in 0 until mimeTypeCount) {
-                mimeTypes.add(clipData.description.getMimeType(i))
+                clipData.description?.getMimeType(i)?.let { mimeTypes.add(it) }
             }
-            var text: CharSequence? = null;
-            var html: String? = null;
+            var text: CharSequence? = null
+            var html: String? = null
             if (isSupportedMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
                 text = clip?.text
             }
             if (isSupportedMimeType(ClipDescription.MIMETYPE_TEXT_HTML)) {
-                text = clip?.text
+                if (text == null) {
+                    text = clip?.text
+                }
                 html = clip?.htmlText
             }
             var count = 0
             val clips = MultiClipboards.newBuilder()
             if (text != null) {
                 val content = com.google.protobuf.ByteString.copyFromUtf8(text.toString())
-                    clips.addClipboards(Clipboard.newBuilder().setFormat(ClipboardFormat.Text).setContent(content).build())
-                    count++
-                }
+                clips.addClipboards(Clipboard.newBuilder().setFormat(ClipboardFormat.Text).setContent(content).build())
+                count++
+            }
             if (html != null) {
                 val content = com.google.protobuf.ByteString.copyFromUtf8(html)
                 clips.addClipboards(Clipboard.newBuilder().setFormat(ClipboardFormat.Html).setContent(content).build())
@@ -100,30 +114,27 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     }
 
     private fun isClipboardDataEqual(left: ClipData, right: ClipData): Boolean {
-        if (left.description.getMimeTypeCount() != right.description.getMimeTypeCount()) {
+        val leftDesc = left.description ?: return false
+        val rightDesc = right.description ?: return false
+
+        val leftMimes = (0 until leftDesc.mimeTypeCount).map { leftDesc.getMimeType(it) }.toSet()
+        val rightMimes = (0 until rightDesc.mimeTypeCount).map { rightDesc.getMimeType(it) }.toSet()
+        if (leftMimes != rightMimes) {
             return false
-        }
-        val mimeTypeCount = left.description.getMimeTypeCount()
-        for (i in 0 until mimeTypeCount) {
-            if (left.description.getMimeType(i) != right.description.getMimeType(i)) {
-                return false
-            }
         }
 
         if (left.itemCount != right.itemCount) {
             return false
         }
         for (i in 0 until left.itemCount) {
-            val mimeType = left.description.getMimeType(i)
-            if (!isSupportedMimeType(mimeType)) {
-                continue
-            }
             val leftItem = left.getItemAt(i)
             val rightItem = right.getItemAt(i)
-            if (mimeType == ClipDescription.MIMETYPE_TEXT_PLAIN || mimeType == ClipDescription.MIMETYPE_TEXT_HTML) {
-                if (leftItem.text != rightItem.text || leftItem.htmlText != rightItem.htmlText) {
-                    return false
-                }
+            val leftText = leftItem?.text?.toString()
+            val rightText = rightItem?.text?.toString()
+            val leftHtml = leftItem?.htmlText
+            val rightHtml = rightItem?.htmlText
+            if (leftText != rightText || leftHtml != rightHtml) {
+                return false
             }
         }
         return true
@@ -150,48 +161,68 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
 
     @Keep
     fun rustUpdateClipboard(clips: ByteArray) {
-        val clips = MultiClipboards.parseFrom(clips)
-        var mimeTypes = mutableListOf<String>()
+        val multiClips = try {
+            MultiClipboards.parseFrom(clips)
+        } catch (e: Exception) {
+            Log.w(logTag, "Failed to parse MultiClipboards protobuf: $e")
+            return
+        }
+
+        val mimeTypes = mutableListOf<String>()
         var text: String? = null
         var html: String? = null
-        for (clip in clips.getClipboardsList()) {
+        for (clip in multiClips.clipboardsList) {
             when (clip.format) {
-                    ClipboardFormat.Text -> {
+                ClipboardFormat.Text -> {
+                    if (!mimeTypes.contains(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
                         mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN)
+                    }
                     text = String(clip.content.toByteArray(), Charsets.UTF_8)
                 }
                 ClipboardFormat.Html -> {
-                    mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML)
+                    if (!mimeTypes.contains(ClipDescription.MIMETYPE_TEXT_HTML)) {
+                        mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML)
+                    }
                     html = String(clip.content.toByteArray(), Charsets.UTF_8)
                 }
-                ClipboardFormat.ImageRgba -> {
-                }
-                ClipboardFormat.ImagePng -> {
+                ClipboardFormat.ImageRgba, ClipboardFormat.ImagePng -> {
+                    // Image formats are not currently supported by Android clipboard bridge
+                    Log.d(logTag, "Ignored unsupported image clipboard format: ${clip.format}")
                 }
                 else -> {
-                    Log.e(logTag, "Unsupported clipboard format: ${clip.format}")
+                    Log.w(logTag, "Unsupported clipboard format: ${clip.format}")
                 }
             }
         }
 
-        val clipDescription = ClipDescription("clipboard", mimeTypes.toTypedArray())
-        var item: ClipData.Item? = null
-        if (text == null) {
-            Log.e(logTag, "No text content in clipboard")
+        if (text == null && html == null) {
+            Log.d(logTag, "No text or HTML content in clipboard update, ignore")
             return
-        } else {
-            if (html == null) {
-                item = ClipData.Item(text)
-            } else {
-                item = ClipData.Item(text, html)
-            }
         }
-        if (item == null) {
-            Log.e(logTag, "No item in clipboard")
+        if (mimeTypes.isEmpty()) {
             return
+        }
+
+        val clipDescription = ClipDescription("clipboard", mimeTypes.toTypedArray())
+        val item = if (html == null) {
+            ClipData.Item(text)
+        } else {
+            ClipData.Item(text ?: "", html)
         }
         val clipData = ClipData(clipDescription, item)
-        lastUpdatedClipData = clipData
-        clipboardManager.setPrimaryClip(clipData)
+
+        mainHandler.post {
+            try {
+                lastUpdatedClipData = clipData
+                clipboardManager.setPrimaryClip(clipData)
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to setPrimaryClip: $e")
+            }
+        }
+    }
+
+    fun cleanup() {
+        lastUpdatedClipData = null
+        _isCaptureStarted = false
     }
 }

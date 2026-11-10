@@ -38,9 +38,45 @@ import kotlin.concurrent.thread
 class MainActivity : FlutterActivity() {
     companion object {
         var flutterMethodChannel: MethodChannel? = null
+        @Volatile
         private var _rdClipboardManager: RdClipboardManager? = null
         val rdClipboardManager: RdClipboardManager?
-            get() = _rdClipboardManager;
+            get() = _rdClipboardManager
+
+        @Synchronized
+        fun getOrCreateRdClipboardManager(context: Context): RdClipboardManager {
+            var manager = _rdClipboardManager
+            if (manager == null) {
+                val clipService = context.applicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                if (clipService != null) {
+                    manager = RdClipboardManager(clipService)
+                    _rdClipboardManager = manager
+                    try {
+                        FFI.setClipboardManager(manager)
+                    } catch (e: Throwable) {
+                        Log.e("MainActivity", "Failed to register RdClipboardManager with JNI", e)
+                    }
+                } else {
+                    throw IllegalStateException("ClipboardService not available")
+                }
+            }
+            return manager
+        }
+
+        @Synchronized
+        fun cleanupClipboardManager() {
+            try {
+                _rdClipboardManager?.cleanup()
+            } catch (e: Throwable) {
+                Log.e("MainActivity", "Failed to cleanup RdClipboardManager", e)
+            }
+            _rdClipboardManager = null
+            try {
+                FFI.cleanupClipboardManager()
+            } catch (e: Throwable) {
+                Log.e("MainActivity", "Failed to cleanup JNI clipboard manager", e)
+            }
+        }
     }
 
     private val channelTag = "mChannel"
@@ -103,9 +139,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (_rdClipboardManager == null) {
-            _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            FFI.setClipboardManager(_rdClipboardManager!!)
+        try {
+            getOrCreateRdClipboardManager(this)
+        } catch (e: Exception) {
+            Log.e(logTag, "Failed to initialize RdClipboardManager in onCreate", e)
         }
     }
 
@@ -115,6 +152,9 @@ class MainActivity : FlutterActivity() {
         unbindMainService()
         flutterMethodChannel?.setMethodCallHandler(null)
         flutterMethodChannel = null
+        if (!MainService.isReady) {
+            cleanupClipboardManager()
+        }
         super.onDestroy()
     }
 
@@ -278,7 +318,11 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "try_sync_clipboard" -> {
-                    rdClipboardManager?.syncClipboard(true)
+                    try {
+                        getOrCreateRdClipboardManager(this).syncClipboard(true)
+                    } catch (e: Exception) {
+                        Log.w(logTag, "try_sync_clipboard failed: $e")
+                    }
                     result.success(true)
                 }
                 GET_START_ON_BOOT_OPT -> {

@@ -200,6 +200,12 @@ pub extern "system" fn Java_ffi_FFI_setClipboardManager(
     }
 }
 
+#[no_mangle]
+pub extern "system" fn Java_ffi_FFI_cleanupClipboardManager(_env: JNIEnv, _class: JClass) {
+    log::debug!("cleanupClipboardManager from jvm");
+    *CLIPBOARD_MANAGER.write().unwrap() = None;
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct MediaCodecInfo {
     pub name: String,
@@ -322,7 +328,13 @@ where
 {
     if let Some((jvm, cm)) = get_clipboard_handles() {
         let mut env = jvm.attach_current_thread()?;
-        env.call_method(&cm, name, sig, args)?;
+        let res = env.call_method(&cm, name, sig, args);
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+            log::warn!("Pending JNI exception cleared in _call_clipboard_manager");
+            return Err(JniError::JavaException);
+        }
+        res?;
         return Ok(());
     } else {
         return Err(JniError::ThrowFailed(-1));
@@ -334,12 +346,18 @@ pub fn call_clipboard_manager_update_clipboard(data: &[u8]) -> JniResult<()> {
         let mut env = jvm.attach_current_thread()?;
         let data = env.byte_array_from_slice(data)?;
 
-        env.call_method(
+        let res = env.call_method(
             &cm,
             "rustUpdateClipboard",
             "([B)V",
             &[JValue::Object(&JObject::from(data))],
-        )?;
+        );
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+            log::warn!("Pending JNI exception cleared in call_clipboard_manager_update_clipboard");
+            return Err(JniError::JavaException);
+        }
+        res?;
         return Ok(());
     } else {
         return Err(JniError::ThrowFailed(-1));
