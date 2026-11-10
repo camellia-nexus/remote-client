@@ -903,9 +903,7 @@ void androidChannelInit() {
             print(
               "stop_service by kotlin, isStart:${gFFI.serverModel.isStart}",
             );
-            if (gFFI.serverModel.isStart) {
-              gFFI.serverModel.stopService();
-            }
+            gFFI.serverModel.stopService();
             break;
           }
       }

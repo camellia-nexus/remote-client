@@ -57,14 +57,14 @@ object KeyEventConverter {
         }
     }
 
-    private val tag = "KeyEventConverter"
-
     private fun convertUnicodeToKeyCode(unicode: Int): Int {
+        if (!Character.isValidCodePoint(unicode)) {
+            return 0
+        }
         val charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
-        android.util.Log.d(tag, "unicode: $unicode")
-        val events = charMap.getEvents(charArrayOf(unicode.toChar()))
-        if (events != null && events.size > 0) {
-            android.util.Log.d(tag, "keycode ${events[0].keyCode}")
+        val chars = Character.toChars(unicode)
+        val events = charMap.getEvents(chars)
+        if (events != null && events.isNotEmpty()) {
             return events[0].keyCode
         }
         return 0

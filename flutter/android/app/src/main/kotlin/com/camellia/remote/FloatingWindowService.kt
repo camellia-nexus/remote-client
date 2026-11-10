@@ -41,7 +41,8 @@ class FloatingWindowService : Service(), View.OnTouchListener {
     private var dragging = false
     private var lastDownX = 0f
     private var lastDownY = 0f
-    private var viewCreated = false;
+    private var viewCreated = false
+    private var isAttached = false
     private var keepScreenOn = KeepScreenOn.DURING_CONTROLLED
 
     companion object {
@@ -67,10 +68,7 @@ class FloatingWindowService : Service(), View.OnTouchListener {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         try {
-            if (firstCreate) {
-                firstCreate = false
-                onFirstCreate(windowManager)
-            }
+            refreshOptions(windowManager)
             Log.d(logTag, "floating window size: $viewWidth x $viewHeight, transparency: $viewTransparency, lastLayoutX: $lastLayoutX, lastLayoutY: $lastLayoutY, customSvg: $customSvg")
             createView(windowManager)
             handler.postDelayed(runnable, 1000)
@@ -82,9 +80,16 @@ class FloatingWindowService : Service(), View.OnTouchListener {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (viewCreated) {
-            windowManager.removeView(floatingView)
+        if (isAttached) {
+            try {
+                windowManager.removeView(floatingView)
+            } catch (e: Exception) {
+                Log.w(logTag, "removeView failed: $e")
+            } finally {
+                isAttached = false
+            }
         }
+        viewCreated = false
         handler.removeCallbacks(runnable)
     }
 
@@ -174,10 +179,11 @@ class FloatingWindowService : Service(), View.OnTouchListener {
         updateKeepScreenOnLayoutParams()
 
         windowManager.addView(floatingView, layoutParams)
+        isAttached = true
         moveToScreenSide()
     }
 
-    private fun onFirstCreate(windowManager: WindowManager) {
+    private fun refreshOptions(windowManager: WindowManager) {
         val wh = getScreenSize(windowManager)
         val w = wh.first
         val h = wh.second
@@ -217,9 +223,12 @@ class FloatingWindowService : Service(), View.OnTouchListener {
             }
         }
         // position
-        lastLayoutX = 0
-        lastLayoutY = (wh.second - viewHeight) / 2
-        lastOrientation = resources.configuration.orientation
+        if (firstCreate) {
+            firstCreate = false
+            lastLayoutX = 0
+            lastLayoutY = (wh.second - viewHeight) / 2
+            lastOrientation = resources.configuration.orientation
+        }
     }
 
 
@@ -229,11 +238,13 @@ class FloatingWindowService : Service(), View.OnTouchListener {
     }
 
     override fun onTouch(view: View?, event: MotionEvent?): Boolean {
-        when (event?.action) {
+        val action = event?.action ?: return false
+        return when (action) {
             MotionEvent.ACTION_DOWN -> {
                 dragging = false
                 lastDownX = event.rawX
                 lastDownY = event.rawY
+                true
             }
             MotionEvent.ACTION_UP -> {
                 val clickDragTolerance = 10f
@@ -242,28 +253,45 @@ class FloatingWindowService : Service(), View.OnTouchListener {
                 } else {
                     moveToScreenSide()
                 }
+                true
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.rawX - lastDownX
                 val dy = event.rawY - lastDownY
-                // ignore too small fist start moving(some time is click)
+                // ignore too small first start moving(some time is click)
                 if (!dragging && dx*dx+dy*dy < 25) {
-                    return false
+                    true
+                } else {
+                    dragging = true
+                    layoutParams.x = event.rawX.toInt()
+                    layoutParams.y = event.rawY.toInt()
+                    layoutParams.width = viewWidth
+                    floatingView.setImageDrawable(originalDrawable)
+                    if (isAttached) {
+                        try {
+                            windowManager.updateViewLayout(view, layoutParams)
+                        } catch (e: Exception) {
+                            Log.w(logTag, "updateViewLayout in onTouch failed: $e")
+                        }
+                    }
+                    lastLayoutX = layoutParams.x
+                    lastLayoutY = layoutParams.y
+                    true
                 }
-                dragging = true
-                layoutParams.x = event.rawX.toInt()
-                layoutParams.y = event.rawY.toInt()
-                layoutParams.width = viewWidth
-                floatingView.setImageDrawable(originalDrawable)
-                windowManager.updateViewLayout(view, layoutParams)
-                lastLayoutX = layoutParams.x
-                lastLayoutY = layoutParams.y
             }
+            MotionEvent.ACTION_CANCEL -> {
+                dragging = false
+                moveToScreenSide()
+                true
+            }
+            else -> false
         }
-        return false
     }
 
     private fun moveToScreenSide(center: Boolean = false) {
+        if (!isAttached) {
+            return
+        }
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val wh = getScreenSize(windowManager)
         val w = wh.first
@@ -278,13 +306,20 @@ class FloatingWindowService : Service(), View.OnTouchListener {
             layoutParams.y = (wh.second - viewHeight) / 2
         }
         layoutParams.width = viewWidth / 2
-        windowManager.updateViewLayout(floatingView, layoutParams)
+        try {
+            windowManager.updateViewLayout(floatingView, layoutParams)
+        } catch (e: Exception) {
+            Log.w(logTag, "updateViewLayout in moveToScreenSide failed: $e")
+        }
         lastLayoutX = layoutParams.x
         lastLayoutY = layoutParams.y
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        if (!isAttached) {
+            return
+        }
         if (newConfig.orientation != lastOrientation) {
             lastOrientation = newConfig.orientation
             val wh = getScreenSize(windowManager)
@@ -358,7 +393,16 @@ class FloatingWindowService : Service(), View.OnTouchListener {
     }
 
     private fun stopMainService() {
-        MainActivity.flutterMethodChannel?.invokeMethod("stop_service", null)
+        try {
+            MainActivity.flutterMethodChannel?.invokeMethod("stop_service", null)
+        } catch (e: Exception) {
+            Log.w(logTag, "invokeMethod stop_service failed: $e")
+        }
+        try {
+            stopService(Intent(this, MainService::class.java))
+        } catch (e: Exception) {
+            Log.w(logTag, "stopService MainService fallback failed: $e")
+        }
     }
 
     enum class KeepScreenOn {
@@ -370,8 +414,12 @@ class FloatingWindowService : Service(), View.OnTouchListener {
     private val handler = Handler(Looper.getMainLooper())
     private val runnable = object : Runnable {
         override fun run() {
-            if (updateKeepScreenOnLayoutParams()) {
-                windowManager.updateViewLayout(floatingView, layoutParams)
+            if (isAttached && updateKeepScreenOnLayoutParams()) {
+                try {
+                    windowManager.updateViewLayout(floatingView, layoutParams)
+                } catch (e: Exception) {
+                    Log.w(logTag, "updateViewLayout in runnable failed: $e")
+                }
             }
             handler.postDelayed(this, 1000) // 1000 milliseconds = 1 second
         }

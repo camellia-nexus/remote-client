@@ -463,7 +463,11 @@ class MainActivity : FlutterActivity() {
         super.onStop()
         val disableFloatingWindow = FFI.getLocalOption("disable-floating-window") == "Y"
         if (!disableFloatingWindow && MainService.isReady) {
-            startService(Intent(this, FloatingWindowService::class.java))
+            try {
+                startService(Intent(this, FloatingWindowService::class.java))
+            } catch (e: Exception) {
+                Log.w(logTag, "startService FloatingWindowService failed: $e")
+            }
         }
     }
 

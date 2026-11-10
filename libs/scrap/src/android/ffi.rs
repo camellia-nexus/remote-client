@@ -269,7 +269,7 @@ pub fn call_main_service_pointer_input(kind: &str, mask: i32, x: i32, y: i32) ->
     if let Some((jvm, ctx)) = get_main_service_handles() {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         let kind = if kind == "touch" { 0 } else { 1 };
-        env.call_method(
+        let res = env.call_method(
             &ctx,
             "rustPointerInput",
             "(IIII)V",
@@ -279,7 +279,13 @@ pub fn call_main_service_pointer_input(kind: &str, mask: i32, x: i32, y: i32) ->
                 JValue::Int(x),
                 JValue::Int(y),
             ],
-        )?;
+        );
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+            log::warn!("Pending JNI exception cleared in call_main_service_pointer_input");
+            return Err(JniError::JavaException);
+        }
+        res?;
         return Ok(());
     } else {
         return Err(JniError::ThrowFailed(-1));
@@ -291,12 +297,18 @@ pub fn call_main_service_key_event(data: &[u8]) -> JniResult<()> {
         let mut env = jvm.attach_current_thread_as_daemon()?;
         let data = env.byte_array_from_slice(data)?;
 
-        env.call_method(
+        let res = env.call_method(
             &ctx,
             "rustKeyEventInput",
             "([B)V",
             &[JValue::Object(&JObject::from(data))],
-        )?;
+        );
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+            log::warn!("Pending JNI exception cleared in call_main_service_key_event");
+            return Err(JniError::JavaException);
+        }
+        res?;
         return Ok(());
     } else {
         return Err(JniError::ThrowFailed(-1));
