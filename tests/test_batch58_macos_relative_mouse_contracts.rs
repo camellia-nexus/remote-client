@@ -201,6 +201,7 @@ struct Owner {
 #[allow(dead_code)]
 enum EnableError {
     Conflict(Owner),
+    StaleGeneration { active_gen: u64 },
     CoreGraphicsError(i32),
 }
 
@@ -242,6 +243,11 @@ impl RelativeMouseCoordinatorSim {
         if self.is_locked {
             if let Some(owner) = &self.current_owner {
                 if owner.window_id == window_id && owner.session_id == session_id {
+                    if generation < owner.generation {
+                        return Err(EnableError::StaleGeneration {
+                            active_gen: owner.generation,
+                        });
+                    }
                     self.current_owner = Some(Owner {
                         window_id,
                         session_id: session_id.to_string(),
@@ -353,6 +359,13 @@ fn test_state028_concurrency_and_lifecycle_permutation_model() {
     // 4. Session A updates with higher generation (gen 2) -> Allowed
     let res_a2 = coordinator.enable(1, "sess-A", 2);
     assert_eq!(res_a2, Ok(true));
+
+    // 4b. Session A attempts stale enable with old gen 1 -> StaleGeneration error
+    let res_a_stale = coordinator.enable(1, "sess-A", 1);
+    assert_eq!(
+        res_a_stale,
+        Err(EnableError::StaleGeneration { active_gen: 2 })
+    );
 
     // 5. Stale disable with old gen 1 -> StaleGeneration error
     let res_dis_stale = coordinator.disable(1, "sess-A", 1);

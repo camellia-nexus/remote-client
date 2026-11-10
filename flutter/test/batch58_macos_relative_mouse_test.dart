@@ -305,5 +305,87 @@ void main() {
       expect(onDisabledCalled, isTrue);
       expect(nativeCalls.where((c) => c.method == 'disableNativeRelativeMouseMode').length, equals(1));
     });
+
+    test('7. rapid re-enable after cancellation preserves newest generation and does not destroy active lock', () async {
+      final enableCompleter1 = Completer<bool>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(hostChannel, (MethodCall call) async {
+        nativeCalls.add(call);
+        if (call.method == 'enableNativeRelativeMouseMode') {
+          final args = call.arguments as Map<dynamic, dynamic>;
+          final gen = args['generation'] as int;
+          if (gen == 1) {
+            return enableCompleter1.future;
+          }
+          return true;
+        }
+        if (call.method == 'disableNativeRelativeMouseMode') {
+          return true;
+        }
+        return null;
+      });
+
+      final modelA = createModel(sessionId: sessionA, messagesList: sentMessagesA);
+      modelA.updateImageWidgetSize(const Size(800, 600));
+
+      // 1. First enable started (generation 1)
+      modelA.setRelativeMouseMode(true);
+      await Future<void>.delayed(Duration.zero);
+
+      // 2. Immediately cancel (toggle off)
+      modelA.setRelativeMouseMode(false);
+      await Future<void>.delayed(Duration.zero);
+
+      // 3. Immediately re-enable (generation 2)
+      modelA.setRelativeMouseMode(true);
+      await Future<void>.delayed(Duration.zero);
+
+      // 4. Now generation 1 finally returns
+      enableCompleter1.complete(true);
+      await pumpEventQueue();
+
+      // Generation 2 must remain active and NOT be destroyed by generation 1's rollback!
+      expect(modelA.enabled.value, isTrue);
+      expect(RelativeMouseModel.activeNativeModel, equals(modelA));
+      expect(modelA.nativeGeneration, equals(2));
+
+      // Generation 1 rollback must have targeted generation 1, not generation 2
+      final disableCalls = nativeCalls.where((c) => c.method == 'disableNativeRelativeMouseMode');
+      for (final call in disableCalls) {
+        final args = call.arguments as Map<dynamic, dynamic>;
+        expect(args['generation'], equals(1));
+      }
+    });
+
+    test('8. performCleanupAsync cleanly awaits platform release and prevents double invocation', () async {
+      int disableCount = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(hostChannel, (MethodCall call) async {
+        nativeCalls.add(call);
+        if (call.method == 'enableNativeRelativeMouseMode') {
+          return true;
+        }
+        if (call.method == 'disableNativeRelativeMouseMode') {
+          disableCount++;
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          return true;
+        }
+        return null;
+      });
+
+      final modelA = createModel(sessionId: sessionA, messagesList: sentMessagesA);
+      modelA.updateImageWidgetSize(const Size(800, 600));
+      modelA.setRelativeMouseMode(true);
+      await pumpEventQueue();
+
+      expect(RelativeMouseModel.activeNativeModel, equals(modelA));
+      nativeCalls.clear();
+
+      await modelA.performCleanupAsync();
+
+      expect(modelA.enabled.value, isFalse);
+      expect(RelativeMouseModel.activeNativeModel, isNull);
+      expect(disableCount, equals(1));
+    });
   });
 }

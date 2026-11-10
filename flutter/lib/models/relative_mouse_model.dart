@@ -118,7 +118,9 @@ class RelativeMouseModel {
     });
   }
 
-  Future<bool> _enableNativeRelativeMouseMode() async {
+  Future<void>? _pendingDisableFuture;
+
+  Future<bool> _enableNativeRelativeMouseMode([int? targetRequestId]) async {
     if (!_effectiveIsMacOS) return false;
     if (_hostChannel == null) {
       initHostChannel();
@@ -142,6 +144,12 @@ class RelativeMouseModel {
         },
       );
       if (result == true) {
+        // Guard against race condition: if cancelled while in flight, rollback immediately
+        if (targetRequestId != null &&
+            (_enableRequestId != targetRequestId || _disposed)) {
+          await _disableNativeRelativeMouseMode(targetGeneration: gen);
+          return false;
+        }
         _activeNativeModel = this;
         return true;
       }
@@ -154,34 +162,47 @@ class RelativeMouseModel {
     return false;
   }
 
-  Future<void> _disableNativeRelativeMouseMode() async {
-    if (!_effectiveIsMacOS) return;
-    if (_hostChannel == null) return;
+  Future<void> _disableNativeRelativeMouseMode({int? targetGeneration}) {
+    if (!_effectiveIsMacOS) return Future.value();
+    if (_hostChannel == null) return Future.value();
 
-    if (_activeNativeModel != this) {
-      return;
+    if (_activeNativeModel != null && _activeNativeModel != this) {
+      return Future.value();
     }
 
-    final gen = _nativeGeneration;
-    try {
-      await _hostChannel!.invokeMethod(
-        'disableNativeRelativeMouseMode',
-        <String, dynamic>{
-          'windowId': _currentWindowId,
-          'sessionId': sessionId.toString(),
-          'generation': gen,
-        },
-      );
-    } on PlatformException catch (e) {
-      debugPrint(
-          '[RelMouse] Native relative mouse disable rejected (${e.code}): ${e.message}');
-    } catch (e) {
-      debugPrint('[RelMouse] Failed to disable native relative mouse mode: $e');
-    } finally {
-      if (_activeNativeModel == this) {
-        _activeNativeModel = null;
+    final gen = targetGeneration ?? _nativeGeneration;
+
+    // Reuse existing in-flight future if available
+    if (_pendingDisableFuture != null) {
+      return _pendingDisableFuture!;
+    }
+
+    final future = () async {
+      try {
+        await _hostChannel!.invokeMethod(
+          'disableNativeRelativeMouseMode',
+          <String, dynamic>{
+            'windowId': _currentWindowId,
+            'sessionId': sessionId.toString(),
+            'generation': gen,
+          },
+        );
+      } on PlatformException catch (e) {
+        debugPrint(
+            '[RelMouse] Native relative mouse disable rejected (${e.code}): ${e.message}');
+      } catch (e) {
+        debugPrint('[RelMouse] Failed to disable native relative mouse mode: $e');
+      } finally {
+        if (_activeNativeModel == this &&
+            (targetGeneration == null || targetGeneration == _nativeGeneration)) {
+          _activeNativeModel = null;
+        }
+        _pendingDisableFuture = null;
       }
-    }
+    }();
+
+    _pendingDisableFuture = future;
+    return future;
   }
 
   // Whether native relative mouse mode is currently active for this model
@@ -457,7 +478,7 @@ class RelativeMouseModel {
           if (_effectiveIsMacOS) {
             // macOS: Use native relative mouse mode with CGAssociateMouseAndMouseCursorPosition
             // This locks the cursor in place and provides raw delta via NSEvent monitor.
-            _enableNativeRelativeMouseMode().then((success) {
+            _enableNativeRelativeMouseMode(requestId).then((success) {
               // Guard against stale callback: user may have toggled off relative mode
               // or session may have closed while the async enable was in progress.
               if (_enableRequestId != requestId) {
@@ -1094,6 +1115,8 @@ class RelativeMouseModel {
     if (_effectiveIsMacOS) {
       await _disableNativeRelativeMouseMode();
     }
+    enabled.value = false;
+    onDisabled?.call();
   }
 
   void _disableWithCleanup() {

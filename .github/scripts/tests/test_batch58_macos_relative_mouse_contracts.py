@@ -202,6 +202,8 @@ class TestBatch58MacOSRelativeMouseContracts(unittest.TestCase):
                         self.current_owner.window_id == window_id
                         and self.current_owner.session_id == session_id
                     ):
+                        if generation < self.current_owner.generation:
+                            return "STALE_GENERATION"
                         self.current_owner = SimOwner(window_id, session_id, generation)
                         self.active_generation = generation
                         return "SUCCESS"
@@ -267,6 +269,11 @@ class TestBatch58MacOSRelativeMouseContracts(unittest.TestCase):
         coord.enable(window_id=1, session_id="session-A", generation=2)
         res_stale = coord.disable(window_id=1, session_id="session-A", generation=1)
         self.assertEqual(res_stale, "STALE_GENERATION")
+        self.assertTrue(coord.is_locked)
+
+        # Step 4b: Stale enable from Session A with old gen 1 after gen 2 -> Must be rejected with STALE_GENERATION
+        res_enable_stale = coord.enable(window_id=1, session_id="session-A", generation=1)
+        self.assertEqual(res_enable_stale, "STALE_GENERATION")
         self.assertTrue(coord.is_locked)
 
         # Step 5: Delayed retry race condition test

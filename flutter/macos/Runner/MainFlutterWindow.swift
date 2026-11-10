@@ -87,10 +87,23 @@ class RelativeMouseState {
         guard isLocked, let owner = currentOwner else { return }
         guard let closingWindow = notification.object as? NSWindow else { return }
 
-        // If the closing window is the active owner's window, auto-release relative mouse mode
-        if (ownerWindow != nil && closingWindow == ownerWindow) || (owner.windowId == 0 && closingWindow is MainFlutterWindow) {
+        // If the closing window is the active owner's window, auto-release relative mouse mode.
+        // Also release if ownerWindow reference became nil (orphaned pointer lock).
+        let isOwnerClosing = (ownerWindow != nil && closingWindow == ownerWindow)
+            || (owner.windowId == 0 && closingWindow is MainFlutterWindow)
+            || (ownerWindow == nil)
+        if isOwnerClosing {
             NSLog("[Camellia] Owner window closing for sessionId=%@ windowId=%lld gen=%llu, auto-releasing relative mouse mode",
                   owner.sessionId, owner.windowId, owner.generation)
+            forceRelease()
+        }
+    }
+
+    func releaseIfOwnedBy(windowId: Int64) {
+        assert(Thread.isMainThread)
+        guard isLocked, let owner = currentOwner else { return }
+        if owner.windowId == windowId {
+            NSLog("[Camellia] Force releasing relative mouse mode for windowId=%lld", windowId)
             forceRelease()
         }
     }
@@ -152,6 +165,7 @@ class RelativeMouseState {
 
     enum EnableError: Error {
         case conflict(owner: RelativeMouseOwner)
+        case staleGeneration(activeGen: UInt64)
         case cgError(code: Int32)
         case monitorError
     }
@@ -174,6 +188,10 @@ class RelativeMouseState {
 
             // Same session and window re-enabling or updating channel
             if owner.windowId == windowId && owner.sessionId == sessionId {
+                if generation < owner.generation {
+                    NSLog("[Camellia] Stale enable generation: caller gen=%llu < active owner gen=%llu", generation, owner.generation)
+                    return .failure(.staleGeneration(activeGen: owner.generation))
+                }
                 currentOwner = RelativeMouseOwner(windowId: windowId, sessionId: sessionId, generation: generation)
                 activeGeneration = generation
                 deltaChannel = channel
@@ -476,7 +494,14 @@ class MainFlutterWindow: NSWindow {
                                             details: nil))
                         break
                     }
-                    let targetWindow = registrar.view?.window ?? (self as NSWindow)
+                    let targetWindow: NSWindow?
+                    if let viewWindow = registrar.view?.window {
+                        targetWindow = viewWindow
+                    } else if windowId == 0 {
+                        targetWindow = (self as NSWindow)
+                    } else {
+                        targetWindow = nil
+                    }
                     let enableResult = self.enableNativeRelativeMouseMode(channel: channel,
                                                                          window: targetWindow,
                                                                          windowId: windowId,
@@ -495,6 +520,10 @@ class MainFlutterWindow: NSWindow {
                                                     "ownerSessionId": owner.sessionId,
                                                     "ownerGeneration": owner.generation
                                                 ]))
+                        case .staleGeneration(let activeGen):
+                            result(FlutterError(code: "STALE_GENERATION",
+                                                message: "Caller generation \(generation) is older than active generation \(activeGen)",
+                                                details: ["activeGeneration": activeGen]))
                         case .cgError(let code):
                             result(FlutterError(code: "CG_ERROR",
                                                 message: "Failed to dissociate mouse from cursor position: \(code)",
