@@ -245,6 +245,39 @@ class TestBatch56StoragePrivacyAndCodegenContracts(unittest.TestCase):
             self.generate_bridge_text,
             "PROV-006 violation: generate-bridge.sh must validate against provenance manifest",
         )
+        self.assertIn(
+            "CARGO_HOME",
+            self.generate_bridge_text,
+            "PROV-006 violation: generate-bridge.sh must inspect CARGO_HOME environment variable",
+        )
+        self.assertIn(
+            "if not crate_matches:",
+            self.generate_bridge_text,
+            "PROV-006 violation: generate-bridge.sh must fail-closed if crate_matches is empty",
+        )
+        self.assertIn(
+            "if not lock_matches:",
+            self.generate_bridge_text,
+            "PROV-006 violation: generate-bridge.sh must fail-closed if lock_matches is empty",
+        )
+
+    def test_prov006_generate_bridge_unsupported_version_diagnostic(self):
+        """PROV-006: generate-bridge.sh must provide clean diagnostic without NameError on unsupported version."""
+        import subprocess
+
+        env = os.environ.copy()
+        env["FRB_CODEGEN_VERSION"] = "9.99.9"
+        proc = subprocess.run(
+            ["bash", str(GENERATE_BRIDGE_SH_PATH)],
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        combined_output = proc.stdout + proc.stderr
+        self.assertIn("Unsupported FRB codegen version 9.99.9", combined_output)
+        self.assertNotIn("NameError", combined_output)
 
     def test_prov006_ci_workflow_enforces_zero_bridge_drift(self):
         """PROV-006: ci.yml generate_bridge job must assert git diff --exit-code on bridge outputs."""

@@ -20,7 +20,7 @@ import json, sys
 data = json.load(open('$provenance_config'))
 ver = '$frb_codegen_version'
 if ver not in data.get('versions', {}):
-    sys.exit(f'Unsupported FRB codegen version {ver}; not found in {provenance_config}')
+    sys.exit(f'Unsupported FRB codegen version {ver}; not found in $provenance_config')
 "
 
 installed_version=""
@@ -35,7 +35,7 @@ fi
 
 # Verify crate and Cargo.lock cryptographic provenance
 python3 -c "
-import glob, hashlib, json, sys
+import glob, hashlib, json, os, sys
 from pathlib import Path
 
 target_version = '$frb_codegen_version'
@@ -43,8 +43,10 @@ data = json.load(open('$provenance_config'))['versions'][target_version]
 exp_crate = data['crate_sha256']
 exp_lock = data['lockfile_sha256']
 
-cargo_home = Path.home() / '.cargo'
+cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
 crate_matches = list(cargo_home.glob(f'registry/cache/**/flutter_rust_bridge_codegen-{target_version}.crate'))
+if not crate_matches:
+    sys.exit(f'Provenance error: No cached crate found for flutter_rust_bridge_codegen-{target_version} under {cargo_home}')
 for crate_file in crate_matches:
     digest = hashlib.sha256(crate_file.read_bytes()).hexdigest()
     if digest != exp_crate:
@@ -52,6 +54,8 @@ for crate_file in crate_matches:
     print(f'[Provenance] Verified crate checksum: {digest}')
 
 lock_matches = list(cargo_home.glob(f'registry/src/**/flutter_rust_bridge_codegen-{target_version}/Cargo.lock'))
+if not lock_matches:
+    sys.exit(f'Provenance error: No Cargo.lock found for flutter_rust_bridge_codegen-{target_version} under {cargo_home}')
 for lock_file in lock_matches:
     digest = hashlib.sha256(lock_file.read_bytes()).hexdigest()
     if digest != exp_lock:
