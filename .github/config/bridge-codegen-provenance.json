@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "component": "flutter_rust_bridge_codegen",
+  "default_version": "2.13.0",
+  "versions": {
+    "2.12.0": {
+      "crate_sha256": "13823e8157bada9dc828d67cd23e4bcebcfffa9313175dacad0325fc3188940c",
+      "lockfile_sha256": "3b4351639c7cbd5c6df393e493ad084b6e7c01ae9ea36fb0097ab775af4e6785",
+      "lockfile_size": 46211,
+      "yanked": false
+    },
+    "2.13.0": {
+      "crate_sha256": "701a8e577f9f5f59f651e1e932add36ee5dfb82d0fa20215225ea177d4dbbe4b",
+      "lockfile_sha256": "226c2a5c9116415265d5c0c289f419c21d8d24e92dbbbe87456f7a9789d3ee57",
+      "lockfile_size": 46211,
+      "yanked": false
+    }
+  }
+}

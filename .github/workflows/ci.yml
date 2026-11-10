@@ -124,6 +124,14 @@ jobs:
       - name: Format generated Rust bridge
         run: cargo fmt --all
 
+      - name: Verify zero bridge drift
+        run: |
+          git diff --exit-code -- \
+            src/bridge_generated*.rs \
+            flutter/lib/generated_bridge* \
+            flutter/ios/Runner/bridge_generated.h \
+            flutter/macos/Runner/bridge_generated.h
+
       - name: Upload generated bridge
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
