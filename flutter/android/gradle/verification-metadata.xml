@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.3.xsd">
+   <configuration>
+      <verify-metadata>true</verify-metadata>
+      <verify-signatures>false</verify-signatures>
+      <key-servers/>
+   </configuration>
+   <components>
+      <component group="androidx.media" name="media" version="1.6.0">
+         <artifact name="media-1.6.0.aar">
+            <sha256 value="fe628847d8f909ca8f23d685061f9a7684aa0c9bc9c1b201c4ff6eb7b3372828"/>
+         </artifact>
+         <artifact name="media-1.6.0.pom">
+            <sha256 value="3e1ba4e81c7cce83cd721051d132359a802697708acb921c4d3460da5de71ede"/>
+         </artifact>
+      </component>
+      <component group="com.caverock" name="androidsvg-aar" version="1.4">
+         <artifact name="androidsvg-aar-1.4.aar">
+            <sha256 value="02a5b08a2b35d2d58eb2eaca9d84ac00fb341da725fdbd653ea3ed130437e95a"/>
+         </artifact>
+         <artifact name="androidsvg-aar-1.4.pom">
+            <sha256 value="a789196681aeff63a375ed4bf417c721f087729e9c90c5e4efccdbc9e97e924a"/>
+         </artifact>
+      </component>
+      <component group="com.github.getActivity" name="XXPermissions" version="18.5">
+         <artifact name="XXPermissions-18.5.aar">
+            <sha256 value="9fa58a47c7362e467a475d716bbd4111dc23d6c50fffffc478c11b74bbe881f5"/>
+         </artifact>
+         <artifact name="XXPermissions-18.5.pom">
+            <sha256 value="a8d26a9c926711ee49b48b37199befc3c566b7b6fe78273718d31e7027e60e18"/>
+         </artifact>
+      </component>
+      <component group="com.google.protobuf" name="protobuf-javalite" version="3.25.5">
+         <artifact name="protobuf-javalite-3.25.5.jar">
+            <sha256 value="79a3ff51ac2a8b1be7fffa228483d64974f17f3effffd966b054d87179e45634"/>
+         </artifact>
+         <artifact name="protobuf-javalite-3.25.5.pom">
+            <sha256 value="63409d85877b2d63c81634f1b2274250fe56ee3d3ef3e8a3f65c1cb4707266f2"/>
+         </artifact>
+      </component>
+      <component group="com.google.protobuf" name="protoc" version="3.25.5">
+         <artifact name="protoc-3.25.5-linux-x86_64.exe">
+            <sha256 value="d69b0a9ac8264bb3d464ae22742430943aa0a6cdf3734180af5a607c0bf8adaa"/>
+         </artifact>
+         <artifact name="protoc-3.25.5.pom">
+            <sha256 value="9473e63ac67c4b43ee5db9c5d1fd8858b60a738d435a20245de0b1bfd5413a36"/>
+         </artifact>
+      </component>
+   </components>
+</verification-metadata>

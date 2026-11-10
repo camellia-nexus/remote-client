@@ -1061,10 +1061,13 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
         );
         return;
     }
-    let multi_clips = MultiClipboards {
+    let mut cb = cb;
+    cb.special_fields.clear();
+    let mut multi_clips = MultiClipboards {
         clipboards: vec![cb],
         ..Default::default()
     };
+    multi_clips.special_fields.clear();
     if let Ok(bytes) = multi_clips.write_to_bytes() {
         let _ = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);
     }
@@ -1136,6 +1139,10 @@ pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
                 return;
             }
         }
+    }
+    mcb.special_fields.clear();
+    for cb in &mut mcb.clipboards {
+        cb.special_fields.clear();
     }
     if let Ok(bytes) = mcb.write_to_bytes() {
         let _ = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);

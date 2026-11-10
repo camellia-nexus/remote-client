@@ -84,7 +84,7 @@ repositories {
 
 protobuf {
     protoc {
-        artifact = 'com.google.protobuf:protoc:3.20.1'
+        artifact = 'com.google.protobuf:protoc:3.25.5'
     }
 
     generateProtoTasks {
@@ -172,7 +172,7 @@ flutter {
 }
 
 dependencies {
-    implementation 'com.google.protobuf:protobuf-javalite:3.20.1'
+    implementation 'com.google.protobuf:protobuf-javalite:3.25.5'
     implementation "androidx.media:media:1.6.0"
     implementation 'com.github.getActivity:XXPermissions:18.5'
     implementation 'com.caverock:androidsvg-aar:1.4'

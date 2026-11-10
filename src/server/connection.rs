@@ -4304,6 +4304,7 @@ impl Connection {
                     }
 
                     me.modifiers = modifiers;
+                    me.special_fields.clear();
 
                     let encode_result = me.write_to_bytes();
 
