@@ -1,0 +1,118 @@
+name: CodeQL Advanced
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+      - 'gemini/**'
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '15 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: client-codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_CHANNEL: stable
+  FLUTTER_VERSION: "3.44.9"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            os: ubuntu-24.04
+            timeout: 15
+            build-mode: none
+          - language: c-cpp
+            os: ubuntu-24.04
+            timeout: 30
+            build-mode: none
+          - language: java-kotlin
+            os: ubuntu-24.04
+            timeout: 30
+            build-mode: none
+          - language: javascript-typescript
+            os: ubuntu-24.04
+            timeout: 15
+            build-mode: none
+          - language: python
+            os: ubuntu-24.04
+            timeout: 15
+            build-mode: none
+          - language: rust
+            os: ubuntu-24.04
+            timeout: 30
+            build-mode: none
+          - language: swift
+            os: macos-15
+            timeout: 45
+            build-mode: manual
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Flutter for Swift analysis
+        if: matrix.language == 'swift'
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Prepare Flutter dependencies for Swift
+        if: matrix.language == 'swift'
+        run: |
+          mkdir -p target/debug target/release target/universal/debug target/universal/release
+          printf '#include <stdbool.h>\nbool camellia_remote_core_main(void) { return true; }\nvoid camellia_remote_ios_link_anchor(void) {}\nvoid handle_applicationShouldOpenUntitledFile(void) {}\n' > /tmp/mock_bridge.c
+          clang -dynamiclib -arch arm64 -arch x86_64 -o target/debug/libcamellia_remote.dylib /tmp/mock_bridge.c
+          cp target/debug/libcamellia_remote.dylib target/release/libcamellia_remote.dylib
+          clang -c -arch arm64 -o /tmp/anchor.o /tmp/mock_bridge.c
+          rm -f /tmp/libcamellia_remote.a
+          ar rcs /tmp/libcamellia_remote.a /tmp/anchor.o
+          cp /tmp/libcamellia_remote.a target/universal/debug/libcamellia_remote.a
+          cp /tmp/libcamellia_remote.a target/universal/release/libcamellia_remote.a
+          flutter config --enable-macos-desktop
+          flutter precache --macos --ios
+          cd flutter
+          flutter pub get
+          flutter build macos --config-only
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: .github/codeql/codeql-config.yml
+
+      - name: Manual build for Swift
+        if: matrix.language == 'swift' && matrix.build-mode == 'manual'
+        run: |
+          xcodebuild -workspace flutter/macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # v3.39.3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: true

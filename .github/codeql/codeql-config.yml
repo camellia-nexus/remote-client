@@ -1,0 +1,30 @@
+name: "Camellia Remote CodeQL Configuration"
+
+# Enable security-extended query pack for comprehensive taint analysis
+queries:
+  - uses: security-extended
+  - uses: security-and-quality
+
+# Explicitly scope analysis to human-authored production code
+paths:
+  - src
+  - libs
+  - flutter/android
+  - flutter/ios
+  - flutter/macos
+  - flutter/linux
+  - flutter/windows
+  - flutter/web/js
+  - .github/workflows
+  - .github/scripts
+
+# Filter out generated protocol, bridge facade and compiled outputs from static alerts
+paths-ignore:
+  - '**/bridge_generated*.rs'
+  - '**/bridge_generated*.h'
+  - '**/generated_bridge/**'
+  - '**/*.pb.dart'
+  - '**/*.pbenum.dart'
+  - '**/*.pbjson.dart'
+  - '**/*.pbserver.dart'
+  - 'flutter/web/dist/**'
