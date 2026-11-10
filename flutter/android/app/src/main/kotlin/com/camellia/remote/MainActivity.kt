@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.ClipboardManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import android.os.IBinder
@@ -134,6 +135,27 @@ class MainActivity : FlutterActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_INVOKE_PERMISSION_ACTIVITY_MEDIA_PROJECTION && resultCode == RES_FAILED) {
             flutterMethodChannel?.invokeMethod("on_media_projection_canceled", null)
+        } else if (requestCode == REQ_OPEN_DOCUMENT_TREE) {
+            if (resultCode == RESULT_OK && data?.data != null) {
+                val uri = data.data!!
+                val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                try {
+                    contentResolver.takePersistableUriPermission(uri, takeFlags)
+                } catch (e: Exception) {
+                    Log.e(logTag, "Failed to take persistable URI permission: ${e.message}", e)
+                }
+                val payload = mapOf(
+                    "uri" to uri.toString(),
+                    "name" to (uri.lastPathSegment ?: "Shared Folder"),
+                    "result" to true
+                )
+                flutterMethodChannel?.invokeMethod("on_saf_root_granted", payload)
+            } else {
+                val payload = mapOf(
+                    "result" to false
+                )
+                flutterMethodChannel?.invokeMethod("on_saf_root_granted", payload)
+            }
         }
     }
 
@@ -255,6 +277,55 @@ class MainActivity : FlutterActivity() {
                     } else {
                         result.error("invalid_argument", "Expected String or Map argument", null)
                     }
+                }
+                "saf_open_document_tree" -> {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                    }
+                    startActivityForResult(intent, REQ_OPEN_DOCUMENT_TREE)
+                    result.success(true)
+                }
+                "saf_list_persisted_roots" -> {
+                    val list = contentResolver.persistedUriPermissions.map {
+                        mapOf(
+                            "uri" to it.uri.toString(),
+                            "is_read" to it.isReadPermission,
+                            "is_write" to it.isWritePermission,
+                            "persisted_time" to it.persistedTime
+                        )
+                    }
+                    result.success(list)
+                }
+                "saf_revoke_persisted_root" -> {
+                    val uriStr = call.arguments as? String
+                    if (uriStr != null) {
+                        try {
+                            val uri = Uri.parse(uriStr)
+                            val releaseFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            contentResolver.releasePersistableUriPermission(uri, releaseFlags)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("saf_error", "Failed to release URI permission: ${e.message}", null)
+                        }
+                    } else {
+                        result.error("invalid_argument", "Expected URI string", null)
+                    }
+                }
+                "saf_revoke_all_roots" -> {
+                    val releaseFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    var count = 0
+                    for (p in contentResolver.persistedUriPermissions) {
+                        try {
+                            contentResolver.releasePersistableUriPermission(p.uri, releaseFlags)
+                            count++
+                        } catch (e: Exception) {
+                            Log.w(logTag, "Failed releasing URI: ${p.uri}", e)
+                        }
+                    }
+                    result.success(count)
                 }
                 START_ACTION -> {
                     if (call.arguments is String) {

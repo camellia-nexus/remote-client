@@ -64,6 +64,14 @@ class ServerModel with ChangeNotifier {
 
   bool get fileOk => _fileOk;
 
+  int _storageGeneration = 0;
+  int get storageGeneration => _storageGeneration;
+
+  void invalidateStorageCapability() {
+    _storageGeneration++;
+    notifyListeners();
+  }
+
   bool get clipboardOk => _clipboardOk;
 
   bool get showElevation => _showElevation;
@@ -276,16 +284,11 @@ class ServerModel with ChangeNotifier {
       _audioOk = audioOption != 'N';
     }
 
-    // file
-    if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-      _fileOk = false;
-      bind.mainSetOption(key: kOptionEnableFileTransfer, value: "N");
-    } else {
-      final fileOption = await bind.mainGetOption(
-        key: kOptionEnableFileTransfer,
-      );
-      _fileOk = fileOption != 'N';
-    }
+    // file (PRIV-010: scoped storage capability decoupled from storage permissions)
+    final fileOption = await bind.mainGetOption(
+      key: kOptionEnableFileTransfer,
+    );
+    _fileOk = fileOption != 'N';
 
     // clipboard
     final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
@@ -391,23 +394,23 @@ class ServerModel with ChangeNotifier {
     if (clients.any((c) => !c.disconnected)) {
       await showClientsMayNotBeChangedAlert(parent.target);
     }
-    if (!_fileOk &&
-        !await AndroidPermissionManager.check(kManageExternalStorage)) {
-      final res = await AndroidPermissionManager.request(
-        kManageExternalStorage,
-      );
-      if (!res) {
-        showToast(translate('Failed'));
-        return;
-      }
-    }
 
     _fileOk = !_fileOk;
+    if (!_fileOk) {
+      invalidateStorageCapability();
+    }
     bind.mainSetOption(
       key: kOptionEnableFileTransfer,
       value: _fileOk ? defaultOptionYes : 'N',
     );
     notifyListeners();
+  }
+
+  /// PRIV-010: Request user-selected folder grant via Storage Access Framework (SAF).
+  Future<void> requestSafDirectoryGrant() async {
+    if (isAndroid) {
+      await parent.target?.invokeMethod("saf_open_document_tree");
+    }
   }
 
   toggleClipboard() async {
@@ -501,9 +504,6 @@ class ServerModel with ChangeNotifier {
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
         await checkFloatingWindowPermission();
       }
-      if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-        await AndroidPermissionManager.request(kManageExternalStorage);
-      }
       startService();
     }
   }
@@ -526,6 +526,7 @@ class ServerModel with ChangeNotifier {
   Future<void> stopService() async {
     _isStart = false;
     closeAll();
+    invalidateStorageCapability();
     await parent.target?.invokeMethod("stop_service");
     await bind.mainStopService();
     notifyListeners();

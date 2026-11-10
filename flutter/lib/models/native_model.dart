@@ -4,7 +4,6 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:external_path/external_path.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -240,11 +239,20 @@ class PlatformFFI {
       _startListenEvent(_ffiBind); // global event
       try {
         if (isAndroid) {
-          // only support for android
-          final directories =
-              await ExternalPath.getExternalStorageDirectories();
-          if (directories != null && directories.isNotEmpty) {
-            _homeDir = directories[0];
+          // PRIV-010: Replace unconstrained external path (/storage/emulated/0)
+          // with an app-scoped sandbox directory requiring zero system permissions
+          // and working natively under Android 11+ scoped storage.
+          final base = docDir.isNotEmpty
+              ? docDir
+              : (await getApplicationDocumentsDirectory()).path;
+          final sharedDir = Directory('$base/shared');
+          try {
+            if (!await sharedDir.exists()) {
+              await sharedDir.create(recursive: true);
+            }
+            _homeDir = sharedDir.path;
+          } catch (_) {
+            _homeDir = '$base/shared';
           }
         } else if (isIOS) {
           // CRED-011: User downloads and received data live in Documents/data

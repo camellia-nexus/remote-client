@@ -38,6 +38,7 @@ const val EXT_LOGIN_REQ_NOTIFY = "LOGIN_REQ_NOTIFY"
 // Activity requestCode
 const val REQ_INVOKE_PERMISSION_ACTIVITY_MEDIA_PROJECTION = 101
 const val REQ_REQUEST_MEDIA_PROJECTION = 201
+const val REQ_OPEN_DOCUMENT_TREE = 301
 
 // Activity responseCode
 const val RES_FAILED = -100
