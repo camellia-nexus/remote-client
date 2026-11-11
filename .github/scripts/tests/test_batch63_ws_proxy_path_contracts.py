@@ -77,10 +77,10 @@ def _format_host_port(host: str, port: int) -> str:
 def _parse_server_input(server: str) -> _ServerEndpoint | None:
     if not server or len(server) > 2048:
         return None
-    if any((ord(c) < 32 and c not in " \t\r\n") or ord(c) == 127 for c in server):
+    if any((ord(c) < 32 and c not in " \t\r\n") or ord(c) == 127 or (128 <= ord(c) <= 159) for c in server):
         return None
     server = server.strip()
-    if not server or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in server):
+    if not server or any(character.isspace() or ord(character) < 32 or ord(character) == 127 or (128 <= ord(character) <= 159) for character in server):
         return None
     if "#" in server:
         return None
@@ -289,7 +289,7 @@ class TestBatch63WsProxyPathContracts(unittest.TestCase):
     def test_management_views_py_parse_server_input_guards(self):
         self.assertIn("def _parse_server_input(", self.views_py)
         self.assertIn('if "#" in server:', self.views_py)
-        self.assertIn('any((ord(c) < 32 and c not in " \\t\\r\\n") or ord(c) == 127 for c in server)', self.views_py)
+        self.assertIn('any((ord(c) < 32 and c not in " \\t\\r\\n") or ord(c) == 127 or (128 <= ord(c) <= 159) for c in server)', self.views_py)
         self.assertIn('parsed.username is not None or parsed.password is not None or "@" in parsed.netloc', self.views_py)
         self.assertIn('any(character in server for character in "/?#@")', self.views_py)
 
@@ -361,8 +361,12 @@ class TestBatch63WsProxyPathContracts(unittest.TestCase):
         self.assertEqual(_normalize_rendezvous_server("wss://host:8443/id\x00"), "")
         self.assertEqual(_normalize_rendezvous_server("wss://host:8443/id\x1f"), "")
         self.assertEqual(_normalize_rendezvous_server("wss://host:8443/id\x7f"), "")
+        self.assertEqual(_normalize_rendezvous_server("wss://host:8443/id\x80"), "")
+        self.assertEqual(_normalize_rendezvous_server("wss://host:8443/id\x9f"), "")
         self.assertEqual(_normalize_rendezvous_server("wss://host:8443/i d"), "")
         self.assertEqual(_normalize_rendezvous_server("host:21116\x00"), "")
+        self.assertEqual(_normalize_rendezvous_server("host:21116\x80"), "")
+        self.assertEqual(_normalize_rendezvous_server("host:21116\x9f"), "")
 
         # Bare paths or query
         self.assertEqual(_normalize_rendezvous_server("host:21116/path"), "")

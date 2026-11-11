@@ -446,6 +446,14 @@ test('COMPAT-008: checkWsEndpoint preserves valid custom paths and queries; reje
     checkWsEndpoint('wss://host:8443/id\x7f', '', '', 'rendezvous', '', defaultPort),
     ''
   );
+  assert.strictEqual(
+    checkWsEndpoint('wss://host:8443/id\x80', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+  assert.strictEqual(
+    checkWsEndpoint('wss://host:8443/id\x9f', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
 
   // Disallow bare path or query
   assert.strictEqual(
@@ -454,6 +462,28 @@ test('COMPAT-008: checkWsEndpoint preserves valid custom paths and queries; reje
   );
   assert.strictEqual(
     checkWsEndpoint('host:21116?query', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+
+  // Disallow port 0 and out-of-range ports
+  assert.strictEqual(
+    checkWsEndpoint('wss://host:0/id', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+  assert.strictEqual(
+    checkWsEndpoint('ws://host:0/id', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+  assert.strictEqual(
+    checkWsEndpoint('host:0', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+  assert.strictEqual(
+    checkWsEndpoint('host:99999', '', '', 'rendezvous', '', defaultPort),
+    ''
+  );
+  assert.strictEqual(
+    checkWsEndpoint('[::1', '', '', 'rendezvous', '', defaultPort),
     ''
   );
 });

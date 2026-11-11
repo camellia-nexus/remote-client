@@ -504,9 +504,16 @@ export function checkWsEndpoint(
       const host = formatHostForUrl(url.hostname, url.hostname.includes(':'));
       const hasExplicitPath = Boolean(url.pathname && url.pathname !== '/');
       const explicitPortFromRaw = parseExplicitPortFromUrlInput(raw);
-      const explicitPort = url.port
-        ? Number.parseInt(url.port, 10)
-        : explicitPortFromRaw;
+      let explicitPort: number | null = null;
+      if (url.port) {
+        const numeric = Number.parseInt(url.port, 10);
+        if (!Number.isInteger(numeric) || numeric <= 0 || numeric > 65535) {
+          return '';
+        }
+        explicitPort = numeric;
+      } else if (explicitPortFromRaw !== null) {
+        explicitPort = explicitPortFromRaw;
+      }
       const baseIdPort = normalizeDefaultIdPort(defaultIdPort);
       const defaultWsIdPort = offsetPort(baseIdPort, 2);
       const defaultWsRelayPort = offsetPort(baseIdPort, 3);
@@ -529,7 +536,7 @@ export function checkWsEndpoint(
 
   const parsed = parseServerEndpoint(raw);
   if (!parsed) {
-    return raw;
+    return '';
   }
   const baseIdPort = normalizeDefaultIdPort(defaultIdPort);
   const defaultServiceRelayPort = offsetPort(baseIdPort, 1);
