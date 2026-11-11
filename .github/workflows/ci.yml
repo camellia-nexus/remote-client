@@ -108,6 +108,7 @@ jobs:
           echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
           sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
           sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          sudo rm -rf /var/lib/apt/lists/*
           export DEBIAN_FRONTEND=noninteractive
           export NEEDRESTART_MODE=a
           sudo -E apt-get update
@@ -327,6 +328,7 @@ jobs:
           echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
           sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
           sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          sudo rm -rf /var/lib/apt/lists/*
           export DEBIAN_FRONTEND=noninteractive
           export NEEDRESTART_MODE=a
           sudo -E apt-get update
