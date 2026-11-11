@@ -52,7 +52,23 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
+fn ensure_bridge_prerequisites() {
+    let flutter_feature = std::env::var("CARGO_FEATURE_FLUTTER").is_ok();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let requires_bridge = flutter_feature || target_os == "android" || target_os == "ios";
+    if requires_bridge {
+        let bridge_path = std::path::Path::new("src/bridge_generated.rs");
+        if !bridge_path.exists() {
+            panic!(
+                "\n\n[BUILD-001 ERROR] Missing Flutter Rust Bridge generated file: src/bridge_generated.rs!\n\
+                Please run 'bash .github/scripts/generate-bridge.sh' or ensure bridge generation is executed.\n\n"
+            );
+        }
+    }
+}
+
 fn main() {
+    ensure_bridge_prerequisites();
     camellia_remote_protocol::gen_version();
     println!("cargo:rustc-check-cfg=cfg(frb_expand)");
     install_android_deps();

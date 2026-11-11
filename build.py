@@ -34,6 +34,21 @@ def generate_bridge():
     run(["bash", ".github/scripts/generate-bridge.sh"])
 
 
+def ensure_bridge(force=False):
+    bridge_rs = ROOT / "src/bridge_generated.rs"
+    bridge_h_ios = ROOT / "flutter/ios/Runner/bridge_generated.h"
+    bridge_h_mac = ROOT / "flutter/macos/Runner/bridge_generated.h"
+    bridge_dart = ROOT / "flutter/lib/generated_bridge.dart"
+
+    missing = [
+        str(p)
+        for p in (bridge_rs, bridge_h_ios, bridge_h_mac, bridge_dart)
+        if not p.is_file()
+    ]
+    if force or missing:
+        generate_bridge()
+
+
 def build_rust(features, target=None):
     cmd = ["cargo", "build", "--release", "--lib", "--features", features]
     if target:
@@ -145,6 +160,11 @@ def main():
         help="Use committed dependency lockfiles.",
     )
     parser.add_argument(
+        "--regenerate-bridge",
+        action="store_true",
+        help="Force regeneration of Flutter Rust Bridge even if generated files exist.",
+    )
+    parser.add_argument(
         "--skip-bridge",
         action="store_true",
         help="Skip Flutter Rust Bridge generation when generated files already exist.",
@@ -159,7 +179,7 @@ def main():
         sync_version(args.version, args.build_number)
     prepare_dependencies(args.dependency_mode)
     if not args.skip_bridge:
-        generate_bridge()
+        ensure_bridge(force=args.regenerate_bridge)
     BUILDERS[args.platform](args)
 
 

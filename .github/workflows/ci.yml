@@ -377,15 +377,14 @@ jobs:
       - name: Rust format
         run: cargo fmt --all -- --check
 
-      - name: Rust clippy
-        run: cargo clippy --locked --workspace --all-targets --features flutter
+      - name: Verify quality baselines (Rust Clippy)
+        run: python3 .github/scripts/verify_quality_baselines.py --clippy
 
       - name: Rust tests
         run: cargo test --locked --workspace --features flutter
 
-      - name: Flutter analyze
-        working-directory: flutter
-        run: flutter analyze --no-fatal-infos
+      - name: Verify quality baselines (Flutter analyze)
+        run: python3 .github/scripts/verify_quality_baselines.py --flutter
 
       - name: Flutter tests
         working-directory: flutter
