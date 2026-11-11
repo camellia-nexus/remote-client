@@ -586,8 +586,8 @@ pub fn core_main() -> Option<Vec<String>> {
                 println!("Settings are disabled!");
                 return None;
             }
-            if config::Config::is_disable_change_id() {
-                println!("Changing ID is disabled!");
+            if crate::common::is_change_id_disabled() {
+                println!("Changing device ID is not supported by the remote rendezvous server");
                 return None;
             }
             if args.len() == 2 {

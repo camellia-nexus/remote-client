@@ -2284,12 +2284,25 @@ pub fn get_builtin_option(key: &str) -> String {
     if key == keys::OPTION_HIDE_POWERED_BY_ME {
         return "Y".to_owned();
     }
+    if key == keys::OPTION_DISABLE_CHANGE_ID {
+        return config::BUILTIN_SETTINGS
+            .read()
+            .unwrap()
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| "Y".to_owned());
+    }
     config::BUILTIN_SETTINGS
         .read()
         .unwrap()
         .get(key)
         .cloned()
         .unwrap_or_default()
+}
+
+#[inline]
+pub fn is_change_id_disabled() -> bool {
+    get_builtin_option(keys::OPTION_DISABLE_CHANGE_ID) != "N"
 }
 
 /// Whether this build is an OEM-customised client.

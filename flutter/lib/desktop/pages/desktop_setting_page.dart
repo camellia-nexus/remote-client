@@ -1286,6 +1286,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   Widget changeId() {
+    if (isChangeIdDisabled()) {
+      return const SizedBox.shrink();
+    }
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Consumer<ServerModel>(

@@ -918,10 +918,20 @@ pub fn reset_async_job_status() {
     *ASYNC_JOB_STATUS.lock().unwrap() = get_init_async_job_status();
 }
 
+#[inline]
+pub fn is_change_id_disabled() -> bool {
+    crate::common::is_change_id_disabled()
+}
+
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn change_id(id: String) {
     let gen = CHANGE_ID_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if crate::common::is_change_id_disabled() {
+        log::warn!("Change ID requested but disabled by rendezvous server capability policy");
+        *ASYNC_JOB_STATUS.lock().unwrap() = "server_not_support".to_string();
+        return;
+    }
     reset_async_job_status();
     let old_id = get_id();
     std::thread::spawn(move || {
@@ -1541,6 +1551,10 @@ async fn change_id_shared_inner(id: String, old_id: String, gen: u64) -> String 
 }
 
 pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
+    if crate::common::is_change_id_disabled() {
+        log::warn!("Attempted to change ID when not supported by rendezvous server");
+        return "server_not_support";
+    }
     if !camellia_remote_protocol::is_valid_custom_id(&id) {
         log::debug!(
             "debugging invalid id: \"{id}\", len: {}, base64: \"{}\"",

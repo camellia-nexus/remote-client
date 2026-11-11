@@ -75,6 +75,9 @@ class RegexValidationRule extends ValidationRule {
 }
 
 void changeIdDialog() {
+  if (isChangeIdDisabled()) {
+    return;
+  }
   var newId = "";
   var msg = "";
   var isInProgress = false;

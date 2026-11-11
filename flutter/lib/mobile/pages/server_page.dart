@@ -149,6 +149,9 @@ class ServerAccessMenuButton extends StatelessWidget {
       },
       onSelected: (value) async {
         if (value == "changeID") {
+          if (isChangeIdDisabled()) {
+            return;
+          }
           changeIdDialog();
         } else if (value == "setPermanentPassword") {
           setPasswordDialog();

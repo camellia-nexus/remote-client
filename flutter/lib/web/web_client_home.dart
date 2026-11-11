@@ -137,6 +137,9 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
   }
 
   Future<void> _rotateMyId() async {
+    if (isChangeIdDisabled()) {
+      return;
+    }
     try {
       await bind.mainChangeId(newId: '');
       await _refreshMyId();
