@@ -140,6 +140,16 @@ export function isAllowedDropUri(uri: string, baseHref?: string): boolean {
   }
 }
 
+export interface ParsedServerEndpoint {
+  scheme: 'ws' | 'wss' | null;
+  host: string;
+  port: number | null;
+  path: string;
+  query: string;
+  isIpv6: boolean;
+  isIp: boolean;
+}
+
 export class WebRuntime implements SecurityPolicyOptionsReader {
   private readonly config: RuntimeConfig;
   private readonly store: StorageStore;
@@ -3690,27 +3700,44 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     return this.deriveRelayServer(rendezvousServer, apiServer);
   }
 
-  private deriveRelayServer(rendezvousServer: string, apiServer = ''): string {
+  public deriveRelayServer(rendezvousServer: string, apiServer = ''): string {
     const rendezvous = this.normalizeRendezvousServer(rendezvousServer, apiServer);
     const parsed = this.parseServerInput(rendezvous);
     if (!parsed) {
       return '';
     }
+    const defaultIdPort = this.getDefaultIdPort();
     if (!parsed.scheme) {
-      const basePort = parsed.port ?? this.getDefaultIdPort();
+      const basePort = parsed.port ?? defaultIdPort;
       return this.formatHostPort(
         parsed.host,
         this.offsetPort(basePort, 1),
         parsed.isIpv6
       );
     }
-    const basePort = parsed.port ?? this.defaultWsIdPort();
-    const relayPort = this.offsetPort(basePort, 1);
-    const scheme = parsed.scheme === 'wss' ? 'wss' : 'ws';
-    return this.formatWebSocketServer(scheme, parsed.host, relayPort, parsed.isIpv6);
+    const websocketPort = parsed.port ?? this.offsetPort(defaultIdPort, 2);
+    if (parsed.scheme === 'wss') {
+      return this.formatWebSocketServer(
+        'wss',
+        parsed.host,
+        websocketPort,
+        parsed.isIpv6,
+        '/ws/relay',
+        parsed.query
+      );
+    }
+    const relayPort = this.offsetPort(websocketPort, 1);
+    return this.formatWebSocketServer(
+      'ws',
+      parsed.host,
+      relayPort,
+      parsed.isIpv6,
+      parsed.path,
+      parsed.query
+    );
   }
 
-  private normalizeRendezvousServer(server: string, apiServer: string): string {
+  public normalizeRendezvousServer(server: string, _apiServer = ''): string {
     const parsed = this.parseServerInput(server);
     if (!parsed) {
       return '';
@@ -3721,20 +3748,22 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     }
     if (parsed.scheme === 'ws') {
       const port = parsed.port ?? this.offsetPort(defaultIdPort, 2);
-      return this.formatWebSocketServer('ws', parsed.host, port, parsed.isIpv6);
+      return this.formatWebSocketServer('ws', parsed.host, port, parsed.isIpv6, parsed.path, parsed.query);
     }
     if (parsed.scheme === 'wss') {
       const port = parsed.port ?? this.offsetPort(defaultIdPort, 2);
-      return this.formatWebSocketServer('wss', parsed.host, port, parsed.isIpv6);
+      const defaultPath = '/ws/id';
+      const path = parsed.path && parsed.path !== '/' ? parsed.path : defaultPath;
+      return this.formatWebSocketServer('wss', parsed.host, port, parsed.isIpv6, path, parsed.query);
     }
     const port = parsed.port ?? defaultIdPort;
     return this.formatHostPort(parsed.host, port, parsed.isIpv6);
   }
 
-  private normalizeRelayServer(
+  public normalizeRelayServer(
     server: string,
-    apiServer: string,
-    rendezvousServer: string
+    apiServer = '',
+    rendezvousServer = ''
   ): string {
     const parsed = this.parseServerInput(server);
     if (!parsed) {
@@ -3747,51 +3776,120 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     const fallback = this.parseServerInput(
       this.normalizeRendezvousServer(rendezvousServer, apiServer)
     );
-    const fallbackNativeIdPort = fallback
-      ? fallback.scheme
-        ? this.offsetPort(fallback.port ?? this.defaultWsIdPort(), -2)
-        : (fallback.port ?? defaultIdPort)
-      : defaultIdPort;
-    if (parsed.scheme === 'ws' || parsed.scheme === 'wss') {
-      const webRelayPort = parsed.port ?? this.offsetPort(fallbackNativeIdPort, 3);
+    if (parsed.scheme === 'wss') {
+      let port: number;
+      if (parsed.port) {
+        port = parsed.port;
+      } else if (fallback && fallback.scheme === 'wss') {
+        port = fallback.port ?? this.offsetPort(defaultIdPort, 2);
+      } else {
+        port = this.offsetPort(defaultIdPort, 3);
+      }
+      const path = parsed.path && parsed.path !== '/' ? parsed.path : '/ws/relay';
       return this.formatWebSocketServer(
-        parsed.scheme,
+        'wss',
         parsed.host,
-        webRelayPort,
-        parsed.isIpv6
+        port,
+        parsed.isIpv6,
+        path,
+        parsed.query
       );
     }
-    const port = parsed.port ?? this.offsetPort(fallbackNativeIdPort, 1);
+    if (parsed.scheme === 'ws') {
+      let port: number;
+      if (parsed.port) {
+        port = parsed.port;
+      } else if (fallback && fallback.scheme === 'ws') {
+        port = this.offsetPort(
+          fallback.port ?? this.offsetPort(defaultIdPort, 2),
+          1
+        );
+      } else {
+        port = this.offsetPort(defaultIdPort, 3);
+      }
+      return this.formatWebSocketServer(
+        'ws',
+        parsed.host,
+        port,
+        parsed.isIpv6,
+        parsed.path,
+        parsed.query
+      );
+    }
+    const baseServicePort =
+      fallback && !fallback.scheme
+        ? fallback.port ?? defaultIdPort
+        : defaultIdPort;
+    const port = parsed.port ?? this.offsetPort(baseServicePort, 1);
     return this.formatHostPort(parsed.host, port, parsed.isIpv6);
   }
 
-  private formatWebSocketServer(
+  public formatWebSocketServer(
     scheme: 'ws' | 'wss',
     host: string,
     port: number,
-    isIpv6: boolean
+    isIpv6: boolean,
+    path = '',
+    query = ''
   ): string {
-    const finalHost = isIpv6 ? `[${host}]` : host;
-    return `${scheme}://${finalHost}:${port}`;
+    const finalHost = isIpv6 ? `[${this.stripIpv6Brackets(host)}]` : this.stripIpv6Brackets(host);
+    let suffix = path && path !== '/' ? path : '';
+    if (suffix && !suffix.startsWith('/')) {
+      suffix = `/${suffix}`;
+    }
+    const cleanQuery = query.startsWith('?') ? query.slice(1) : query;
+    if (cleanQuery) {
+      suffix = `${suffix}?${cleanQuery}`;
+    }
+    return `${scheme}://${finalHost}:${port}${suffix}`;
   }
 
-  private formatHostPort(host: string, port: number, isIpv6: boolean): string {
-    const finalHost = isIpv6 ? `[${host}]` : host;
+  public formatHostPort(host: string, port: number, isIpv6: boolean): string {
+    const finalHost = isIpv6 ? `[${this.stripIpv6Brackets(host)}]` : this.stripIpv6Brackets(host);
     return `${finalHost}:${port}`;
   }
 
-  private parseServerInput(
-    input: string
-  ): { scheme: 'ws' | 'wss' | null; host: string; port: number | null; isIpv6: boolean; isIp: boolean } | null {
+  public parseServerInput(input: string): ParsedServerEndpoint | null {
+    if (!input || input.length > 2048) {
+      return null;
+    }
+    if (
+      Array.from(input).some((ch) => {
+        const code = ch.charCodeAt(0);
+        return (code < 32 && ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') || code === 127 || (code >= 128 && code <= 159);
+      })
+    ) {
+      return null;
+    }
     const raw = input.trim();
-    if (!raw) {
+    if (
+      !raw ||
+      Array.from(raw).some((ch) => {
+        const code = ch.charCodeAt(0);
+        return code <= 32 || code === 127 || (code >= 128 && code <= 159);
+      }) ||
+      /\s/u.test(raw)
+    ) {
+      return null;
+    }
+    if (raw.includes('#')) {
       return null;
     }
     if (raw.includes('://')) {
       try {
+        const schemeIdx = raw.indexOf('://');
+        const afterScheme = raw.slice(schemeIdx + 3);
+        const authEnd = afterScheme.search(/[/?#]/);
+        const authority = (authEnd >= 0 ? afterScheme.slice(0, authEnd) : afterScheme).trim();
+        if (!authority || authority.includes('@')) {
+          return null;
+        }
         const url = new URL(raw);
         const protocol = url.protocol.replace(':', '').toLowerCase();
         if (protocol !== 'ws' && protocol !== 'wss') {
+          return null;
+        }
+        if (url.username || url.password || url.hash) {
           return null;
         }
         const host = url.hostname;
@@ -3812,10 +3910,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         }
         const normalizedHost = this.stripIpv6Brackets(host);
         const isIpv6 = normalizedHost.includes(':');
+        const path = url.pathname && url.pathname !== '/' ? url.pathname : '';
+        const query = url.search ? (url.search.startsWith('?') ? url.search.slice(1) : url.search) : '';
         return {
-          scheme: protocol,
+          scheme: protocol as 'ws' | 'wss',
           host: normalizedHost,
           port,
+          path,
+          query,
           isIpv6,
           isIp: this.isIpAddress(normalizedHost)
         };
@@ -3823,19 +3925,65 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         return null;
       }
     }
-    const stripped = this.stripSchemeAndPath(raw);
-    const split = this.splitHostPort(stripped);
-    if (split) {
+    if (raw.includes('/') || raw.includes('?') || raw.includes('@')) {
+      return null;
+    }
+    if (raw.startsWith('[')) {
+      const end = raw.indexOf(']');
+      if (end <= 0) {
+        return null;
+      }
+      const host = this.stripIpv6Brackets(raw.slice(1, end));
+      const rest = raw.slice(end + 1);
+      if (!rest) {
+        return {
+          scheme: null,
+          host,
+          port: null,
+          path: '',
+          query: '',
+          isIpv6: true,
+          isIp: true
+        };
+      }
+      if (!rest.startsWith(':')) {
+        return null;
+      }
+      const port = Number.parseInt(rest.slice(1), 10);
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+        return null;
+      }
+      return {
+        scheme: null,
+        host,
+        port,
+        path: '',
+        query: '',
+        isIpv6: true,
+        isIp: true
+      };
+    }
+    const colonCount = (raw.match(/:/g) ?? []).length;
+    if (colonCount === 1) {
+      const split = this.splitHostPort(raw);
+      if (!split) {
+        return null;
+      }
       const normalizedHost = this.stripIpv6Brackets(split.host);
+      if (!normalizedHost) {
+        return null;
+      }
       return {
         scheme: null,
         host: normalizedHost,
         port: split.port,
+        path: '',
+        query: '',
         isIpv6: split.isIpv6 || normalizedHost.includes(':'),
         isIp: this.isIpAddress(normalizedHost)
       };
     }
-    const normalizedHost = this.stripIpv6Brackets(stripped);
+    const normalizedHost = this.stripIpv6Brackets(raw);
     if (!normalizedHost) {
       return null;
     }
@@ -3843,6 +3991,8 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       scheme: null,
       host: normalizedHost,
       port: null,
+      path: '',
+      query: '',
       isIpv6: normalizedHost.includes(':'),
       isIp: this.isIpAddress(normalizedHost)
     };
@@ -3989,7 +4139,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         return null;
       }
       const port = Number(rest.slice(1));
-      if (!Number.isFinite(port)) {
+      if (!Number.isInteger(port) || port <= 0 || port > 65535) {
         return null;
       }
       return { host, port, isIpv6: true };
@@ -4004,7 +4154,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     }
     const host = endpoint.slice(0, lastColon);
     const port = Number(endpoint.slice(lastColon + 1));
-    if (!Number.isFinite(port)) {
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       return null;
     }
     return { host, port, isIpv6: false };
@@ -4778,7 +4928,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     throw lastError instanceof Error ? lastError : new Error('Connection failed');
   }
 
-  private buildConnectionCandidates(baseContext: SessionContext): ConnectionCandidate[] {
+  public buildConnectionCandidates(baseContext: SessionContext): ConnectionCandidate[] {
     const apiServer = baseContext.apiServer || this.resolveApiServer();
     const rendezvousCandidates = this.getRendezvousCandidatesForConnect(apiServer);
     if (rendezvousCandidates.length === 0) {
@@ -4865,7 +5015,7 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     ];
   }
 
-  private getRendezvousCandidatesForConnect(apiServer: string): string[] {
+  public getRendezvousCandidatesForConnect(apiServer: string): string[] {
     const customRaw = this.store.get('option:custom-rendezvous-server', '');
     const customList = this.parseServerList(customRaw);
     const configuredList = this.getConfiguredRendezvousServers();

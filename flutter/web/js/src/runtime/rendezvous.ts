@@ -461,16 +461,46 @@ export function checkWsEndpoint(
   rendezvousServer = '',
   defaultIdPort: number
 ): string {
-  if (!endpoint) {
+  if (!endpoint || endpoint.length > 2048) {
+    return '';
+  }
+  if (
+    Array.from(endpoint).some((ch) => {
+      const code = ch.charCodeAt(0);
+      return (code < 32 && ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') || code === 127 || (code >= 128 && code <= 159);
+    })
+  ) {
     return '';
   }
   const raw = endpoint.trim();
-  if (!raw) {
+  if (
+    !raw ||
+    Array.from(raw).some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code <= 32 || code === 127 || (code >= 128 && code <= 159);
+    }) ||
+    raw.includes('#') ||
+    /\s/u.test(raw)
+  ) {
+    return '';
+  }
+  const schemeIdx = raw.indexOf('://');
+  if (schemeIdx >= 0) {
+    const afterScheme = raw.slice(schemeIdx + 3);
+    const authEnd = afterScheme.search(/[/?#]/);
+    const authority = (authEnd >= 0 ? afterScheme.slice(0, authEnd) : afterScheme).trim();
+    if (!authority || authority.includes('@')) {
+      return '';
+    }
+  } else if (raw.includes('@') || raw.includes('/') || raw.includes('?')) {
     return '';
   }
   if (raw.startsWith('ws://') || raw.startsWith('wss://')) {
     try {
       const url = new URL(raw);
+      if (url.username || url.password || url.hash) {
+        return '';
+      }
       const host = formatHostForUrl(url.hostname, url.hostname.includes(':'));
       const hasExplicitPath = Boolean(url.pathname && url.pathname !== '/');
       const explicitPortFromRaw = parseExplicitPortFromUrlInput(raw);
@@ -493,7 +523,7 @@ export function checkWsEndpoint(
       const query = url.search ?? '';
       return `wss://${host}:${port}${path}${query}`;
     } catch {
-      return raw;
+      return '';
     }
   }
 
@@ -569,20 +599,40 @@ function offsetPort(base: number, delta: number): number {
   return next;
 }
 
-type ParsedServerEndpoint = {
+export type ParsedServerEndpoint = {
   scheme: 'ws' | 'wss' | null;
   host: string;
   port: number | null;
+  path: string;
+  query: string;
   isIpv6: boolean;
   isIp: boolean;
 };
 
-function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
-  if (!endpoint) {
+export function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
+  if (!endpoint || endpoint.length > 2048) {
+    return null;
+  }
+  if (
+    Array.from(endpoint).some((ch) => {
+      const code = ch.charCodeAt(0);
+      return (code < 32 && ch !== ' ' && ch !== '\t' && ch !== '\r' && ch !== '\n') || code === 127 || (code >= 128 && code <= 159);
+    })
+  ) {
     return null;
   }
   const trimmed = endpoint.trim();
-  if (!trimmed) {
+  if (
+    !trimmed ||
+    Array.from(trimmed).some((ch) => {
+      const code = ch.charCodeAt(0);
+      return code <= 32 || code === 127 || (code >= 128 && code <= 159);
+    }) ||
+    /\s/u.test(trimmed)
+  ) {
+    return null;
+  }
+  if (trimmed.includes('#')) {
     return null;
   }
   if (
@@ -592,7 +642,17 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
     trimmed.startsWith('wss://')
   ) {
     try {
+      const schemeIdx = trimmed.indexOf('://');
+      const afterScheme = trimmed.slice(schemeIdx + 3);
+      const authEnd = afterScheme.search(/[/?#]/);
+      const authority = (authEnd >= 0 ? afterScheme.slice(0, authEnd) : afterScheme).trim();
+      if (!authority || authority.includes('@')) {
+        return null;
+      }
       const url = new URL(trimmed);
+      if (url.username || url.password || url.hash) {
+        return null;
+      }
       const host = url.hostname;
       if (!host) {
         return null;
@@ -600,32 +660,24 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
       const isIpv6 = host.includes(':');
       const explicitPortFromRaw = parseExplicitPortFromUrlInput(trimmed);
       const portText = url.port;
+      let port: number | null = null;
       if (portText) {
-        const port = Number(portText);
-        if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+        const numeric = Number(portText);
+        if (!Number.isInteger(numeric) || numeric <= 0 || numeric > 65535) {
           return null;
         }
-        return {
-          scheme: url.protocol === 'wss:' ? 'wss' : 'ws',
-          host,
-          port,
-          isIpv6,
-          isIp: isIpv4Address(host) || isIpv6
-        };
+        port = numeric;
+      } else if (explicitPortFromRaw !== null) {
+        port = explicitPortFromRaw;
       }
-      if (explicitPortFromRaw !== null) {
-        return {
-          scheme: url.protocol === 'wss:' ? 'wss' : 'ws',
-          host,
-          port: explicitPortFromRaw,
-          isIpv6,
-          isIp: isIpv4Address(host) || isIpv6
-        };
-      }
+      const path = url.pathname && url.pathname !== '/' ? url.pathname : '';
+      const query = url.search ? (url.search.startsWith('?') ? url.search.slice(1) : url.search) : '';
       return {
         scheme: url.protocol === 'wss:' ? 'wss' : 'ws',
         host,
-        port: null,
+        port,
+        path,
+        query,
         isIpv6,
         isIp: isIpv4Address(host) || isIpv6
       };
@@ -634,16 +686,10 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
     }
   }
 
-  let hostPart = trimmed;
-  const pathStart = hostPart.search(/[/?#]/);
-  if (pathStart >= 0) {
-    hostPart = hostPart.slice(0, pathStart);
-  }
-  hostPart = hostPart.trim();
-  if (!hostPart) {
+  if (trimmed.includes('/') || trimmed.includes('?') || trimmed.includes('@')) {
     return null;
   }
-
+  let hostPart = trimmed;
   if (hostPart.startsWith('[')) {
     const end = hostPart.indexOf(']');
     if (end === -1) {
@@ -652,7 +698,7 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
     const host = hostPart.slice(1, end);
     const rest = hostPart.slice(end + 1);
     if (!rest) {
-      return { scheme: null, host, port: null, isIpv6: true, isIp: true };
+      return { scheme: null, host, port: null, path: '', query: '', isIpv6: true, isIp: true };
     }
     if (!rest.startsWith(':')) {
       return null;
@@ -661,7 +707,7 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       return null;
     }
-    return { scheme: null, host, port, isIpv6: true, isIp: true };
+    return { scheme: null, host, port, path: '', query: '', isIpv6: true, isIp: true };
   }
 
   const firstColon = hostPart.indexOf(':');
@@ -672,18 +718,20 @@ function parseServerEndpoint(endpoint: string): ParsedServerEndpoint | null {
     if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) {
       return null;
     }
-    return { scheme: null, host, port, isIpv6: false, isIp: isIpv4Address(host) };
+    return { scheme: null, host, port, path: '', query: '', isIpv6: false, isIp: isIpv4Address(host) };
   }
   if (firstColon === -1) {
     return {
       scheme: null,
       host: hostPart,
       port: null,
+      path: '',
+      query: '',
       isIpv6: false,
       isIp: isIpv4Address(hostPart)
     };
   }
-  return { scheme: null, host: hostPart, port: null, isIpv6: true, isIp: true };
+  return { scheme: null, host: hostPart, port: null, path: '', query: '', isIpv6: true, isIp: true };
 }
 
 function parseExplicitPortFromUrlInput(raw: string): number | null {
