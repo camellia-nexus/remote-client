@@ -49,7 +49,8 @@ fn test_log001_constants_and_contract_boundaries() {
         "Max total disk footprint must not exceed 150 MiB"
     );
 
-    // Safe no-op flush before initialization
+    // Safe no-op flush and handle query before initialization
+    assert!(camellia_remote::common::get_logger_handle().is_none());
     camellia_remote::common::flush_log();
     camellia_remote::common::global_clean();
 }
@@ -126,6 +127,10 @@ fn test_log001_source_ast_invariants() {
     assert!(
         common_rs.contains("pub fn init_log("),
         "common.rs must export init_log"
+    );
+    assert!(
+        common_rs.contains("pub fn get_logger_handle()"),
+        "common.rs must export get_logger_handle"
     );
     assert!(
         common_rs.contains("pub fn flush_log()"),
@@ -212,6 +217,24 @@ fn test_log001_source_ast_invariants() {
         windows_rs.contains("log::debug!(\"send {:?}\", data_zero);"),
         "windows.rs must use log::debug! before SendMessageW"
     );
+    assert!(
+        !windows_rs
+            .contains("eprintln!(\"SetDllDirectoryW failed: {}\", io::Error::last_os_error());"),
+        "windows.rs must not use eprintln! for SetDllDirectoryW failure"
+    );
+    assert!(
+        windows_rs
+            .contains("log::error!(\"SetDllDirectoryW failed: {}\", io::Error::last_os_error());"),
+        "windows.rs must use log::error! for SetDllDirectoryW failure"
+    );
+    assert!(
+        !windows_rs.contains("eprintln!(\"CString::new failed: {}\", e);"),
+        "windows.rs must not use eprintln! for CString::new failure"
+    );
+    assert!(
+        windows_rs.contains("log::error!(\"CString::new failed: {}\", e);"),
+        "windows.rs must use log::error! for CString::new failure"
+    );
 
     // 7. Check linux.rs & macos.rs Ctrl-C error logging
     let linux_rs = fs::read_to_string(client_root.join("src").join("platform").join("linux.rs"))
@@ -234,5 +257,13 @@ fn test_log001_source_ast_invariants() {
     assert!(
         macos_rs.contains("log::error!(\"Failed to set Ctrl-C handler: {}\", err);"),
         "macos.rs must use log::error! for Ctrl-C handler error"
+    );
+    assert!(
+        !macos_rs.contains("println!(\"Starting update from DMG: {}\", dmg_path);"),
+        "macos.rs update_from_dmg must not use println!"
+    );
+    assert!(
+        macos_rs.contains("log::info!(\"Starting update from DMG: {}\", dmg_path);"),
+        "macos.rs update_from_dmg must use log::info!"
     );
 }

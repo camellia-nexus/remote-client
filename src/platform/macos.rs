@@ -1000,11 +1000,11 @@ pub fn update_me() -> ResultType<()> {
 
 pub fn update_from_dmg(dmg_path: &str) -> ResultType<()> {
     let update_temp_dir = get_update_temp_dir_string();
-    println!("Starting update from DMG: {}", dmg_path);
+    log::info!("Starting update from DMG: {}", dmg_path);
     extract_dmg(dmg_path, &update_temp_dir)?;
-    println!("DMG extracted");
+    log::info!("DMG extracted");
     update_extracted(&update_temp_dir)?;
-    println!("Update process started");
+    log::info!("Update process started");
     Ok(())
 }
 

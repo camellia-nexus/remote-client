@@ -191,6 +191,11 @@ pub fn init_log(
 }
 
 #[inline]
+pub fn get_logger_handle() -> Option<camellia_remote_protocol::flexi_logger::LoggerHandle> {
+    camellia_remote_protocol::get_logger_handle()
+}
+
+#[inline]
 pub fn flush_log() {
     camellia_remote_protocol::flush_log();
 }

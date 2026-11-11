@@ -72,8 +72,9 @@ class TestBatch61RustLoggingContracts(unittest.TestCase):
         self.assertIn("pub const LOG_MAX_ROTATED_FILES", self.common_rs)
 
     def test_client_common_exports_init_and_flush_log(self):
-        """common.rs must export init_log and flush_log helpers."""
+        """common.rs must export init_log, get_logger_handle, and flush_log helpers."""
         self.assertIn("pub fn init_log(", self.common_rs)
+        self.assertIn("pub fn get_logger_handle()", self.common_rs)
         self.assertIn("pub fn flush_log()", self.common_rs)
 
     def test_client_global_clean_flushes_log(self):
@@ -167,16 +168,22 @@ class TestBatch61RustLoggingContracts(unittest.TestCase):
         self.assertIn('log::warn!("unreachable portable service event");', self.portable_service_rs)
 
     def test_windows_send_copydata_uses_structured_logging(self):
-        """platform/windows.rs SendMessageW must use log::debug! instead of println!."""
+        """platform/windows.rs SendMessageW and DLL directory checks must use structured logging."""
         self.assertNotIn('println!("send {:?}", data_zero);', self.windows_rs)
         self.assertIn('log::debug!("send {:?}", data_zero);', self.windows_rs)
+        self.assertNotIn('eprintln!("SetDllDirectoryW failed: {}"', self.windows_rs)
+        self.assertIn('log::error!("SetDllDirectoryW failed: {}"', self.windows_rs)
+        self.assertNotIn('eprintln!("CString::new failed: {}"', self.windows_rs)
+        self.assertIn('log::error!("CString::new failed: {}"', self.windows_rs)
 
     def test_linux_and_macos_ctrlc_handlers_use_structured_logging(self):
-        """Linux and macOS server Ctrl-C handlers must use log::error!."""
+        """Linux and macOS server Ctrl-C handlers and updater must use structured logging."""
         self.assertNotIn('println!("Failed to set Ctrl-C handler: {}", err);', self.linux_rs)
         self.assertIn('log::error!("Failed to set Ctrl-C handler: {}", err);', self.linux_rs)
         self.assertNotIn('println!("Failed to set Ctrl-C handler: {}", err);', self.macos_rs)
         self.assertIn('log::error!("Failed to set Ctrl-C handler: {}", err);', self.macos_rs)
+        self.assertNotIn('println!("Starting update from DMG: {}"', self.macos_rs)
+        self.assertIn('log::info!("Starting update from DMG: {}"', self.macos_rs)
 
     # =========================================================================
     # 5. Concurrency & Bounded Resource Simulation

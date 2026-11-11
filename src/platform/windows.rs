@@ -2092,7 +2092,7 @@ fn set_safe_load_dll() -> bool {
     // `SetDllDirectoryW` should never fail.
     // https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setdlldirectoryw
     if unsafe { SetDllDirectoryW(wide_string("").as_ptr()) == FALSE } {
-        eprintln!("SetDllDirectoryW failed: {}", io::Error::last_os_error());
+        log::error!("SetDllDirectoryW failed: {}", io::Error::last_os_error());
         return false;
     }
 
@@ -2113,19 +2113,19 @@ unsafe fn set_default_dll_directories() -> bool {
 
     match CString::new("SetDefaultDllDirectories") {
         Err(e) => {
-            eprintln!("CString::new failed: {}", e);
+            log::error!("CString::new failed: {}", e);
             return false;
         }
         Ok(func_name) => {
             let func = GetProcAddress(module, func_name.as_ptr());
             if func.is_null() {
-                eprintln!("GetProcAddress failed: {}", io::Error::last_os_error());
+                log::error!("GetProcAddress failed: {}", io::Error::last_os_error());
                 return false;
             }
             type SetDefaultDllDirectories = unsafe extern "system" fn(DWORD) -> BOOL;
             let func: SetDefaultDllDirectories = std::mem::transmute(func);
             if func(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS) == FALSE {
-                eprintln!(
+                log::error!(
                     "SetDefaultDllDirectories failed: {}",
                     io::Error::last_os_error()
                 );

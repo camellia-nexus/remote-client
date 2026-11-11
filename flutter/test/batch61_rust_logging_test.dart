@@ -49,9 +49,10 @@ void main() {
       expect(content.contains('pub const LOG_MAX_ROTATED_FILES'), isTrue);
     });
 
-    test('2. common.rs exports safe init_log and flush_log', () {
+    test('2. common.rs exports safe init_log, get_logger_handle, and flush_log', () {
       final content = commonRs.readAsStringSync();
       expect(content.contains('pub fn init_log('), isTrue);
+      expect(content.contains('pub fn get_logger_handle()'), isTrue);
       expect(content.contains('pub fn flush_log()'), isTrue);
     });
 
@@ -119,6 +120,10 @@ void main() {
       final windowsContent = windowsRs.readAsStringSync();
       expect(windowsContent.contains('println!("send {:?}", data_zero);'), isFalse);
       expect(windowsContent.contains('log::debug!("send {:?}", data_zero);'), isTrue);
+      expect(windowsContent.contains('eprintln!("SetDllDirectoryW failed: {}"'), isFalse);
+      expect(windowsContent.contains('log::error!("SetDllDirectoryW failed: {}"'), isTrue);
+      expect(windowsContent.contains('eprintln!("CString::new failed: {}"'), isFalse);
+      expect(windowsContent.contains('log::error!("CString::new failed: {}"'), isTrue);
 
       final linuxContent = linuxRs.readAsStringSync();
       expect(linuxContent.contains('println!("Failed to set Ctrl-C handler: {}", err);'), isFalse);
@@ -127,6 +132,8 @@ void main() {
       final macosContent = macosRs.readAsStringSync();
       expect(macosContent.contains('println!("Failed to set Ctrl-C handler: {}", err);'), isFalse);
       expect(macosContent.contains('log::error!("Failed to set Ctrl-C handler: {}", err);'), isTrue);
+      expect(macosContent.contains('println!("Starting update from DMG: {}"'), isFalse);
+      expect(macosContent.contains('log::info!("Starting update from DMG: {}"'), isTrue);
     });
 
     test('10. Total disk footprint is mathematically bounded below 150 MiB', () {
