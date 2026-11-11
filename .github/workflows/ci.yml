@@ -101,12 +101,12 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf >/dev/null || true
+          echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
           echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
           echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           export DEBIAN_FRONTEND=noninteractive
           export NEEDRESTART_MODE=a
           sudo -E apt-get update
@@ -319,12 +319,12 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf >/dev/null || true
+          echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
           echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
           echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           export DEBIAN_FRONTEND=noninteractive
           export NEEDRESTART_MODE=a
           sudo -E apt-get update
