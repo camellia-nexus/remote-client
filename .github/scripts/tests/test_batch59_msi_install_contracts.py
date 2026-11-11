@@ -58,6 +58,7 @@ RUSTDESK_WXS = MSI_DIR / "Package" / "Components" / "RustDesk.wxs"
 CUSTOM_ACTIONS_CPP = MSI_DIR / "CustomActions" / "CustomActions.cpp"
 REMOTE_PRINTER_CPP = MSI_DIR / "CustomActions" / "RemotePrinter.cpp"
 FIREWALL_RULES_CPP = MSI_DIR / "CustomActions" / "FirewallRules.cpp"
+SERVICE_UTILS_CPP = MSI_DIR / "CustomActions" / "ServiceUtils.cpp"
 COMMON_H = MSI_DIR / "CustomActions" / "Common.h"
 
 
@@ -69,6 +70,7 @@ class TestBatch59MsiInstallContracts(unittest.TestCase):
         cls.custom_actions_cpp_text = CUSTOM_ACTIONS_CPP.read_text(encoding="utf-8")
         cls.remote_printer_cpp_text = REMOTE_PRINTER_CPP.read_text(encoding="utf-8")
         cls.firewall_rules_cpp_text = FIREWALL_RULES_CPP.read_text(encoding="utf-8")
+        cls.service_utils_cpp_text = SERVICE_UTILS_CPP.read_text(encoding="utf-8")
         cls.common_h_text = COMMON_H.read_text(encoding="utf-8")
 
         # Parse XML structures
@@ -271,9 +273,44 @@ class TestBatch59MsiInstallContracts(unittest.TestCase):
         self.assertIn("portCreated", self.remote_printer_cpp_text)
         self.assertIn("checkDeleteLocalPort(RD_PRINTER_PORT)", self.remote_printer_cpp_text)
 
+    def test_remote_printer_execute_local_port_checks_status(self):
+        """executeOnLocalPort must check status != ERROR_SUCCESS and SetLastError."""
+        self.assertIn("if (status != ERROR_SUCCESS)", self.remote_printer_cpp_text)
+        self.assertIn("SetLastError(status);", self.remote_printer_cpp_text)
+
+    def test_remote_printer_add_port_accommodates_existing_port(self):
+        """installUpdatePrinter must gracefully handle ERROR_ALREADY_EXISTS / 183 on addLocalPort."""
+        self.assertIn("err == ERROR_ALREADY_EXISTS || err == 183", self.remote_printer_cpp_text)
+
     # =========================================================================
     # 4. CustomActions.cpp & FirewallRules.cpp Error Hardening
     # =========================================================================
+
+    def test_service_utils_is_service_running_validates_query_result(self):
+        """IsServiceRunningW must zero-initialize serviceStatus and validate QueryServiceStatusExW."""
+        self.assertIn(
+            "SERVICE_STATUS_PROCESS serviceStatus = { 0 };",
+            self.service_utils_cpp_text,
+            "serviceStatus must be zero-initialized to avoid undefined stack memory reads",
+        )
+        self.assertIn(
+            "if (!QueryServiceStatusExW(serviceName, &serviceStatus))",
+            self.service_utils_cpp_text,
+            "IsServiceRunningW must check QueryServiceStatusExW return value",
+        )
+
+    def test_custom_actions_shortcut_logging_correct_branches(self):
+        """TryDeleteStartupShortcut must log success in DeleteFileW success branch."""
+        pattern = re.compile(
+            r"if\s*\(\s*DeleteFileW\s*\(\s*pwszTemp\s*\)\s*\)\s*\{\s*"
+            r'WcaLog\(\s*LOGMSG_STANDARD,\s*"Startup shortcut is deleted',
+            re.DOTALL,
+        )
+        self.assertRegex(
+            self.custom_actions_cpp_text,
+            pattern,
+            "TryDeleteStartupShortcut must log deletion success when DeleteFileW returns TRUE",
+        )
 
     def test_custom_actions_install_printer_checks_hresult(self):
         """InstallPrinter must check RemotePrinter::installUpdatePrinter HRESULT with ExitOnFailure."""

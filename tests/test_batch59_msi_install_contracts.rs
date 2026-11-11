@@ -183,6 +183,8 @@ fn test_install001_cpp_source_hardening_invariants() {
         fs::read_to_string(ca_dir.join("CustomActions.cpp")).expect("read CustomActions.cpp");
     let fw_content =
         fs::read_to_string(ca_dir.join("FirewallRules.cpp")).expect("read FirewallRules.cpp");
+    let su_content =
+        fs::read_to_string(ca_dir.join("ServiceUtils.cpp")).expect("read ServiceUtils.cpp");
     let ch_content = fs::read_to_string(ca_dir.join("Common.h")).expect("read Common.h");
 
     // RES-029: addPrinter must close hPrinter handle immediately
@@ -283,6 +285,41 @@ fn test_install001_cpp_source_hardening_invariants() {
     assert!(
         fw_content.contains("HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)"),
         "RemoveFirewallRule must accept ERROR_FILE_NOT_FOUND as idempotent success"
+    );
+
+    // RemotePrinter executeOnLocalPort status check and existing port handling
+    assert!(
+        rp_content.contains("if (status != ERROR_SUCCESS)"),
+        "executeOnLocalPort must check status != ERROR_SUCCESS"
+    );
+    assert!(
+        rp_content.contains("SetLastError(status);"),
+        "executeOnLocalPort must set last error on port monitor failure"
+    );
+    assert!(
+        rp_content.contains("err == ERROR_ALREADY_EXISTS || err == 183"),
+        "installUpdatePrinter must accommodate existing port without failing"
+    );
+
+    // ServiceUtils zero-initialization and QueryServiceStatusExW validation
+    assert!(
+        su_content.contains("SERVICE_STATUS_PROCESS serviceStatus = { 0 };"),
+        "IsServiceRunningW must zero-initialize serviceStatus"
+    );
+    assert!(
+        su_content.contains("if (!QueryServiceStatusExW(serviceName, &serviceStatus))"),
+        "IsServiceRunningW must check QueryServiceStatusExW return value"
+    );
+
+    // CustomActions shortcut logging and binary termination
+    assert!(
+        ca_content.contains(r#"Startup shortcut is deleted : \"%ls\""#),
+        "TryDeleteStartupShortcut must log success in DeleteFileW success branch"
+    );
+    assert!(
+        ca_content
+            .contains(r#"TerminateProcessesByNameW(L"camellia-remote.exe", L"--not-in-use");"#),
+        "TryStopDeleteService must terminate camellia-remote.exe"
     );
 }
 

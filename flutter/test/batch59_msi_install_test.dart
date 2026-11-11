@@ -11,6 +11,7 @@ void main() {
     late File remotePrinterCpp;
     late File customActionsCpp;
     late File firewallRulesCpp;
+    late File serviceUtilsCpp;
     late File commonH;
 
     late String caContent;
@@ -18,6 +19,7 @@ void main() {
     late String rpContent;
     late String caCppContent;
     late String fwContent;
+    late String suContent;
     late String chContent;
 
     setUpAll(() {
@@ -29,6 +31,7 @@ void main() {
       remotePrinterCpp = File('${msiDir.path}/CustomActions/RemotePrinter.cpp');
       customActionsCpp = File('${msiDir.path}/CustomActions/CustomActions.cpp');
       firewallRulesCpp = File('${msiDir.path}/CustomActions/FirewallRules.cpp');
+      serviceUtilsCpp = File('${msiDir.path}/CustomActions/ServiceUtils.cpp');
       commonH = File('${msiDir.path}/CustomActions/Common.h');
 
       expect(customActionsWxs.existsSync(), isTrue, reason: 'CustomActions.wxs must exist');
@@ -36,6 +39,7 @@ void main() {
       expect(remotePrinterCpp.existsSync(), isTrue, reason: 'RemotePrinter.cpp must exist');
       expect(customActionsCpp.existsSync(), isTrue, reason: 'CustomActions.cpp must exist');
       expect(firewallRulesCpp.existsSync(), isTrue, reason: 'FirewallRules.cpp must exist');
+      expect(serviceUtilsCpp.existsSync(), isTrue, reason: 'ServiceUtils.cpp must exist');
       expect(commonH.existsSync(), isTrue, reason: 'Common.h must exist');
 
       caContent = customActionsWxs.readAsStringSync();
@@ -43,6 +47,7 @@ void main() {
       rpContent = remotePrinterCpp.readAsStringSync();
       caCppContent = customActionsCpp.readAsStringSync();
       fwContent = firewallRulesCpp.readAsStringSync();
+      suContent = serviceUtilsCpp.readAsStringSync();
       chContent = commonH.readAsStringSync();
     });
 
@@ -182,6 +187,9 @@ void main() {
 
       expect(rpContent.contains('HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)'), isTrue);
       expect(rpContent.contains('checkDeleteLocalPort(RD_PRINTER_PORT)'), isTrue);
+      expect(rpContent.contains('if (status != ERROR_SUCCESS)'), isTrue);
+      expect(rpContent.contains('SetLastError(status);'), isTrue);
+      expect(rpContent.contains('err == ERROR_ALREADY_EXISTS || err == 183'), isTrue);
     });
 
     test('7. CustomActions.cpp checks HRESULTs and fixes SAS pointer bug', () {
@@ -210,14 +218,26 @@ void main() {
         isTrue,
         reason: 'AddRegSoftwareSASGeneration must pass &valueData address to fix 998 ERROR_NOACCESS',
       );
+      expect(
+        caCppContent.contains(r'Startup shortcut is deleted : \"%ls\"'),
+        isTrue,
+        reason: 'TryDeleteStartupShortcut must log success in DeleteFileW branch',
+      );
+      expect(
+        caCppContent.contains('TerminateProcessesByNameW(L"camellia-remote.exe", L"--not-in-use");'),
+        isTrue,
+        reason: 'TryStopDeleteService must terminate camellia-remote.exe',
+      );
     });
 
-    test('8. Common.h and FirewallRules.cpp declare and handle typed HRESULTs', () {
+    test('8. Common.h, FirewallRules.cpp, and ServiceUtils.cpp error hardening invariants', () {
       expect(chContent.contains('HRESULT AddFirewallRuleEx(bool add, LPWSTR exeName, LPWSTR exeFile);'), isTrue);
       expect(chContent.contains('HRESULT installUpdatePrinter(const std::wstring& installFolder);'), isTrue);
       expect(chContent.contains('HRESULT uninstallPrinter();'), isTrue);
       expect(fwContent.contains('HRESULT AddFirewallRuleEx(bool add, LPWSTR exeName, LPWSTR exeFile)'), isTrue);
       expect(fwContent.contains('HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)'), isTrue);
+      expect(suContent.contains('SERVICE_STATUS_PROCESS serviceStatus = { 0 };'), isTrue);
+      expect(suContent.contains('if (!QueryServiceStatusExW(serviceName, &serviceStatus))'), isTrue);
     });
 
     test('9. MSI transaction failure and rollback simulation model in Dart', () {
