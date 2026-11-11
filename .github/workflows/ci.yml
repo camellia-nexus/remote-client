@@ -101,6 +101,7 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
+          sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf; echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
           echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
           echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
@@ -319,6 +320,7 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
+          sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf; echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
           echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
           echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
