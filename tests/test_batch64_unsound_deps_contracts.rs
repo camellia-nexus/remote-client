@@ -136,6 +136,17 @@ fn test_dep001_cargo_audit_policy_has_zero_unsound_exceptions() {
             );
         }
     }
+
+    // Total warning budget must be exactly 24 (9 in gtk3, 15 in inherited)
+    let total_warnings: usize = exception_groups
+        .iter()
+        .map(|g| g["warnings"].as_array().map(|w| w.len()).unwrap_or(0))
+        .sum();
+    assert_eq!(
+        total_warnings, 24,
+        "Total policy warnings budget must be exactly 24 after purging atty, ansi_term, and unsound glib (got {})",
+        total_warnings
+    );
 }
 
 #[test]
@@ -187,11 +198,11 @@ fn test_dep001_in_tree_patches_verification() {
     let variant_iter_src = fs::read_to_string(&variant_iter_path).expect("read variant_iter.rs");
     assert!(
         variant_iter_src.contains("let mut p: *mut libc::c_char = std::ptr::null_mut();"),
-        "variant_iter.rs must declare mutable pointer for g_variant_iter_next"
+        "variant_iter.rs must declare mutable pointer for g_variant_get_child"
     );
     assert!(
         variant_iter_src.contains("&mut p"),
-        "variant_iter.rs must pass &mut p to ffi::g_variant_iter_next"
+        "variant_iter.rs must pass &mut p to ffi::g_variant_get_child"
     );
 
     // 2. magnum-opus modern bindgen
@@ -240,5 +251,56 @@ fn test_dep001_risk_register_documentation() {
     assert!(
         content.contains("RUSTSEC-2021-0145"),
         "Risk register must mention atty advisory RUSTSEC-2021-0145"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_dep001_variant_str_iter_runtime_soundness() {
+    use gtk::glib::prelude::*;
+
+    // 1. Forward iteration through array of strings (RUSTSEC-2024-0429 regression test)
+    let expected = vec!["camellia", "remote", "desktop", "safe-variant"];
+    let variant = expected.as_slice().to_variant();
+    let iter = variant
+        .array_iter_str()
+        .expect("array_iter_str should succeed on string array variant");
+    assert_eq!(
+        iter.len(),
+        expected.len(),
+        "ExactSizeIterator length must match expected slice size"
+    );
+
+    let collected: Vec<&str> = iter.collect();
+    assert_eq!(
+        collected, expected,
+        "VariantStrIter forward iteration must yield correct string references"
+    );
+
+    // 2. DoubleEndedIterator (rev)
+    let rev_iter = variant
+        .array_iter_str()
+        .expect("array_iter_str should succeed");
+    let rev_collected: Vec<&str> = rev_iter.rev().collect();
+    let expected_rev: Vec<&str> = expected.iter().rev().copied().collect();
+    assert_eq!(
+        rev_collected, expected_rev,
+        "VariantStrIter reverse iteration must match reversed slice"
+    );
+
+    // 3. Boundary test: empty string array
+    let empty_items: Vec<&str> = Vec::new();
+    let empty_variant = empty_items.as_slice().to_variant();
+    let mut empty_iter = empty_variant
+        .array_iter_str()
+        .expect("empty array_iter_str should succeed");
+    assert_eq!(empty_iter.len(), 0);
+    assert_eq!(empty_iter.next(), None);
+
+    // 4. Boundary test: type mismatch rejection on non-string array
+    let int_variant = 42i32.to_variant();
+    assert!(
+        int_variant.array_iter_str().is_err(),
+        "array_iter_str must fail closed on non-string-array variant"
     );
 }

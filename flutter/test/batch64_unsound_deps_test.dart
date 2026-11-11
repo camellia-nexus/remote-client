@@ -122,8 +122,16 @@ void main() {
           expect(advisoryId, isNot(equals('RUSTSEC-2024-0429')));
           expect(advisoryId, isNot(equals('RUSTSEC-2021-0145')));
           expect(advisoryId, isNot(equals('RUSTSEC-2024-0375')));
+          expect(advisoryId, isNot(equals('RUSTSEC-2021-0139')));
         }
       }
+
+      var totalWarnings = 0;
+      for (final group in exceptionGroups) {
+        final g = group as Map<String, dynamic>;
+        totalWarnings += (g['warnings'] as List<dynamic>).length;
+      }
+      expect(totalWarnings, equals(24), reason: 'Total approved warnings must be exactly 24 after atty/ansi_term removal');
     });
 
     test('docs/dependency-risk-register.md documents DEP-001 remediation', () {

@@ -190,6 +190,27 @@ class Batch64UnsoundDepsContractsTest(unittest.TestCase):
             f"Forbidden advisories found in audit policy: {found_advisories}",
         )
 
+        # Check total remaining unmaintained warning budget: exactly 24 (down from 28)
+        self.assertEqual(
+            len(all_warnings),
+            24,
+            f"Expected exactly 24 approved warnings after eliminating 2 unsound and 2 unmaintained warnings, got {len(all_warnings)}",
+        )
+        group_counts = {
+            group["id"]: len(group.get("warnings", []))
+            for group in policy.get("exception_groups", [])
+        }
+        self.assertEqual(
+            group_counts.get("gtk3-stack-migration"),
+            9,
+            "gtk3-stack-migration must have exactly 9 warnings",
+        )
+        self.assertEqual(
+            group_counts.get("inherited-transitive-modernization"),
+            15,
+            "inherited-transitive-modernization must have exactly 15 warnings",
+        )
+
     def test_docs_dependency_risk_register_reflects_batch64_remediation(self) -> None:
         """docs/dependency-risk-register.md must be updated with Batch 64 evidence."""
         self.assertTrue(RISK_REGISTER.is_file(), f"Risk register not found at {RISK_REGISTER}")
