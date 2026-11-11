@@ -1723,7 +1723,6 @@ pub fn send_clipboard_msg(msg: Message, _is_file: bool) {
 pub mod connection_manager {
     use std::collections::HashMap;
 
-    #[cfg(any(target_os = "android"))]
     use camellia_remote_protocol::log;
     #[cfg(any(target_os = "android"))]
     use scrap::android::call_main_service_set_by_name;
@@ -1807,7 +1806,7 @@ pub mod connection_manager {
             if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {
                 let _ = s.add(serde_json::ser::to_string(&h).unwrap_or("".to_owned()));
             } else {
-                println!(
+                log::debug!(
                     "Push event {} failed. No {} event stream found.",
                     name,
                     super::APP_TYPE_CM

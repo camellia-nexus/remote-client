@@ -2603,7 +2603,7 @@ pub fn send_message_to_hnwd(
         let mut data_struct = COPYDATASTRUCT::default();
         data_struct.dwData = dw_data;
         let mut data_zero: String = data.chars().chain(Some('\0').into_iter()).collect();
-        println!("send {:?}", data_zero);
+        log::debug!("send {:?}", data_zero);
         data_struct.cbData = data_zero.len() as _;
         data_struct.lpData = data_zero.as_mut_ptr() as _;
         SendMessageW(

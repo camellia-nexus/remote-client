@@ -914,7 +914,7 @@ pub fn start_os_service() {
     if let Err(err) = ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
     }) {
-        println!("Failed to set Ctrl-C handler: {}", err);
+        log::error!("Failed to set Ctrl-C handler: {}", err);
     }
 
     let mut cm0 = false;

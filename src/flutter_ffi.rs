@@ -63,7 +63,7 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
                     .with_tag("ffi"), // logs will show under mytag tag
             );
             #[cfg(not(debug_assertions))]
-            camellia_remote_protocol::init_log(false, "");
+            crate::common::init_log(false, "");
             #[cfg(feature = "mediacodec")]
             scrap::mediacodec::check_mediacodec();
             crate::common::test_rendezvous_server();
@@ -72,7 +72,11 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         #[cfg(target_os = "ios")]
         {
             use camellia_remote_protocol::env_logger::*;
-            init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
+            #[cfg(debug_assertions)]
+            let default_level = "debug";
+            #[cfg(not(debug_assertions))]
+            let default_level = crate::common::DEFAULT_LOG_FILTER;
+            init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, default_level));
             crate::common::test_nat_type();
         }
         #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -82,7 +86,7 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             // core_main's init_log does not work for flutter since it is only applied to its load_library in main.c
-            camellia_remote_protocol::init_log(false, "flutter_ffi");
+            crate::common::init_log(false, "flutter_ffi");
         }
     });
 
@@ -907,7 +911,7 @@ pub fn session_load_last_transfer_jobs(session_id: SessionID) {
         return session.load_last_jobs();
     } else {
         // a tip for flutter dev
-        eprintln!(
+        log::warn!(
             "cannot load last transfer job from non-existed session. Please ensure session \
         is connected before calling load last transfer jobs."
         );

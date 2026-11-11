@@ -845,7 +845,7 @@ pub mod server {
                     }
                 }
                 _ => {
-                    println!("unreachable!");
+                    log::warn!("unreachable portable service event");
                 }
             }
         }

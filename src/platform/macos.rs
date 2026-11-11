@@ -868,7 +868,7 @@ pub fn start_os_service() {
         if let Err(err) = ctrlc::set_handler(move || {
             r.store(false, Ordering::SeqCst);
         }) {
-            println!("Failed to set Ctrl-C handler: {}", err);
+            log::error!("Failed to set Ctrl-C handler: {}", err);
         }
         while running.load(Ordering::SeqCst) {
             let tmp = get_active_userid();

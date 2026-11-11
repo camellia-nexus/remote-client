@@ -227,7 +227,7 @@ pub fn core_main() -> Option<Vec<String>> {
             log_name = name;
         }
     }
-    camellia_remote_protocol::init_log(false, &log_name);
+    crate::common::init_log(false, &log_name);
 
     // linux uni (url) go here.
     #[cfg(all(target_os = "linux", feature = "flutter"))]

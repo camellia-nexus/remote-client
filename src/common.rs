@@ -176,7 +176,28 @@ pub fn global_init() -> bool {
     true
 }
 
-pub fn global_clean() {}
+pub const DEFAULT_LOG_FILTER: &str = camellia_remote_protocol::DEFAULT_LOG_FILTER;
+pub const LOG_BUFFER_CAPACITY: usize = camellia_remote_protocol::LOG_BUFFER_CAPACITY;
+pub const LOG_FLUSH_INTERVAL: std::time::Duration = camellia_remote_protocol::LOG_FLUSH_INTERVAL;
+pub const LOG_MAX_FILE_SIZE: u64 = camellia_remote_protocol::LOG_MAX_FILE_SIZE;
+pub const LOG_MAX_ROTATED_FILES: usize = camellia_remote_protocol::LOG_MAX_ROTATED_FILES;
+
+#[inline]
+pub fn init_log(
+    is_async: bool,
+    name: &str,
+) -> Option<camellia_remote_protocol::flexi_logger::LoggerHandle> {
+    camellia_remote_protocol::init_log(is_async, name)
+}
+
+#[inline]
+pub fn flush_log() {
+    camellia_remote_protocol::flush_log();
+}
+
+pub fn global_clean() {
+    flush_log();
+}
 
 #[inline]
 pub fn set_server_running(b: bool) {
