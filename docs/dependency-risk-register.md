@@ -1,6 +1,6 @@
 # Dependency risk register
 
-Review date: 2026-10-23
+Review date: 2026-11-11
 Owner: Remote security maintainers
 
 ## Enforcement
@@ -40,13 +40,15 @@ also removed. The example now uses standard input directly.
 
 | Group | Scope | Expiry | Compensating control and exit |
 | --- | --- | --- | --- |
-| `gtk3-stack-migration` | GTK3 unmaintained notices and `glib 0.18` unsound iterator advisory | 2026-10-31 | No direct `VariantStrIter` use exists in product code; native Linux tests remain required. Exit by migrating the complete desktop integration to a maintained GTK/GLib stack. |
-| `inherited-transitive-modernization` | Exact reviewed warnings inherited through upstream media, windowing, code-generation, and text stacks | 2026-10-31 | Exact package, version, category, and advisory identities are frozen; any growth fails. Remove entries as their owning upstream chains are upgraded or replaced. |
+| `gtk3-stack-migration` | GTK3 unmaintained notices (`glib 0.18` unsound iterator advisory eliminated via in-tree audited patch) | 2027-02-28 | No direct `VariantStrIter` use exists in product code; in-tree patch fixes mutability bug in `VariantStrIter::impl_get`; native Linux tests remain required. Exit by migrating the complete desktop integration to a maintained GTK/GLib stack. |
+| `inherited-transitive-modernization` | Exact reviewed warnings inherited through upstream media, windowing, code-generation, and text stacks (`atty` completely eliminated) | 2027-02-28 | Exact package, version, category, and advisory identities are frozen; any growth fails. Remove entries as their owning upstream chains are upgraded or replaced. |
 
-The GitHub alerts for the still-resolved `atty` and `glib` versions remain open
-for visibility; they are not silently dismissed. A formal release after an
-exception expiry is a no-go until the dependency is removed or a newly reviewed
-exception with current evidence is approved.
+Both `atty 0.2.14` (`RUSTSEC-2021-0145` / `RUSTSEC-2024-0375`) and `glib 0.18.5` unsoundness (`RUSTSEC-2024-0429`)
+have been remediated in Batch 64 (`DEP-001`): `atty` and obsolete `bindgen 0.59.2` were purged by modernizing
+`bindgen` to `0.71` across `magnum-opus` and `hwcodec`, and `glib` was patched with the upstream `VariantStrIter`
+mutability fix in `libs/glib`. All unsound advisory exceptions have been eliminated from the cargo audit policy.
+A formal release after an exception expiry is a no-go until the dependency is removed or a newly reviewed exception
+with current evidence is approved.
 
 New publication checks the release source's policy deadlines before building,
 after protected-environment approval and immediately before making its draft

@@ -55,7 +55,7 @@ lazy_static = "1.4"
 sha2 = "0.10"
 repng = "0.2"
 parity-tokio-ipc = { git = "https://github.com/rustdesk-org/parity-tokio-ipc" }
-magnum-opus = { git = "https://github.com/rustdesk-org/magnum-opus" }
+magnum-opus = { path = "libs/magnum-opus" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"], optional = true }
 uuid = { version = "1.3", features = ["v4"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
@@ -199,12 +199,19 @@ whoami = { version = "2", features = ["force-stub"] }
 
 [workspace]
 members = ["libs/scrap", "libs/camellia_remote_protocol", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer", "libs/platform_power", "libs/windows-bootstrap", "libs/printing"]
-exclude = ["vdi/host", "examples/custom_plugin"]
+exclude = ["vdi/host", "examples/custom_plugin", "libs/glib", "libs/magnum-opus", "libs/hwcodec"]
 
 # Patch libxdo-sys to use a stub implementation that doesn't require libxdo
 # This allows building and running on systems without libxdo installed (e.g., Wayland-only)
 [patch.crates-io]
 libxdo-sys = { path = "libs/libxdo-sys-stub" }
+glib = { path = "libs/glib" }
+
+[patch."https://github.com/rustdesk-org/magnum-opus"]
+magnum-opus = { path = "libs/magnum-opus" }
+
+[patch."https://github.com/rustdesk-org/hwcodec"]
+hwcodec = { path = "libs/hwcodec" }
 
 [build-dependencies]
 cc = "1.0"

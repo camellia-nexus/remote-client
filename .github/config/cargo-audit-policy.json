@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "reviewed_on": "2026-07-29",
+  "reviewed_on": "2026-11-11",
   "exception_groups": [
     {
       "id": "gtk3-stack-migration",
       "owner": "remote-security-maintainers",
-      "expires_on": "2026-10-31",
-      "reason": "The Linux desktop currently depends on the GTK3 Rust bindings. Moving to the maintained GTK4 stack changes tray, window, capture, and input integration and requires a dedicated native acceptance cycle.",
-      "exit_condition": "Remove this group after the Linux desktop no longer resolves GTK3 bindings or glib 0.18 and the replacement passes the native Linux acceptance matrix.",
+      "expires_on": "2027-02-28",
+      "reason": "The Linux desktop currently depends on the GTK3 Rust bindings. glib 0.18 unsound iterator advisory (RUSTSEC-2024-0429) has been eliminated via in-tree audited patch. Moving to the maintained GTK4 stack changes tray, window, capture, and input integration and requires a dedicated native acceptance cycle.",
+      "exit_condition": "Remove this group after the Linux desktop no longer resolves GTK3 bindings and the replacement passes the native Linux acceptance matrix.",
       "warnings": [
         {
           "category": "unmaintained",
@@ -62,20 +62,14 @@
           "advisory_id": "RUSTSEC-2024-0420",
           "package": "gtk-sys",
           "version": "0.18.0"
-        },
-        {
-          "category": "unsound",
-          "advisory_id": "RUSTSEC-2024-0429",
-          "package": "glib",
-          "version": "0.18.5"
         }
       ]
     },
     {
       "id": "inherited-transitive-modernization",
       "owner": "remote-security-maintainers",
-      "expires_on": "2026-10-31",
-      "reason": "These informational advisories are inherited through reviewed upstream media, windowing, code-generation, and text stacks. None is classified by cargo-audit as an exploitable vulnerability, but the exact set must not grow.",
+      "expires_on": "2027-02-28",
+      "reason": "These informational advisories are inherited through reviewed upstream media, windowing, code-generation, and text stacks. atty (RUSTSEC-2021-0145 / RUSTSEC-2024-0375) and its clap/ansi_term transitive chain have been completely eliminated. None of the remaining warnings is classified by cargo-audit as an exploitable vulnerability, but the exact set must not grow.",
       "exit_condition": "Remove each entry when its upstream chain is upgraded or replaced; complete the remaining removals before the group expires.",
       "warnings": [
         {
@@ -83,12 +77,6 @@
           "advisory_id": "RUSTSEC-2017-0008",
           "package": "serial",
           "version": "0.4.0"
-        },
-        {
-          "category": "unmaintained",
-          "advisory_id": "RUSTSEC-2021-0139",
-          "package": "ansi_term",
-          "version": "0.12.1"
         },
         {
           "category": "unmaintained",
@@ -101,12 +89,6 @@
           "advisory_id": "RUSTSEC-2024-0370",
           "package": "proc-macro-error",
           "version": "1.0.4"
-        },
-        {
-          "category": "unmaintained",
-          "advisory_id": "RUSTSEC-2024-0375",
-          "package": "atty",
-          "version": "0.2.14"
         },
         {
           "category": "unmaintained",
@@ -179,12 +161,6 @@
           "advisory_id": "RUSTSEC-2026-0192",
           "package": "ttf-parser",
           "version": "0.25.1"
-        },
-        {
-          "category": "unsound",
-          "advisory_id": "RUSTSEC-2021-0145",
-          "package": "atty",
-          "version": "0.2.14"
         }
       ]
     }
