@@ -246,12 +246,7 @@ impl LockModesHandler {
         //     CGEventSourceStateID::CombinedSessionState,
         //     rdev::kVK_CapsLock,
         // );
-        let local_caps_enabled = unsafe {
-            let _lock = VIRTUAL_INPUT_MTX.lock();
-            VIRTUAL_INPUT_STATE
-                .as_ref()
-                .map_or(false, |input| input.capslock_down)
-        };
+        let local_caps_enabled = is_capslock_down();
         if event_caps_enabled && !local_caps_enabled {
             press_capslock();
         } else if !event_caps_enabled && local_caps_enabled {
@@ -665,6 +660,12 @@ struct VirtualInputState {
     capslock_down: bool,
 }
 
+// Safety: `VirtualInput` wraps `CGEventSource` and `CGEventTapLocation`.
+// CoreGraphics event sources are thread-safe reference-counted objects.
+// Exclusive access to `VirtualInputState` is strictly synchronized via `VIRTUAL_INPUT_STATE` Mutex.
+#[cfg(target_os = "macos")]
+unsafe impl Send for VirtualInputState {}
+
 #[cfg(target_os = "macos")]
 impl VirtualInputState {
     fn new() -> Option<Self> {
@@ -699,9 +700,23 @@ impl VirtualInputState {
 }
 
 #[cfg(target_os = "macos")]
-static mut VIRTUAL_INPUT_MTX: Mutex<()> = Mutex::new(());
+static VIRTUAL_INPUT_STATE: Mutex<Option<VirtualInputState>> = Mutex::new(None);
+
 #[cfg(target_os = "macos")]
-static mut VIRTUAL_INPUT_STATE: Option<VirtualInputState> = None;
+#[inline]
+fn lock_virtual_input() -> std::sync::MutexGuard<'static, Option<VirtualInputState>> {
+    VIRTUAL_INPUT_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(target_os = "macos")]
+#[inline]
+fn is_capslock_down() -> bool {
+    lock_virtual_input()
+        .as_ref()
+        .is_some_and(|input| input.capslock_down)
+}
 
 // First call set_uinput() will create keyboard and mouse clients.
 // The clients are ipc connections that must live shorter than tokio runtime.
@@ -1493,10 +1508,9 @@ pub fn handle_key(evt: &KeyEvent) {
 #[cfg(target_os = "macos")]
 #[inline]
 fn reset_input() {
-    unsafe {
-        let _lock = VIRTUAL_INPUT_MTX.lock();
-        VIRTUAL_INPUT_STATE = VirtualInputState::new();
-    }
+    let new_state = VirtualInputState::new();
+    let mut guard = lock_virtual_input();
+    *guard = new_state;
 }
 
 #[cfg(target_os = "macos")]
@@ -1541,11 +1555,9 @@ fn sim_rdev_rawkey_virtual(code: u32, keydown: bool) {
 #[inline]
 #[cfg(target_os = "macos")]
 fn simulate_(event_type: &EventType) {
-    unsafe {
-        let _lock = VIRTUAL_INPUT_MTX.lock();
-        if let Some(input) = VIRTUAL_INPUT_STATE.as_ref() {
-            let _ = input.simulate(&event_type);
-        }
+    let guard = lock_virtual_input();
+    if let Some(input) = guard.as_ref() {
+        let _ = input.simulate(event_type);
     }
 }
 
@@ -1553,14 +1565,18 @@ fn simulate_(event_type: &EventType) {
 #[cfg(target_os = "macos")]
 fn press_capslock() {
     let caps_key = RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock));
-    unsafe {
-        let _lock = VIRTUAL_INPUT_MTX.lock();
-        if let Some(input) = VIRTUAL_INPUT_STATE.as_mut() {
+    let mut should_sleep = false;
+    {
+        let mut guard = lock_virtual_input();
+        if let Some(input) = guard.as_mut() {
             if input.simulate(&EventType::KeyPress(caps_key)).is_ok() {
                 input.capslock_down = true;
-                key_sleep();
+                should_sleep = true;
             }
         }
+    }
+    if should_sleep {
+        key_sleep();
     }
 }
 
@@ -1568,14 +1584,18 @@ fn press_capslock() {
 #[inline]
 fn release_capslock() {
     let caps_key = RdevKey::RawKey(rdev::RawKey::MacVirtualKeycode(rdev::kVK_CapsLock));
-    unsafe {
-        let _lock = VIRTUAL_INPUT_MTX.lock();
-        if let Some(input) = VIRTUAL_INPUT_STATE.as_mut() {
+    let mut should_sleep = false;
+    {
+        let mut guard = lock_virtual_input();
+        if let Some(input) = guard.as_mut() {
             if input.simulate(&EventType::KeyRelease(caps_key)).is_ok() {
                 input.capslock_down = false;
-                key_sleep();
+                should_sleep = true;
             }
         }
+    }
+    if should_sleep {
+        key_sleep();
     }
 }
 
