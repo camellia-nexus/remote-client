@@ -2285,12 +2285,16 @@ pub fn get_builtin_option(key: &str) -> String {
         return "Y".to_owned();
     }
     if key == keys::OPTION_DISABLE_CHANGE_ID {
-        return config::BUILTIN_SETTINGS
+        let val = config::BUILTIN_SETTINGS
             .read()
             .unwrap()
             .get(key)
             .cloned()
-            .unwrap_or_else(|| "Y".to_owned());
+            .unwrap_or_default();
+        if val.is_empty() {
+            return "Y".to_owned();
+        }
+        return val;
     }
     config::BUILTIN_SETTINGS
         .read()

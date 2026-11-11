@@ -14,6 +14,7 @@ void main() {
     late File commonRs;
     late File coreMainRs;
     late File uiInterfaceRs;
+    late File ipcRs;
 
     setUpAll(() {
       if (Directory.current.path.endsWith('flutter')) {
@@ -38,6 +39,7 @@ void main() {
       commonRs = File('${clientRoot.path}/src/common.rs');
       coreMainRs = File('${clientRoot.path}/src/core_main.rs');
       uiInterfaceRs = File('${clientRoot.path}/src/ui_interface.rs');
+      ipcRs = File('${clientRoot.path}/src/ipc.rs');
 
       expect(commonDart.existsSync(), isTrue, reason: 'common.dart must exist');
       expect(
@@ -101,7 +103,8 @@ void main() {
     test('6. common.rs: Exports is_change_id_disabled and defaults OPTION_DISABLE_CHANGE_ID to Y', () {
       final content = commonRs.readAsStringSync();
       expect(content.contains('keys::OPTION_DISABLE_CHANGE_ID'), isTrue);
-      expect(content.contains('unwrap_or_else(|| "Y".to_owned())'), isTrue);
+      expect(content.contains('val.is_empty()'), isTrue);
+      expect(content.contains('return "Y".to_owned()'), isTrue);
       expect(content.contains('pub fn is_change_id_disabled() -> bool'), isTrue);
       expect(content.contains('get_builtin_option(keys::OPTION_DISABLE_CHANGE_ID) != "N"'), isTrue);
     });
@@ -155,6 +158,17 @@ void main() {
       // Unexpected values fail-safe to disabled
       expect(evalIsChangeIdDisabled('unknown'), isTrue);
       expect(evalIsChangeIdDisabled('false'), isTrue);
+    });
+
+    test('10. ipc.rs guards id write against is_change_id_disabled', () {
+      final content = ipcRs.readAsStringSync();
+      final someValIdx = content.indexOf('Some(value) => {');
+      expect(someValIdx > 0, isTrue);
+      final idWriteIdx = content.indexOf('if name == "id"', someValIdx);
+      expect(idWriteIdx > someValIdx, isTrue);
+      final idBlock = content.substring(idWriteIdx, idWriteIdx + 400);
+      expect(idBlock.contains('crate::common::is_change_id_disabled()'), isTrue);
+      expect(idBlock.contains('updated = false;'), isTrue);
     });
   });
 }

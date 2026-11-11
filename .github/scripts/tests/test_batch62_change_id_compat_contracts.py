@@ -41,6 +41,7 @@ class TestBatch62ChangeIdCompatContracts(unittest.TestCase):
         cls.common_rs = (CLIENT_SRC / "common.rs").read_text(encoding="utf-8")
         cls.core_main_rs = (CLIENT_SRC / "core_main.rs").read_text(encoding="utf-8")
         cls.ui_interface_rs = (CLIENT_SRC / "ui_interface.rs").read_text(encoding="utf-8")
+        cls.ipc_rs = (CLIENT_SRC / "ipc.rs").read_text(encoding="utf-8")
         cls.flutter_common_dart = (FLUTTER_LIB / "common.dart").read_text(encoding="utf-8")
         cls.desktop_setting_page_dart = (
             FLUTTER_LIB / "desktop" / "pages" / "desktop_setting_page.dart"
@@ -58,11 +59,21 @@ class TestBatch62ChangeIdCompatContracts(unittest.TestCase):
     # 1. Common / Builtin Invariants
     def test_common_rs_get_builtin_option_defaults_disable_change_id_to_y(self):
         self.assertIn("keys::OPTION_DISABLE_CHANGE_ID", self.common_rs)
-        self.assertIn('unwrap_or_else(|| "Y".to_owned())', self.common_rs)
+        self.assertIn("val.is_empty()", self.common_rs)
+        self.assertIn('return "Y".to_owned()', self.common_rs)
 
     def test_common_rs_exports_is_change_id_disabled(self):
         self.assertIn("pub fn is_change_id_disabled() -> bool", self.common_rs)
         self.assertIn('get_builtin_option(keys::OPTION_DISABLE_CHANGE_ID) != "N"', self.common_rs)
+
+    def test_ipc_rs_guards_id_write_against_disabled_change_id(self):
+        some_value_idx = self.ipc_rs.find("Some(value) => {")
+        self.assertGreater(some_value_idx, 0)
+        id_write_idx = self.ipc_rs.find('if name == "id"', some_value_idx)
+        self.assertGreater(id_write_idx, some_value_idx)
+        block = self.ipc_rs[id_write_idx : id_write_idx + 400]
+        self.assertIn("crate::common::is_change_id_disabled()", block)
+        self.assertIn("updated = false;", block)
 
     # 2. CLI Fail-Fast Invariants
     def test_core_main_cli_set_id_fail_fast_message(self):
@@ -154,7 +165,8 @@ class TestBatch62ChangeIdCompatContracts(unittest.TestCase):
     def test_functional_simulation_is_change_id_disabled_contract(self):
         def simulate_rust_get_builtin_option(settings: dict, key: str) -> str:
             if key == "disable-change-id":
-                return settings.get(key, "Y")
+                val = settings.get(key, "")
+                return "Y" if not val else val
             return settings.get(key, "")
 
         def simulate_rust_is_change_id_disabled(settings: dict) -> bool:

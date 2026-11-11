@@ -1033,8 +1033,13 @@ async fn handle(data: Data, stream: &mut Connection) {
             Some(value) => {
                 let mut updated = true;
                 if name == "id" {
-                    // An empty id would wipe the local id and unconfirm the key (cf. #15626).
-                    if value.is_empty() {
+                    if crate::common::is_change_id_disabled() {
+                        log::warn!(
+                            "Ignoring id write over IPC: changing device ID is disabled by server capability policy"
+                        );
+                        updated = false;
+                    } else if value.is_empty() {
+                        // An empty id would wipe the local id and unconfirm the key (cf. #15626).
                         log::warn!("Ignoring empty id write over IPC");
                         updated = false;
                     } else {

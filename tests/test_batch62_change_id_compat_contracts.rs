@@ -125,4 +125,20 @@ fn test_compat001_source_invariants_and_guard_contracts() {
         flutter_common_content.contains("opt != 'N'"),
         "isChangeIdDisabled must only enable when explicitly 'N'"
     );
+
+    // 4. ipc.rs guards id write against disabled capability
+    let ipc_path = client_root.join("src").join("ipc.rs");
+    let ipc_content = fs::read_to_string(&ipc_path)
+        .unwrap_or_else(|e| panic!("Failed to read {}: {}", ipc_path.display(), e));
+    let some_val_idx = ipc_content
+        .find("Some(value) => {")
+        .expect("ipc Some(value) arm");
+    let id_write_idx = ipc_content[some_val_idx..]
+        .find("if name == \"id\"")
+        .expect("ipc name == id write arm");
+    let id_block = &ipc_content[some_val_idx + id_write_idx..some_val_idx + id_write_idx + 400];
+    assert!(
+        id_block.contains("crate::common::is_change_id_disabled()"),
+        "ipc.rs must check is_change_id_disabled on id write"
+    );
 }
