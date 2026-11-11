@@ -33,9 +33,8 @@ HRESULT    AddFirewallRuleWithEdgeTraversal(__in INetFwPolicy2* pNetFwPolicy2,
                                             __in LPWSTR exeFile);
 
 
-bool AddFirewallRule(bool add, LPWSTR exeName, LPWSTR exeFile)
+HRESULT AddFirewallRuleEx(bool add, LPWSTR exeName, LPWSTR exeFile)
 {
-    bool result = false;
     HRESULT hrComInit = S_OK;
     HRESULT hr = S_OK;
     INetFwPolicy2* pNetFwPolicy2 = NULL;
@@ -54,7 +53,7 @@ bool AddFirewallRule(bool add, LPWSTR exeName, LPWSTR exeFile)
         if (FAILED(hrComInit))
         {
             WcaLog(LOGMSG_STANDARD, "CoInitializeEx failed: 0x%08lx\n", hrComInit);
-            goto Cleanup;
+            return hrComInit;
         }
     }
 
@@ -69,12 +68,16 @@ bool AddFirewallRule(bool add, LPWSTR exeName, LPWSTR exeFile)
         // Add firewall rule with EdgeTraversalOption=DeferApp (Windows7+) if available
         //   else add with Edge=True (Vista and Server 2008).
         hr = AddFirewallRuleWithEdgeTraversal(pNetFwPolicy2, true, exeName, exeFile);
-        hr = AddFirewallRuleWithEdgeTraversal(pNetFwPolicy2, false, exeName, exeFile);
+        if (SUCCEEDED(hr)) {
+            hr = AddFirewallRuleWithEdgeTraversal(pNetFwPolicy2, false, exeName, exeFile);
+        }
     }
     else {
         hr = RemoveFirewallRule(pNetFwPolicy2, exeName);
+        if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
+            hr = S_OK;
+        }
     }
-    result = SUCCEEDED(hr);
 
 Cleanup:
 
@@ -87,7 +90,12 @@ Cleanup:
         CoUninitialize();
     }
 
-    return result;
+    return hr;
+}
+
+bool AddFirewallRule(bool add, LPWSTR exeName, LPWSTR exeFile)
+{
+    return SUCCEEDED(AddFirewallRuleEx(add, exeName, exeFile));
 }
 
 BSTR MakeRuleName(__in LPWSTR exeName)
@@ -127,14 +135,15 @@ HRESULT    RemoveFirewallRule(
         goto Cleanup;
     }
 
-    // We need to "Remove()" twice, because both "in" and "out" rules are added?
-    // There's no remarks for this case https://learn.microsoft.com/en-us/windows/win32/api/netfw/nf-netfw-inetfwrules-remove
-    hr = pNetFwRules->Remove(RuleName);
-    hr = pNetFwRules->Remove(RuleName);
-    if (FAILED(hr)) {
+    // Remove rules (both in and out)
+    HRESULT hr1 = pNetFwRules->Remove(RuleName);
+    HRESULT hr2 = pNetFwRules->Remove(RuleName);
+    if (FAILED(hr1) && hr1 != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
+        hr = hr1;
         WcaLog(LOGMSG_STANDARD, "Failed to remove firewall rule \"%ls\" : 0x%08lx\n", exeName, hr);
     }
     else {
+        hr = S_OK;
         WcaLog(LOGMSG_STANDARD, "Firewall rule \"%ls\" is removed\n", exeName);
     }
 

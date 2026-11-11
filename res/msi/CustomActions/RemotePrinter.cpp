@@ -409,7 +409,12 @@ namespace RemotePrinter
         printerInfo.pDatatype = const_cast<LPWSTR>(L"RAW");
         printerInfo.Attributes = PRINTER_ATTRIBUTE_LOCAL;
         HANDLE hPrinter = AddPrinterW(NULL, 2, (LPBYTE)&printerInfo);
-        return hPrinter == NULL ? FALSE : TRUE;
+        if (hPrinter == NULL)
+        {
+            return FALSE;
+        }
+        ClosePrinter(hPrinter);
+        return TRUE;
     }
 
     VOID deletePrinter(LPCWSTR name)
@@ -452,29 +457,37 @@ namespace RemotePrinter
     }
 
     // Steps:
-    // 1. Add the local port.
-    // 2. Check if the driver is installed.
+    // 1. Verify printer driver INF file exists BEFORE performing any system mutation.
+    // 2. Add the local port (tracked for rollback).
+    // 3. Check if the driver is installed.
     //    Uninstall the existing driver if it is installed.
-    //    We should not check the driver version because the driver is deployed with the application.
-    //    It's better to uninstall the existing driver and install the driver from the application.
-    // 3. Add the printer.
-    VOID installUpdatePrinter(const std::wstring &installFolder)
+    // 4. Install the driver from the application package.
+    // 5. Add the printer, closing printer handle immediately.
+    // 6. On failure at any stage, rollback created resources to avoid orphan ports/drivers.
+    HRESULT installUpdatePrinter(const std::wstring &installFolder)
     {
         const std::wstring infFile = installFolder + L"\\" + RemotePrinter::RD_DRIVER_INF_PATH;
         if (!FileExists(infFile))
         {
-            WcaLog(LOGMSG_STANDARD, "Printer driver INF file not found, aborting...\n");
-            return;
+            WcaLog(LOGMSG_STANDARD, "Printer driver INF file not found: %ls, aborting...\n", infFile.c_str());
+            return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         }
 
-        if (!checkAddLocalPort(RD_PRINTER_PORT))
+        bool portCreated = false;
+        if (!isPortExists(RD_PRINTER_PORT))
         {
-            WcaLog(LOGMSG_STANDARD, "Failed to check add local port, error (%d)\n", GetLastError());
-            return;
+            if (!addLocalPort(RD_PRINTER_PORT))
+            {
+                DWORD err = GetLastError();
+                WcaLog(LOGMSG_STANDARD, "Failed to add local port, error (%lu)\n", err);
+                return err != 0 ? HRESULT_FROM_WIN32(err) : E_FAIL;
+            }
+            portCreated = true;
+            WcaLog(LOGMSG_STANDARD, "Local port added successfully\n");
         }
         else
         {
-            WcaLog(LOGMSG_STANDARD, "Local port added successfully\n");
+            WcaLog(LOGMSG_STANDARD, "Local port already exists\n");
         }
 
         if (getInstalledDriverVersion(RD_PRINTER_DRIVER_NAME) > 0)
@@ -482,13 +495,20 @@ namespace RemotePrinter
             deletePrinter(RD_PRINTER_NAME);
             if (FALSE == uninstallDriver(RD_PRINTER_DRIVER_NAME))
             {
-                WcaLog(LOGMSG_STANDARD, "Failed to uninstall previous printer driver, error (%d)\n", GetLastError());
+                WcaLog(LOGMSG_STANDARD, "Failed to uninstall previous printer driver, error (%lu)\n", GetLastError());
             }
         }
 
         if (FALSE == installDriver(RD_PRINTER_DRIVER_NAME, infFile.c_str()))
         {
-            WcaLog(LOGMSG_STANDARD, "Driver installation failed, still try to add the printer\n");
+            DWORD err = GetLastError();
+            WcaLog(LOGMSG_STANDARD, "Driver installation failed for %ls, aborting printer installation (error %lu)\n",
+                   RD_PRINTER_DRIVER_NAME, err);
+            if (portCreated)
+            {
+                checkDeleteLocalPort(RD_PRINTER_PORT);
+            }
+            return err != 0 ? HRESULT_FROM_WIN32(err) : E_FAIL;
         }
         else
         {
@@ -497,15 +517,24 @@ namespace RemotePrinter
 
         if (FALSE == addPrinter(RD_PRINTER_NAME, RD_PRINTER_DRIVER_NAME, RD_PRINTER_PORT))
         {
-            WcaLog(LOGMSG_STANDARD, "Failed to add printer, error (%d)\n", GetLastError());
+            DWORD err = GetLastError();
+            WcaLog(LOGMSG_STANDARD, "Failed to add printer, error (%lu)\n", err);
+            uninstallDriver(RD_PRINTER_DRIVER_NAME);
+            if (portCreated)
+            {
+                checkDeleteLocalPort(RD_PRINTER_PORT);
+            }
+            return err != 0 ? HRESULT_FROM_WIN32(err) : E_FAIL;
         }
         else
         {
             WcaLog(LOGMSG_STANDARD, "Printer installed successfully\n");
         }
+
+        return S_OK;
     }
 
-    VOID uninstallPrinter()
+    HRESULT uninstallPrinter()
     {
         deletePrinter(RD_PRINTER_NAME);
         WcaLog(LOGMSG_STANDARD, "Deleted the printer\n");
@@ -513,5 +542,6 @@ namespace RemotePrinter
         WcaLog(LOGMSG_STANDARD, "Uninstalled the printer driver\n");
         checkDeleteLocalPort(RD_PRINTER_PORT);
         WcaLog(LOGMSG_STANDARD, "Deleted the local port\n");
+        return S_OK;
     }
 }

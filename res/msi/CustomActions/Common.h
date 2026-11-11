@@ -4,6 +4,7 @@
 #include <string>
 
 bool AddFirewallRule(bool add, LPWSTR exeName, LPWSTR exeFile);
+HRESULT AddFirewallRuleEx(bool add, LPWSTR exeName, LPWSTR exeFile);
 
 bool QueryServiceStatusExW(LPCWSTR serviceName, SERVICE_STATUS_PROCESS* status);
 bool IsServiceRunningW(LPCWSTR serviceName);
@@ -18,6 +19,6 @@ void UninstallDriver(LPCWSTR hardwareId, BOOL &rebootRequired);
 
 namespace RemotePrinter
 {
-    VOID installUpdatePrinter(const std::wstring& installFolder);
-    VOID uninstallPrinter();
+    HRESULT installUpdatePrinter(const std::wstring& installFolder);
+    HRESULT uninstallPrinter();
 }

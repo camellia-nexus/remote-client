@@ -457,7 +457,8 @@ UINT __stdcall AddFirewallRules(
     //    RemoveFirewallRuleCmdline(exeNameNoExt);
     //}
 
-    AddFirewallRule(exeFile[0] == L'1', exeNameNoExt, exeFile + 1);
+    hr = AddFirewallRuleEx(exeFile[0] == L'1', exeNameNoExt, exeFile + 1);
+    ExitOnFailure(hr, "Failed to configure firewall rule");
 
 LExit:
     if (pwzData) {
@@ -526,6 +527,7 @@ UINT __stdcall CreateStartService(__in MSIHANDLE hInstall)
     svcBinary = wcschr(svcParams, L';');
     if (svcBinary == NULL) {
         WcaLog(LOGMSG_STANDARD, "Failed to find binary : %ls", svcParams);
+        hr = E_INVALIDARG;
         goto LExit;
     }
     svcBinary[0] = L'\0';
@@ -552,6 +554,13 @@ UINT __stdcall CreateStartService(__in MSIHANDLE hInstall)
     else {
         WcaLog(LOGMSG_STANDARD, "Service \"%ls\" is not running, try create and start service by shell", svcName);
         TryCreateStartServiceByShell(svcName, svcBinary, szSvcDisplayName);
+    }
+
+    if (!IsServiceRunningW(svcName)) {
+        DWORD err = GetLastError();
+        WcaLog(LOGMSG_STANDARD, "Verification failed: Service \"%ls\" is not running after creation attempts.", svcName);
+        hr = (err != ERROR_SUCCESS) ? HRESULT_FROM_WIN32(err) : HRESULT_FROM_WIN32(ERROR_SERVICE_NOT_ACTIVE);
+        goto LExit;
     }
 
 LExit:
@@ -745,18 +754,18 @@ UINT __stdcall AddRegSoftwareSASGeneration(__in MSIHANDLE hInstall)
         WcaLog(LOGMSG_STANDARD, "Registry name \"%ls\" is added", valueName);
     }
 
-    // Why RegSetValueExW always return 998?
-    //
     result = RegCreateKeyExW(HKEY_LOCAL_MACHINE, subKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL);
     if (result != ERROR_SUCCESS) {
         WcaLog(LOGMSG_STANDARD, "Failed to create or open registry key: %d", result);
+        hr = HRESULT_FROM_WIN32(result);
         goto LExit;
     }
 
-    result = RegSetValueExW(hKey, valueName, 0, valueType, reinterpret_cast<const BYTE*>(valueData), valueDataSize);
+    result = RegSetValueExW(hKey, valueName, 0, valueType, reinterpret_cast<const BYTE*>(&valueData), valueDataSize);
     if (result != ERROR_SUCCESS) {
         WcaLog(LOGMSG_STANDARD, "Failed to set registry value: %d", result);
         RegCloseKey(hKey);
+        hr = HRESULT_FROM_WIN32(result);
         goto LExit;
     }
 
@@ -1037,7 +1046,8 @@ UINT __stdcall InstallPrinter(
     ExitOnFailure(hr, "failed to read database key from custom action data: %ls", pwz);
 
     WcaLog(LOGMSG_STANDARD, "Try to install RD printer in : %ls", installFolder);
-    RemotePrinter::installUpdatePrinter(installFolder);
+    hr = RemotePrinter::installUpdatePrinter(installFolder);
+    ExitOnFailure(hr, "Failed to install RD printer");
     WcaLog(LOGMSG_STANDARD, "Install RD printer done");
 
 LExit:
@@ -1059,7 +1069,8 @@ UINT __stdcall UninstallPrinter(
     ExitOnFailure(hr, "Failed to initialize");
 
     WcaLog(LOGMSG_STANDARD, "Try to uninstall RD printer");
-    RemotePrinter::uninstallPrinter();
+    hr = RemotePrinter::uninstallPrinter();
+    ExitOnFailure(hr, "Failed to uninstall RD printer");
     WcaLog(LOGMSG_STANDARD, "Uninstall RD printer done");
 
 LExit:
