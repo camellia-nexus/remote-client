@@ -69,7 +69,7 @@ bool MyDeleteServiceW(LPCWSTR serviceName)
         return false;
     }
 
-    SERVICE_STATUS serviceStatus;
+    SERVICE_STATUS serviceStatus = { 0 };
     if (ControlService(hService, SERVICE_CONTROL_STOP, &serviceStatus)) {
         WcaLog(LOGMSG_STANDARD, "Stopping service: %ls", serviceName);
     }
@@ -126,7 +126,7 @@ bool MyStopServiceW(LPCWSTR serviceName)
         return false;
     }
 
-    SERVICE_STATUS serviceStatus;
+    SERVICE_STATUS serviceStatus = { 0 };
     if (!ControlService(hService, SERVICE_CONTROL_STOP, &serviceStatus)) {
         WcaLog(LOGMSG_STANDARD, "Failed to stop service: %ls", serviceName);
         CloseServiceHandle(hService);
@@ -155,7 +155,7 @@ bool QueryServiceStatusExW(LPCWSTR serviceName, SERVICE_STATUS_PROCESS* status)
         return false;
     }
 
-    DWORD bytesNeeded;
+    DWORD bytesNeeded = 0;
     BOOL success = QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(status), sizeof(*status), &bytesNeeded);
     if (!success) {
         WcaLog(LOGMSG_STANDARD, "Failed to query service: %ls", serviceName);
@@ -169,7 +169,9 @@ bool QueryServiceStatusExW(LPCWSTR serviceName, SERVICE_STATUS_PROCESS* status)
 
 bool IsServiceRunningW(LPCWSTR serviceName)
 {
-    SERVICE_STATUS_PROCESS serviceStatus;
-    QueryServiceStatusExW(serviceName, &serviceStatus);
+    SERVICE_STATUS_PROCESS serviceStatus = { 0 };
+    if (!QueryServiceStatusExW(serviceName, &serviceStatus)) {
+        return false;
+    }
     return (serviceStatus.dwCurrentState == SERVICE_RUNNING);
 }

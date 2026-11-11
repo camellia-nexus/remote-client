@@ -584,7 +584,7 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     LPWSTR pwzData = NULL;
     wchar_t szExeFile[500] = { 0 };
     DWORD cchExeFile = sizeof(szExeFile) / sizeof(szExeFile[0]);
-    SERVICE_STATUS_PROCESS svcStatus;
+    SERVICE_STATUS_PROCESS svcStatus = { 0 };
     DWORD lastErrorCode = 0;
 
     hr = WcaInitialize(hInstall, "TryStopDeleteService");
@@ -650,6 +650,7 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     hr = StringCchPrintfW(szExeFile, cchExeFile, L"%ls.exe", svcName);
     ExitOnFailure(hr, "Failed to compose a resource identifier string");
     TerminateProcessesByNameW(szExeFile, L"--not-in-use");
+    TerminateProcessesByNameW(L"camellia-remote.exe", L"--not-in-use");
 
 LExit:
     if (pwzData) {
@@ -683,10 +684,10 @@ UINT __stdcall TryDeleteStartupShortcut(__in MSIHANDLE hInstall)
     ExitOnFailure(hr, "Failed to compose a resource identifier string");
 
     if (DeleteFileW(pwszTemp)) {
-        WcaLog(LOGMSG_STANDARD, "Failed to delete startup shortcut of : \"%ls\"", pwszTemp);
+        WcaLog(LOGMSG_STANDARD, "Startup shortcut is deleted : \"%ls\"", pwszTemp);
     }
     else {
-        WcaLog(LOGMSG_STANDARD, "Startup shortcut is deleted : \"%ls\"", pwszTemp);
+        WcaLog(LOGMSG_STANDARD, "Failed to delete startup shortcut of : \"%ls\", error: %lu", pwszTemp, GetLastError());
     }
 
 LExit:
@@ -858,7 +859,7 @@ void TryCreateStartServiceByShell(LPWSTR svcName, LPWSTR svcBinary, LPWSTR szSvc
     DWORD cchNewBin = sizeof(szNewBin) / sizeof(szNewBin[0]);
     wchar_t szCmd[800] = { 0 };
     DWORD cchCmd = sizeof(szCmd) / sizeof(szCmd[0]);
-    SERVICE_STATUS_PROCESS svcStatus;
+    SERVICE_STATUS_PROCESS svcStatus = { 0 };
     DWORD lastErrorCode = 0;
     int i = 0;
     int j = 0;
@@ -958,7 +959,7 @@ void TryStopDeleteServiceByShell(LPWSTR svcName)
     HINSTANCE hi = 0;
     wchar_t szCmd[800] = { 0 };
     DWORD cchCmd = sizeof(szCmd) / sizeof(szCmd[0]);
-    SERVICE_STATUS_PROCESS svcStatus;
+    SERVICE_STATUS_PROCESS svcStatus = { 0 };
     DWORD lastErrorCode = 0;
 
     WcaLog(LOGMSG_STANDARD, "TryStopDeleteServiceByShell, service: %ls", svcName);

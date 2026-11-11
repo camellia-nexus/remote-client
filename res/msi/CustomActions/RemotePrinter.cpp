@@ -128,6 +128,11 @@ namespace RemotePrinter
         }
 
         ClosePrinter(hMonitor);
+        if (status != ERROR_SUCCESS)
+        {
+            SetLastError(status);
+            return FALSE;
+        }
         return TRUE;
     }
 
@@ -479,11 +484,21 @@ namespace RemotePrinter
             if (!addLocalPort(RD_PRINTER_PORT))
             {
                 DWORD err = GetLastError();
-                WcaLog(LOGMSG_STANDARD, "Failed to add local port, error (%lu)\n", err);
-                return err != 0 ? HRESULT_FROM_WIN32(err) : E_FAIL;
+                if (err == ERROR_ALREADY_EXISTS || err == 183)
+                {
+                    WcaLog(LOGMSG_STANDARD, "Local port already exists according to spooler\n");
+                }
+                else
+                {
+                    WcaLog(LOGMSG_STANDARD, "Failed to add local port, error (%lu)\n", err);
+                    return err != 0 ? HRESULT_FROM_WIN32(err) : E_FAIL;
+                }
             }
-            portCreated = true;
-            WcaLog(LOGMSG_STANDARD, "Local port added successfully\n");
+            else
+            {
+                portCreated = true;
+                WcaLog(LOGMSG_STANDARD, "Local port added successfully\n");
+            }
         }
         else
         {
