@@ -28,3 +28,6 @@ paths-ignore:
   - '**/*.pbjson.dart'
   - '**/*.pbserver.dart'
   - 'flutter/web/dist/**'
+  - 'libs/glib/**'
+  - 'libs/hwcodec/**'
+  - 'libs/magnum-opus/**'
