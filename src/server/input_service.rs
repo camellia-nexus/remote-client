@@ -695,7 +695,7 @@ impl VirtualInputState {
 
     #[inline]
     fn simulate(&self, event_type: &EventType) -> ResultType<()> {
-        Ok(self.virtual_input.simulate(&event_type)?)
+        Ok(self.virtual_input.simulate(event_type)?)
     }
 }
 
@@ -1569,9 +1569,11 @@ fn press_capslock() {
     {
         let mut guard = lock_virtual_input();
         if let Some(input) = guard.as_mut() {
-            if input.simulate(&EventType::KeyPress(caps_key)).is_ok() {
-                input.capslock_down = true;
-                should_sleep = true;
+            if !input.capslock_down {
+                if input.simulate(&EventType::KeyPress(caps_key)).is_ok() {
+                    input.capslock_down = true;
+                    should_sleep = true;
+                }
             }
         }
     }
@@ -1588,9 +1590,11 @@ fn release_capslock() {
     {
         let mut guard = lock_virtual_input();
         if let Some(input) = guard.as_mut() {
-            if input.simulate(&EventType::KeyRelease(caps_key)).is_ok() {
-                input.capslock_down = false;
-                should_sleep = true;
+            if input.capslock_down {
+                if input.simulate(&EventType::KeyRelease(caps_key)).is_ok() {
+                    input.capslock_down = false;
+                    should_sleep = true;
+                }
             }
         }
     }
