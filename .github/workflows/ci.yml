@@ -101,6 +101,10 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
+          echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
           sudo apt-get update
           sudo apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
@@ -311,6 +315,10 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
+          echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
           sudo apt-get update
           sudo apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
