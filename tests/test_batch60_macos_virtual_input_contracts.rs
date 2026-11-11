@@ -128,6 +128,10 @@ fn test_conc002_input_service_source_invariants() {
         !press_capslock.contains("unsafe"),
         "press_capslock must not use unsafe"
     );
+    assert!(
+        press_capslock.contains("!input.capslock_down"),
+        "press_capslock must guard against redundant toggles under lock"
+    );
 
     let release_capslock = content
         .split("fn release_capslock()")
@@ -139,6 +143,10 @@ fn test_conc002_input_service_source_invariants() {
     assert!(
         !release_capslock.contains("unsafe"),
         "release_capslock must not use unsafe"
+    );
+    assert!(
+        release_capslock.contains("input.capslock_down"),
+        "release_capslock must guard against redundant toggles under lock"
     );
 
     // 8. Sleep outside critical section
@@ -220,7 +228,7 @@ impl SafeVirtualInputCoordinator {
         {
             let mut guard = self.lock_state();
             if let Some(input) = guard.as_mut() {
-                if input.simulate("KeyPress(CapsLock)").is_ok() {
+                if !input.capslock_down && input.simulate("KeyPress(CapsLock)").is_ok() {
                     input.capslock_down = true;
                     should_sleep = true;
                 }
@@ -236,7 +244,7 @@ impl SafeVirtualInputCoordinator {
         {
             let mut guard = self.lock_state();
             if let Some(input) = guard.as_mut() {
-                if input.simulate("KeyRelease(CapsLock)").is_ok() {
+                if input.capslock_down && input.simulate("KeyRelease(CapsLock)").is_ok() {
                     input.capslock_down = false;
                     should_sleep = true;
                 }
@@ -302,6 +310,28 @@ fn test_conc002_capslock_state_machine_and_idempotency() {
     assert!(!coordinator.is_capslock_down());
     assert_eq!(coordinator.sleep_count.load(Ordering::SeqCst), 2);
     assert_eq!(coordinator.events.lock().unwrap().len(), 2);
+
+    // 7. Direct press_capslock idempotency (internal state check under lock)
+    coordinator.press_capslock();
+    assert!(coordinator.is_capslock_down());
+    assert_eq!(coordinator.sleep_count.load(Ordering::SeqCst), 3);
+    assert_eq!(coordinator.events.lock().unwrap().len(), 3);
+    // Duplicate direct press_capslock must be a no-op: zero event spam, zero sleep stall
+    coordinator.press_capslock();
+    assert!(coordinator.is_capslock_down());
+    assert_eq!(coordinator.sleep_count.load(Ordering::SeqCst), 3);
+    assert_eq!(coordinator.events.lock().unwrap().len(), 3);
+
+    // 8. Direct release_capslock idempotency (internal state check under lock)
+    coordinator.release_capslock();
+    assert!(!coordinator.is_capslock_down());
+    assert_eq!(coordinator.sleep_count.load(Ordering::SeqCst), 4);
+    assert_eq!(coordinator.events.lock().unwrap().len(), 4);
+    // Duplicate direct release_capslock must be a no-op: zero event spam, zero sleep stall
+    coordinator.release_capslock();
+    assert!(!coordinator.is_capslock_down());
+    assert_eq!(coordinator.sleep_count.load(Ordering::SeqCst), 4);
+    assert_eq!(coordinator.events.lock().unwrap().len(), 4);
 }
 
 #[test]

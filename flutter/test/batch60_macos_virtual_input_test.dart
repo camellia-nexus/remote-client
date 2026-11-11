@@ -122,7 +122,7 @@ void main() {
       );
     });
 
-    test('8. CapsLock handlers invoke key_sleep outside critical section', () {
+    test('8. CapsLock handlers invoke key_sleep outside critical section and enforce idempotency', () {
       final pressSection = content.split('fn press_capslock()').last.split('\n}').first;
       expect(
         pressSection.contains('unsafe'),
@@ -133,6 +133,11 @@ void main() {
         pressSection.contains('if should_sleep {\n        key_sleep();\n    }'),
         isTrue,
         reason: 'press_capslock must invoke key_sleep outside Mutex lock scope',
+      );
+      expect(
+        pressSection.contains('!input.capslock_down'),
+        isTrue,
+        reason: 'press_capslock must check !input.capslock_down under lock',
       );
 
       final releaseSection = content.split('fn release_capslock()').last.split('\n}').first;
@@ -145,6 +150,11 @@ void main() {
         releaseSection.contains('if should_sleep {\n        key_sleep();\n    }'),
         isTrue,
         reason: 'release_capslock must invoke key_sleep outside Mutex lock scope',
+      );
+      expect(
+        releaseSection.contains('input.capslock_down'),
+        isTrue,
+        reason: 'release_capslock must check input.capslock_down under lock',
       );
     });
 
@@ -184,7 +194,25 @@ void main() {
       expect(sim.sleepCalls, equals(2));
       expect(sim.eventLog.length, equals(2));
 
-      // Step 7: Disconnection reset idempotently restores fresh state
+      // Step 7: Direct pressCapsLock idempotency (under lock)
+      sim.pressCapsLock();
+      expect(sim.isCapsLockDown, isTrue);
+      expect(sim.sleepCalls, equals(3));
+      // Duplicate direct call must be a no-op
+      sim.pressCapsLock();
+      expect(sim.isCapsLockDown, isTrue);
+      expect(sim.sleepCalls, equals(3));
+
+      // Step 8: Direct releaseCapsLock idempotency (under lock)
+      sim.releaseCapsLock();
+      expect(sim.isCapsLockDown, isFalse);
+      expect(sim.sleepCalls, equals(4));
+      // Duplicate direct call must be a no-op
+      sim.releaseCapsLock();
+      expect(sim.isCapsLockDown, isFalse);
+      expect(sim.sleepCalls, equals(4));
+
+      // Step 9: Disconnection reset idempotently restores fresh state
       sim.resetInput();
       expect(sim.isCapsLockDown, isFalse);
     });
@@ -214,7 +242,7 @@ class _VirtualInputSim {
 
   void pressCapsLock() {
     var shouldSleep = false;
-    if (_initialized) {
+    if (_initialized && !_capsLockDown) {
       simulate('KeyPress(CapsLock)');
       _capsLockDown = true;
       shouldSleep = true;
@@ -226,7 +254,7 @@ class _VirtualInputSim {
 
   void releaseCapsLock() {
     var shouldSleep = false;
-    if (_initialized) {
+    if (_initialized && _capsLockDown) {
       simulate('KeyRelease(CapsLock)');
       _capsLockDown = false;
       shouldSleep = true;

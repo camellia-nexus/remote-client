@@ -138,7 +138,7 @@ class TestBatch60MacOSVirtualInputContracts(unittest.TestCase):
         self.assertIn("lock_virtual_input()", body)
 
     def test_capslock_handlers_bounded_lock_scope(self):
-        """press_capslock and release_capslock must release mutex before invoking key_sleep."""
+        """press_capslock and release_capslock must release mutex before invoking key_sleep and check state under lock."""
         for fn_name in ["press_capslock", "release_capslock"]:
             # Find function definition up to its closing brace
             pattern = rf"fn\s+{fn_name}\s*\(\s*\)\s*\{{(.*?)\n\}}"
@@ -160,6 +160,13 @@ class TestBatch60MacOSVirtualInputContracts(unittest.TestCase):
                 r"if\s+should_sleep\s*\{\s*key_sleep\(\);\s*\}",
                 f"{fn_name} must invoke key_sleep() outside the mutex lock scope",
             )
+
+        # Check idempotency guards inside critical section
+        press_body = re.search(r"fn\s+press_capslock\s*\(\s*\)\s*\{(.*?)\n\}", self.source, re.DOTALL).group(1)
+        self.assertIn("!input.capslock_down", press_body, "press_capslock must check !input.capslock_down under lock")
+
+        release_body = re.search(r"fn\s+release_capslock\s*\(\s*\)\s*\{(.*?)\n\}", self.source, re.DOTALL).group(1)
+        self.assertIn("input.capslock_down", release_body, "release_capslock must check input.capslock_down under lock")
 
     # =========================================================================
     # 2. Concurrency & State Machine Behavioral Simulation
@@ -209,7 +216,7 @@ class TestBatch60MacOSVirtualInputContracts(unittest.TestCase):
             def press_capslock(self):
                 should_sleep = False
                 with self._lock:
-                    if self._state is not None:
+                    if self._state is not None and not self._state.capslock_down:
                         if self._state.simulate("KeyPress(CapsLock)"):
                             self._state.capslock_down = True
                             should_sleep = True
@@ -219,7 +226,7 @@ class TestBatch60MacOSVirtualInputContracts(unittest.TestCase):
             def release_capslock(self):
                 should_sleep = False
                 with self._lock:
-                    if self._state is not None:
+                    if self._state is not None and self._state.capslock_down:
                         if self._state.simulate("KeyRelease(CapsLock)"):
                             self._state.capslock_down = False
                             should_sleep = True
@@ -264,7 +271,25 @@ class TestBatch60MacOSVirtualInputContracts(unittest.TestCase):
         self.assertFalse(mgr.is_capslock_down())
         self.assertEqual(mgr.sleep_calls, 2)
 
-        # Step 7: Concurrent stress test across 16 threads
+        # Step 7: Direct press_capslock idempotency (under lock)
+        mgr.press_capslock()
+        self.assertTrue(mgr.is_capslock_down())
+        self.assertEqual(mgr.sleep_calls, 3)
+        # Duplicate direct call must be a no-op
+        mgr.press_capslock()
+        self.assertTrue(mgr.is_capslock_down())
+        self.assertEqual(mgr.sleep_calls, 3)
+
+        # Step 8: Direct release_capslock idempotency (under lock)
+        mgr.release_capslock()
+        self.assertFalse(mgr.is_capslock_down())
+        self.assertEqual(mgr.sleep_calls, 4)
+        # Duplicate direct call must be a no-op
+        mgr.release_capslock()
+        self.assertFalse(mgr.is_capslock_down())
+        self.assertEqual(mgr.sleep_calls, 4)
+
+        # Step 9: Concurrent stress test across 16 threads
         errors = []
 
         def worker(worker_id: int):
