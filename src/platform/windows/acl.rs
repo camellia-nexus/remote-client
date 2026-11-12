@@ -26,9 +26,7 @@ use windows::{
             PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SID_NAME_USE,
             TOKEN_QUERY, TOKEN_USER,
         },
-        Storage::FileSystem::{
-            FILE_ALL_ACCESS, FILE_GENERIC_WRITE,
-        },
+        Storage::FileSystem::{FILE_ALL_ACCESS, FILE_GENERIC_WRITE},
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     },
 };
