@@ -10,7 +10,7 @@ fn main() {
     let ffi_header = "src/tool_ffi.h";
     bindgen::builder()
         .header(ffi_header)
-        .rustified_enum("*")
+        .rustified_enum(".*")
         .generate()
         .unwrap()
         .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("tool_ffi.rs"))
