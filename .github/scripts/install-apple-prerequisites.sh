@@ -44,8 +44,14 @@ vcpkg_binary_sha="504b96a5b76136308fc1d461c7721ab7797c3dc0c31eba872bae61ed4fd296
 
 if [[ ! -x "${vcpkg_target_dir}/vcpkg" ]]; then
   echo "Pre-seeding vcpkg at ${vcpkg_target_dir}..."
-  rm -rf "${vcpkg_target_dir}"
-  git clone https://github.com/microsoft/vcpkg.git -n "${vcpkg_target_dir}"
+  for attempt in 1 2 3 4 5; do
+    rm -rf "${vcpkg_target_dir}"
+    if GIT_TERMINAL_PROMPT=0 git clone https://github.com/microsoft/vcpkg.git -n "${vcpkg_target_dir}"; then
+      break
+    fi
+    echo "git clone vcpkg failed (attempt $attempt), retrying in 3s..."
+    sleep 3
+  done
   git -C "${vcpkg_target_dir}" checkout --force "${vcpkg_baseline}"
 
   download_url="https://github.com/microsoft/vcpkg-tool/releases/download/2025-07-21/vcpkg-macos"
