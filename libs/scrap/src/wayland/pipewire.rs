@@ -122,6 +122,7 @@ impl PwStreamInfo {
 }
 
 #[derive(Debug)]
+#[allow(clippy::upper_case_acronyms)]
 pub struct DBusError(String);
 
 impl std::fmt::Display for DBusError {
@@ -134,6 +135,7 @@ impl std::fmt::Display for DBusError {
 impl Error for DBusError {}
 
 #[derive(Debug)]
+#[allow(clippy::upper_case_acronyms)]
 pub struct GStreamerError(String);
 
 impl std::fmt::Display for GStreamerError {
