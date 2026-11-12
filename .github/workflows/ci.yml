@@ -263,8 +263,10 @@ jobs:
         shell: bash
         run: |
           "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
-          "$VCPKG_ROOT/vcpkg" install --triplet arm64-windows-static --x-install-root="$VCPKG_ROOT/installed"
-          echo "SODIUM_LIB_DIR=$VCPKG_ROOT/installed/x64-windows-static/lib" >> "$GITHUB_ENV"
+          export SODIUM_LIB_DIR="$VCPKG_ROOT/installed/x64-windows-static/lib"
+          echo "SODIUM_LIB_DIR=$SODIUM_LIB_DIR" >> "$GITHUB_ENV"
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-windows-static --x-install-root="$RUNNER_TEMP/vcpkg-arm64"
+          cp -r "$RUNNER_TEMP/vcpkg-arm64/arm64-windows-static" "$VCPKG_ROOT/installed/arm64-windows-static"
 
       - name: Check Windows Rust library
         shell: bash
