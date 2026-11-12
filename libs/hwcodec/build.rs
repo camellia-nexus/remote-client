@@ -144,7 +144,17 @@ mod ffmpeg {
         }
         println!("cargo:info={}", target);
         path.push("installed");
-        path.push(target);
+        let target_dir = path.join(&target);
+        if !target_dir.join("include").exists() && target_os == "windows" {
+            let fallback = path.join("x64-windows-static");
+            if fallback.join("include").exists() {
+                path = fallback;
+            } else {
+                path = target_dir;
+            }
+        } else {
+            path = target_dir;
+        }
 
         println!(
             "{}",
