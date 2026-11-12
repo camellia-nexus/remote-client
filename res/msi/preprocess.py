@@ -25,7 +25,7 @@ X64_DISTRIBUTION_DIRECTORY = WINDOWS_BUILD_ROOT / "x64" / "runner" / "Release"
 PRODUCT_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,79}$")
 BUILD_DATE = re.compile(
     r"(?:19|20)[0-9]{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]) "
-    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]",
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9](?: UTC)?",
     re.ASCII,
 )
 SHARED_PREPROCESSOR_VARIABLES = frozenset(

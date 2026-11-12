@@ -22,8 +22,32 @@ def ensure_tool(name):
         raise SystemExit(f"Required tool is not available on PATH: {name}")
 
 
-def sync_version(version, build_number):
-    run(["bash", ".github/scripts/sync-version.sh", version, str(build_number)])
+def resolve_source_date_epoch(explicit_epoch=None):
+    if explicit_epoch:
+        return str(explicit_epoch)
+    if "SOURCE_DATE_EPOCH" in os.environ:
+        return os.environ["SOURCE_DATE_EPOCH"]
+    try:
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%ct", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        epoch = result.stdout.strip()
+        if epoch.isdigit():
+            return epoch
+    except Exception:
+        pass
+    return None
+
+
+def sync_version(version, build_number, source_date_epoch=None):
+    cmd = ["bash", ".github/scripts/sync-version.sh", version, str(build_number)]
+    if source_date_epoch is not None:
+        cmd.append(str(source_date_epoch))
+    run(cmd)
 
 
 def prepare_dependencies(mode):
@@ -169,14 +193,22 @@ def main():
         action="store_true",
         help="Skip Flutter Rust Bridge generation when generated files already exist.",
     )
+    parser.add_argument(
+        "--source-date-epoch",
+        default=None,
+        help="Deterministic build timestamp in seconds since epoch.",
+    )
     args = parser.parse_args()
 
     ensure_tool("cargo")
     ensure_tool("flutter")
+    epoch = resolve_source_date_epoch(args.source_date_epoch)
+    if epoch:
+        os.environ["SOURCE_DATE_EPOCH"] = epoch
     if (args.version is None) != (args.build_number is None):
         parser.error("--version and --build-number must be provided together")
     if args.version is not None:
-        sync_version(args.version, args.build_number)
+        sync_version(args.version, args.build_number, epoch)
     prepare_dependencies(args.dependency_mode)
     if not args.skip_bridge:
         ensure_bridge(force=args.regenerate_bridge)
