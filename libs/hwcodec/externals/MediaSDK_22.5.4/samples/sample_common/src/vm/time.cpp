@@ -40,7 +40,13 @@ msdk_tick msdk_time_get_frequency(void)
 }
 
 mfxU64 rdtsc(){
+#if defined(_M_ARM64) || defined(_M_ARM) || defined(__aarch64__)
+    LARGE_INTEGER t1;
+    QueryPerformanceCounter(&t1);
+    return t1.QuadPart;
+#else
     return __rdtsc();
+#endif
 }
 
 #endif // #if defined(_WIN32) || defined(_WIN64)
