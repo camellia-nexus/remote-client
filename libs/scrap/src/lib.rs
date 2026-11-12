@@ -1,3 +1,5 @@
+#![allow(clippy::upper_case_acronyms)]
+
 #[cfg(quartz)]
 extern crate block;
 #[macro_use]

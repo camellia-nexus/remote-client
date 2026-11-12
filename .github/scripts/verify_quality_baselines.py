@@ -254,6 +254,14 @@ def verify_clippy(baseline_path: Path, raw_input: str | None = None, verbose: bo
         sys.stderr.write("[Clippy Gate] FAILED — Technical debt additions detected:\n")
         for v in violations:
             sys.stderr.write(f"  - {v}\n")
+        baseline_fingerprints = {w.get("fingerprint") for w in baseline.get("warnings", [])}
+        new_warnings = [w for w in actual_warnings if w.get("fingerprint") not in baseline_fingerprints]
+        if new_warnings:
+            sys.stderr.write("  Details of unbudgeted / new warnings:\n")
+            for nw in new_warnings[:15]:
+                sys.stderr.write(
+                    f"    * [{nw.get('package')}] {nw.get('code')}: {nw.get('file')}:{nw.get('line')}:{nw.get('column')} - {nw.get('message')}\n"
+                )
         return False
 
     if actual_total < allowed_total:
