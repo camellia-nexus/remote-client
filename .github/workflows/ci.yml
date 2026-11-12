@@ -203,6 +203,109 @@ jobs:
           cargo clippy --locked -p camellia-printing --all-targets
           --target "$PRINT_TARGET" -- -D warnings
 
+  windows_native:
+    name: Windows native runner verification
+    needs: [metadata, generate_bridge]
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: windows-native
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          vcpkgDirectory: C:\vcpkg
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Synchronize declared version
+        shell: bash
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+
+      - name: Prepare locked dependencies
+        shell: bash
+        run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
+
+      - name: Install native vcpkg libraries
+        shell: bash
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+          echo "SODIUM_LIB_DIR=$VCPKG_ROOT/installed/x64-windows-static/lib" >> "$GITHUB_ENV"
+
+      - name: Check Windows Rust library
+        shell: bash
+        run: cargo check --locked --lib --features flutter,hwcodec,vram
+
+      - name: Compile Windows native Rust library
+        shell: bash
+        run: cargo build --locked --release --lib --features flutter,hwcodec,vram
+
+      - name: Build Flutter Windows runner
+        shell: bash
+        run: (cd flutter && flutter build windows --release)
+
+      - name: Test Windows native bootstrap boundaries
+        shell: bash
+        run: cargo test --locked -p camellia-windows-bootstrap -- --nocapture
+
+      - name: Test Windows native printing boundaries
+        shell: bash
+        run: cargo test --locked -p camellia-printing -- --nocapture
+
+      - name: Check Windows aarch64 library compilation
+        shell: bash
+        run: cargo check --locked --lib --features flutter,hwcodec,vram --target aarch64-pc-windows-msvc
+
+      - name: Verify Windows aarch64 linkable compilation
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -r libs/portable/requirements.txt
+          $payload = Join-Path $env:RUNNER_TEMP 'camellia-portable-smoke-payload'
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          [System.IO.File]::WriteAllBytes(
+            (Join-Path $payload 'camellia-remote.exe'),
+            [byte[]](0x4d, 0x5a)
+          )
+          python libs/portable/generate.py `
+            --folder $payload `
+            --output libs/portable `
+            --executable camellia-remote.exe `
+            --target aarch64-pc-windows-msvc
+          cargo build --locked --target aarch64-pc-windows-msvc --lib --features flutter
+
   apple_native:
     name: Apple native smoke checks
     needs: [metadata, generate_bridge]
@@ -406,6 +509,7 @@ jobs:
       - automation
       - generate_bridge
       - windows_rust
+      - windows_native
       - apple_native
       - quality
     runs-on: ubuntu-24.04
@@ -418,6 +522,7 @@ jobs:
           AUTOMATION_RESULT: ${{ needs.automation.result }}
           BRIDGE_RESULT: ${{ needs.generate_bridge.result }}
           WINDOWS_RUST_RESULT: ${{ needs.windows_rust.result }}
+          WINDOWS_NATIVE_RESULT: ${{ needs.windows_native.result }}
           APPLE_NATIVE_RESULT: ${{ needs.apple_native.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
         run: |
@@ -435,6 +540,7 @@ jobs:
           require_success "workflow and build automation" "$AUTOMATION_RESULT"
           require_success "bridge generation" "$BRIDGE_RESULT"
           require_success "Windows Rust smoke check" "$WINDOWS_RUST_RESULT"
+          require_success "Windows native runner verification" "$WINDOWS_NATIVE_RESULT"
           require_success "Apple native smoke checks" "$APPLE_NATIVE_RESULT"
           require_success "Rust, Flutter, and Web quality" "$QUALITY_RESULT"
           if [[ "$failure" == "true" ]]; then
