@@ -104,7 +104,7 @@ impl DisplaySnapshot {
             dm_pels_height: dm.dmPelsHeight,
             dm_bits_per_pel: dm.dmBitsPerPel,
             dm_display_frequency: dm.dmDisplayFrequency,
-            dm_display_flags: dm.dmDisplayFlags,
+            dm_display_flags: unsafe { *dm.u2.dmDisplayFlags() },
         }
     }
 

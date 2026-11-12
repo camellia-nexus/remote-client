@@ -17,6 +17,7 @@ use camellia_remote_protocol::{
     sysinfo::{Pid, System},
     timeout, tokio,
 };
+use sha2::Digest;
 use std::{
     collections::HashMap,
     ffi::{CString, OsString},
@@ -1420,7 +1421,7 @@ pub fn copy_exe_cmd(src_exe: &str, _exe: &str, path: &str) -> ResultType<String>
     let manifest = crate::platform::install_safety::BundleManifest::scan(
         Path::new(src_exe),
         Path::new(path),
-        crate::get_app_name(),
+        &crate::get_app_name(),
     )?;
     let copy_cmds = manifest.generate_copy_commands();
     Ok(copy_cmds.join("\r\n"))
@@ -2849,10 +2850,10 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
                 io::Error::from_raw_os_error(last_error as _)
             );
         }
-        if !pi.hThread.is_invalid() {
+        if !pi.hThread.is_null() && pi.hThread != INVALID_HANDLE_VALUE {
             let _ = CloseHandle(pi.hThread);
         }
-        if !pi.hProcess.is_invalid() {
+        if !pi.hProcess.is_null() && pi.hProcess != INVALID_HANDLE_VALUE {
             let _ = CloseHandle(pi.hProcess);
         }
     }

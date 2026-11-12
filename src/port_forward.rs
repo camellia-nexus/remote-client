@@ -102,12 +102,9 @@ mod wincred_ffi {
 #[cfg(windows)]
 impl RdpCredentialStore for WinCredStore {
     fn write_credential(&self, target: &str, user: &str, pass: &str) -> Result<(), String> {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        let mut target_w: Vec<u16> = OsStr::new(target).encode_utf16().chain(Some(0)).collect();
-        let mut user_w: Vec<u16> = OsStr::new(user).encode_utf16().chain(Some(0)).collect();
-        let pass_w: Vec<u16> = OsStr::new(pass).encode_utf16().collect();
+        let mut target_w: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
+        let mut user_w: Vec<u16> = user.encode_utf16().chain(Some(0)).collect();
+        let pass_w: Vec<u16> = pass.encode_utf16().collect();
         let pass_bytes = pass_w.len() * std::mem::size_of::<u16>();
 
         let cred = wincred_ffi::CREDENTIALW {
@@ -137,10 +134,7 @@ impl RdpCredentialStore for WinCredStore {
     }
 
     fn delete_credential(&self, target: &str) -> Result<(), String> {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-
-        let target_w: Vec<u16> = OsStr::new(target).encode_utf16().chain(Some(0)).collect();
+        let target_w: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
         let ret = unsafe { wincred_ffi::CredDeleteW(target_w.as_ptr(), 1, 0) };
         if ret != 0 {
             Ok(())
