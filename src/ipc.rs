@@ -12,7 +12,6 @@ use crate::{
     ui_interface::{get_local_option, set_local_option},
 };
 use bytes::Bytes;
-#[cfg(target_os = "linux")]
 use camellia_remote_protocol::anyhow;
 use camellia_remote_protocol::{
     allow_err, bail, bytes,

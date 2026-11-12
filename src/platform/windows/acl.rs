@@ -1,12 +1,13 @@
 // https://learn.microsoft.com/en-us/windows/win32/secgloss/security-glossary
 
 use super::{read_token_user_buffer, wide_string, ResultType};
-use camellia_remote_protocol::{anyhow::anyhow, bail};
+use camellia_remote_protocol::{anyhow::anyhow, bail, log};
 use std::{
     fs, io,
     os::windows::{ffi::OsStrExt, fs::MetadataExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
+pub use windows::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows::{
     core::{PCWSTR, PWSTR},
     Win32::{
@@ -26,7 +27,7 @@ use windows::{
             TOKEN_QUERY, TOKEN_USER,
         },
         Storage::FileSystem::{
-            FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+            FILE_ALL_ACCESS, FILE_GENERIC_WRITE,
         },
         System::Threading::{GetCurrentProcess, OpenProcessToken},
     },

@@ -1,4 +1,4 @@
-use camellia_remote_protocol::{log, thiserror};
+use camellia_remote_protocol::log;
 use std::{
     ffi::OsStr,
     io,
@@ -36,14 +36,30 @@ extern "system" {
     ) -> BOOL;
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
 pub enum DeviceError {
-    #[error("Failed to call {0}, {1:?}")]
     WinApiLastErr(String, io::Error),
-    #[error("Failed to call {0}, returns {1}")]
     WinApiErrCode(String, DWORD),
-    #[error("{0}")]
     Raw(String),
+}
+
+impl std::fmt::Display for DeviceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WinApiLastErr(s, e) => write!(f, "Failed to call {}, {:?}", s, e),
+            Self::WinApiErrCode(s, c) => write!(f, "Failed to call {}, returns {}", s, c),
+            Self::Raw(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+impl std::error::Error for DeviceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::WinApiLastErr(_, e) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 impl DeviceError {
