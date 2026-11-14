@@ -3845,12 +3845,16 @@ fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
         if h_module.is_null() {
             bail!("Failed to load ntdll.dll");
         }
-        let _module_guard = crate::common::SimpleCallOnReturn {
-            b: true,
-            f: Box::new(move || {
-                unsafe { winapi::um::libloaderapi::FreeLibrary(h_module) };
-            }),
-        };
+        struct ModuleGuard(winapi::shared::minwindef::HMODULE);
+        impl Drop for ModuleGuard {
+            fn drop(&mut self) {
+                let h_module = self.0;
+                if !h_module.is_null() {
+                    unsafe { winapi::um::libloaderapi::FreeLibrary(h_module) };
+                }
+            }
+        }
+        let _module_guard = ModuleGuard(h_module);
 
         let proc_addr = GetProcAddress(h_module, CString::new("NtTerminateProcess")?.as_ptr());
         if proc_addr.is_null() {
@@ -3872,12 +3876,16 @@ fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
                 io::Error::last_os_error()
             );
         }
-        let _handle_guard = crate::common::SimpleCallOnReturn {
-            b: true,
-            f: Box::new(move || {
-                unsafe { CloseHandle(h_target) };
-            }),
-        };
+        struct HandleGuard(HANDLE);
+        impl Drop for HandleGuard {
+            fn drop(&mut self) {
+                let h_target = self.0;
+                if !h_target.is_null() && h_target != INVALID_HANDLE_VALUE {
+                    unsafe { CloseHandle(h_target) };
+                }
+            }
+        }
+        let _handle_guard = HandleGuard(h_target);
 
         if f_nt_terminate_process(h_target, 1) == 0 {
             log::info!(
