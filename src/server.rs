@@ -80,6 +80,7 @@ mod service;
 mod video_qos;
 pub mod video_service;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod printer_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;

@@ -266,6 +266,13 @@ pub static CLICK_TIME: AtomicI64 = AtomicI64::new(0);
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub static MOUSE_MOVE_TIME: AtomicI64 = AtomicI64::new(0);
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn next_connection_generation() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::SeqCst)
+}
+
 #[derive(Clone, Default)]
 pub struct ConnInner {
     id: i32,
@@ -722,7 +729,10 @@ impl Connection {
             voice_call_request_timestamp: None,
             voice_calling: false,
             voice_call_generation: 0,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             conn_generation: clipboard::next_connection_generation(),
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            conn_generation: next_connection_generation(),
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -935,6 +945,7 @@ impl Connection {
                                 conn.file = enabled;
                                 conn.send_permission(Permission::File, enabled).await;
                                 if !enabled {
+                                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                                     clipboard::ClipboardOpGuard::abort_for_connection(
                                         conn.inner.id(),
                                         conn.conn_generation,
@@ -6561,8 +6572,14 @@ impl Connection {
         {
             self.send_to_cm(Data::CloseVoiceCall("Owner disconnected".to_owned()));
         }
-        clipboard::ClipboardOpGuard::abort_for_connection(self.inner.id(), self.conn_generation);
-        clipboard::remove_channel_by_conn_id(self.inner.id());
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            clipboard::ClipboardOpGuard::abort_for_connection(
+                self.inner.id(),
+                self.conn_generation,
+            );
+            clipboard::remove_channel_by_conn_id(self.inner.id());
+        }
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock && self.lock_after_session_end && self.keyboard {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

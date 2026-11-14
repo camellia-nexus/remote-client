@@ -1,3 +1,5 @@
+#![cfg(not(any(target_os = "android", target_os = "ios")))]
+
 //! Windows Remote Printer Driver Adapter Dynamic ABI Boundary (ABI-002).
 //!
 //! Enforces:
