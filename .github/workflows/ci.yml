@@ -601,7 +601,7 @@ jobs:
         run: |
           test -x flutter/build/linux/x64/release/bundle/camellia-remote
           bash .github/scripts/package-linux.sh "${{ needs.metadata.outputs.version }}" "x64" "amd64" "x86_64"
-          bash .github/scripts/check-linux-package.sh "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.deb" "artifacts/CamelliaRemote.AppDir" "x86_64"
+          bash .github/scripts/check-linux-package.sh "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.deb" "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.AppImage" "x86_64"
           python3 -m unittest discover -s .github/scripts/tests -p "test_linux_*.py"
 
       - name: Upload Linux test artifact

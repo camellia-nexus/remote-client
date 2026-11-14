@@ -128,6 +128,8 @@ class AndroidArchitectureAndContractsTest(unittest.TestCase):
         self.assertIn('jni_libs / "libcamellia_remote.so"', content)
         self.assertNotIn('copy2(\n        ROOT / "target/aarch64-linux-android/release/libcamellia_remote.so",\n        jni_libs / "camellia_remote.so"', content)
         self.assertIn("libc++_shared.so", content)
+        self.assertIn('"flutter,mediacodec"', content)
+        self.assertNotIn('"flutter,hwcodec"', content)
 
     def test_build014_check_package_script_repo_validation(self):
         """BUILD-014: check-android-package.sh must validate the repo successfully."""
