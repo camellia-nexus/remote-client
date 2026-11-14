@@ -33,6 +33,35 @@ class AndroidArchitectureAndContractsTest(unittest.TestCase):
         self.scan_page = CLIENT_ROOT / "flutter/lib/mobile/pages/scan_page.dart"
         self.ffi_rs = CLIENT_ROOT / "libs/scrap/src/android/ffi.rs"
         self.check_script = CLIENT_ROOT / ".github/scripts/check-android-package.sh"
+        self.hwcodec_build_rs = CLIENT_ROOT / "libs/hwcodec/build.rs"
+        self.ci_workflow = CLIENT_ROOT / ".github/workflows/ci.yml"
+
+    def test_build005_android_bindgen_versioned_target_contracts(self):
+        """BUILD-005: Android NDK 30 bindgen requires versioned target triples or __ANDROID_API__."""
+        hwcodec_content = self.hwcodec_build_rs.read_text(encoding="utf-8")
+        self.assertIn("fn bindgen_builder() -> bindgen::Builder", hwcodec_content)
+        self.assertIn("--target=", hwcodec_content)
+        self.assertIn("__ANDROID_API__", hwcodec_content)
+        # Ensure direct unconfigured bindgen::builder() is not called anywhere except inside bindgen_builder()
+        bindgen_calls = [
+            line.strip()
+            for line in hwcodec_content.splitlines()
+            if "bindgen::builder()" in line
+        ]
+        self.assertEqual(
+            len(bindgen_calls),
+            1,
+            f"Expected exactly 1 bindgen::builder() call inside bindgen_builder, found: {bindgen_calls}",
+        )
+
+        build_py_content = self.build_py.read_text(encoding="utf-8")
+        self.assertIn("BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android", build_py_content)
+        self.assertIn("--target=aarch64-linux-android26", build_py_content)
+        self.assertIn("-D__ANDROID_API__=26", build_py_content)
+
+        ci_content = self.ci_workflow.read_text(encoding="utf-8")
+        self.assertIn("BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android", ci_content)
+        self.assertIn("VCPKG_ROOT", ci_content)
 
     def test_build014_gradle_abi_filter_and_packaging_closure(self):
         """BUILD-014: Gradle must enforce arm64-v8a abiFilter and libc++_shared packaging pick."""

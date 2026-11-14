@@ -102,6 +102,9 @@ def build_linux(args):
 def build_android(args):
     ensure_tool("cargo")
     ensure_tool("flutter")
+    android_env = {
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android": "--target=aarch64-linux-android26 -D__ANDROID_API__=26",
+    }
     run(
         [
             "cargo",
@@ -115,7 +118,8 @@ def build_android(args):
             "--lib",
             "--features",
             "flutter,hwcodec",
-        ]
+        ],
+        env=android_env,
     )
     jni_libs = FLUTTER_DIR / "android/app/src/main/jniLibs/arm64-v8a"
     jni_libs.mkdir(parents=True, exist_ok=True)
