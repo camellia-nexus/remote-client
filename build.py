@@ -117,7 +117,7 @@ def build_android(args):
             "--release",
             "--lib",
             "--features",
-            "flutter,hwcodec",
+            "flutter,mediacodec",
         ],
         env=android_env,
     )
