@@ -7,11 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::ImageFormat;
-use crate::{
-    codec::{EncoderApi, EncoderCfg},
-    CodecFormat, I420ToABGR, I420ToARGB, ImageRgb,
-};
+use crate::{CodecFormat, I420ToABGR, I420ToARGB, ImageFormat, ImageRgb};
 
 /// MediaCodec mime type name
 const H264_MIME_TYPE: &str = "video/avc";
@@ -26,7 +22,12 @@ pub static H265_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
 
 pub struct MediaCodecDecoder {
     decoder: MediaCodec,
-    name: String,
+    _name: String,
+}
+
+pub struct MediaCodecDecoders {
+    pub h264: Option<MediaCodecDecoder>,
+    pub h265: Option<MediaCodecDecoder>,
 }
 
 impl Deref for MediaCodecDecoder {
@@ -38,6 +39,12 @@ impl Deref for MediaCodecDecoder {
 }
 
 impl MediaCodecDecoder {
+    pub fn new_decoders() -> MediaCodecDecoders {
+        MediaCodecDecoders {
+            h264: Self::new(CodecFormat::H264),
+            h265: Self::new(CodecFormat::H265),
+        }
+    }
     pub fn new(format: CodecFormat) -> Option<MediaCodecDecoder> {
         match format {
             CodecFormat::H264 => create_media_codec(H264_MIME_TYPE, MediaCodecDirection::Decoder),
@@ -80,10 +87,12 @@ impl MediaCodecDecoder {
                     "Failed to dequeue_output_buffer, stride is None",
                 ))?;
                 let buf = output_buffer.buffer();
-                let bps = 4;
+                rgb.w = w;
+                rgb.h = h;
+                let dst_stride = rgb.stride();
                 let u = buf.len() * 2 / 3;
                 let v = buf.len() * 5 / 6;
-                rgb.raw.resize(h * w * bps, 0);
+                rgb.raw.resize(h * dst_stride, 0);
                 let y_ptr = buf.as_ptr();
                 let u_ptr = buf[u..].as_ptr();
                 let v_ptr = buf[v..].as_ptr();
@@ -98,7 +107,7 @@ impl MediaCodecDecoder {
                                 v_ptr,
                                 stride / 2,
                                 rgb.raw.as_mut_ptr(),
-                                (w * bps) as _,
+                                dst_stride as _,
                                 w as _,
                                 h as _,
                             );
@@ -112,13 +121,13 @@ impl MediaCodecDecoder {
                                 v_ptr,
                                 stride / 2,
                                 rgb.raw.as_mut_ptr(),
-                                (w * bps) as _,
+                                dst_stride as _,
                                 w as _,
                                 h as _,
                             );
                         }
                         _ => {
-                            bail!("Unsupported image format");
+                            bail!("Unsupported image format: {:?}", rgb.fmt());
                         }
                     }
                 }
@@ -150,23 +159,22 @@ fn create_media_codec(name: &str, direction: MediaCodecDirection) -> Option<Medi
         return None;
     };
     log::debug!("Init decoder succeeded!: {:?}", name);
-    return Some(MediaCodecDecoder {
+    Some(MediaCodecDecoder {
         decoder: codec,
-        name: name.to_owned(),
-    });
+        _name: name.to_owned(),
+    })
 }
 
 pub fn check_mediacodec() {
     std::thread::spawn(move || {
         // check decoders
-        let h264 = MediaCodecDecoder::new(CodecFormat::H264);
-        let h265 = MediaCodecDecoder::new(CodecFormat::H265);
-        H264_DECODER_SUPPORT.swap(h264.is_some(), Ordering::SeqCst);
-        H265_DECODER_SUPPORT.swap(h265.is_some(), Ordering::SeqCst);
-        if let Some(d) = h264 {
+        let decoders = MediaCodecDecoder::new_decoders();
+        H264_DECODER_SUPPORT.swap(decoders.h264.is_some(), Ordering::SeqCst);
+        H265_DECODER_SUPPORT.swap(decoders.h265.is_some(), Ordering::SeqCst);
+        if let Some(d) = decoders.h264 {
             let _ = d.stop();
         }
-        if let Some(d) = h265 {
+        if let Some(d) = decoders.h265 {
             let _ = d.stop();
         }
         // TODO encoders

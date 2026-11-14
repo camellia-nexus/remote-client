@@ -802,11 +802,10 @@ impl Decoder {
         frames: &EncodedVideoFrames,
         rgb: &mut ImageRgb,
     ) -> ResultType<bool> {
-        let mut ret = false;
         for h264 in frames.frames.iter() {
             return decoder.decode(&h264.data, rgb);
         }
-        return Ok(false);
+        Ok(false)
     }
 
     fn preference(id: Option<&str>) -> (PreferCodec, Chroma) {
