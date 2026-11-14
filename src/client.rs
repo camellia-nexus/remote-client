@@ -466,7 +466,12 @@ impl Client {
                             is_local = ph.is_local();
                             signed_id_pk = ph.pk.into();
                             relay_server = ph.relay_server;
-                            peer_addr = AddrMangle::decode(&ph.socket_addr);
+                            peer_addr = match AddrMangle::try_decode_addr(&ph.socket_addr) {
+                                Ok(addr) => addr,
+                                Err(err) => {
+                                    bail!("Malformed punch hole socket_addr: {:?}", err);
+                                }
+                            };
                             feedback = ph.feedback;
                             let s = udp.0.take();
                             if ph.is_udp && s.is_some() {
@@ -477,11 +482,14 @@ impl Client {
                             }
                             let s = ipv6.0.take();
                             if !ph.socket_addr_v6.is_empty() && s.is_some() {
-                                let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
-                                    if let Some(s) = s {
-                                        allow_err!(s.connect(addr).await);
-                                        ipv6.0 = Some(s);
+                                if let Ok(Some(addr)) =
+                                    AddrMangle::try_decode_optional_addr(&ph.socket_addr_v6)
+                                {
+                                    if addr.port() > 0 {
+                                        if let Some(s) = s {
+                                            allow_err!(s.connect(addr).await);
+                                            ipv6.0 = Some(s);
+                                        }
                                     }
                                 }
                             }
@@ -498,11 +506,15 @@ impl Client {
                         start = Instant::now();
                         let mut connect_futures = Vec::new();
                         if let Some(s) = ipv6.0 {
-                            let addr = AddrMangle::decode(&rr.socket_addr_v6);
-                            if addr.port() > 0 {
-                                if s.connect(addr).await.is_ok() {
-                                    connect_futures
-                                        .push(udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed());
+                            if let Ok(Some(addr)) =
+                                AddrMangle::try_decode_optional_addr(&rr.socket_addr_v6)
+                            {
+                                if addr.port() > 0 {
+                                    if s.connect(addr).await.is_ok() {
+                                        connect_futures.push(
+                                            udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed(),
+                                        );
+                                    }
                                 }
                             }
                         }
