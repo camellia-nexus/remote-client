@@ -26,18 +26,25 @@ fn bindgen_builder() -> bindgen::Builder {
     let target = env::var("TARGET").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "android" || target.contains("android") {
-        let api_level = env::var("CARGO_NDK_ANDROID_PLATFORM")
+        let raw_api = env::var("CARGO_NDK_ANDROID_PLATFORM")
             .or_else(|_| env::var("CARGO_NDK_PLATFORM"))
             .or_else(|_| env::var("ANDROID_PLATFORM"))
             .or_else(|_| env::var("MIN_SDK_VERSION"))
             .unwrap_or_else(|_| "26".to_string());
-        let api_level = api_level.trim_start_matches("android-");
-        let versioned_target = if target.ends_with(|c: char| c.is_ascii_digit()) {
-            target
-        } else if target == "armv7-linux-androideabi" {
+        let trimmed_api = raw_api.trim_start_matches("android-");
+        let api_level = if trimmed_api.chars().all(|c| c.is_ascii_digit()) && !trimmed_api.is_empty() {
+            trimmed_api.to_string()
+        } else {
+            "26".to_string()
+        };
+        let versioned_target = if target.starts_with("aarch64") {
+            format!("aarch64-linux-android{}", api_level)
+        } else if target.starts_with("armv7") {
             format!("armv7a-linux-androideabi{}", api_level)
-        } else if !target.is_empty() {
-            format!("{}{}", target, api_level)
+        } else if target.starts_with("x86_64") {
+            format!("x86_64-linux-android{}", api_level)
+        } else if target.starts_with("i686") {
+            format!("i686-linux-android{}", api_level)
         } else {
             format!("aarch64-linux-android{}", api_level)
         };
