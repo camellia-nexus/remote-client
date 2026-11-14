@@ -2317,7 +2317,7 @@ pub fn is_change_id_disabled() -> bool {
 /// which populates the hard/built-in settings, should narrow the UI.
 #[inline]
 pub fn is_custom_client() -> bool {
-    false
+    camellia_remote_protocol::config::is_custom_client()
 }
 
 pub fn verify_login(_raw: &str, _id: &str) -> bool {
