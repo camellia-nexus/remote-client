@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-pub const NAME: &'static str = "remote-printer";
+pub const NAME: &str = "remote-printer";
 
 const LIB_NAME_PRINTER_DRIVER_ADAPTER: &str = "printer_driver_adapter";
 
@@ -121,7 +121,7 @@ impl LibWrapper {
             Err(e) => {
                 log::warn!(
                     "Failed to load printer adapter library {}: {}",
-                    &lib_name,
+                    lib_name,
                     e
                 );
                 return Self {

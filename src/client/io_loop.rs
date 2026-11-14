@@ -2087,7 +2087,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                         allow_err!(
                                             peer.send(&fs::new_error(
                                                 id,
-                                                &err.to_string(),
+                                                err.to_string(),
                                                 file_num
                                             ))
                                             .await
