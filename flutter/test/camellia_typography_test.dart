@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:flutter/material.dart';
@@ -95,4 +97,72 @@ void main() {
       );
     },
   );
+
+  test(
+    'theme applies system font fallbacks without forcing bundled heavy CJK fonts (PERF-006)',
+    () {
+      expect(CamelliaTypography.systemFontFallbacks, [
+        'PingFang SC',
+        'Microsoft YaHei',
+        'Heiti SC',
+        'sans-serif',
+      ]);
+
+      final lightTheme = CamelliaTheme.build(
+        brightness: Brightness.light,
+        desktopDensity: true,
+      );
+      expect(
+        lightTheme.textTheme.bodyMedium?.fontFamilyFallback,
+        CamelliaTypography.systemFontFallbacks,
+      );
+      expect(
+        lightTheme.textTheme.titleLarge?.fontFamilyFallback,
+        CamelliaTypography.systemFontFallbacks,
+      );
+
+      final darkTheme = CamelliaTheme.build(
+        brightness: Brightness.dark,
+        desktopDensity: true,
+      );
+      expect(
+        darkTheme.textTheme.bodyMedium?.fontFamilyFallback,
+        CamelliaTypography.systemFontFallbacks,
+      );
+      expect(
+        darkTheme.textTheme.titleLarge?.fontFamilyFallback,
+        CamelliaTypography.systemFontFallbacks,
+      );
+    },
+  );
+
+  test('pubspec.yaml decouples massive CJK variable fonts from static bundle (PERF-006)', () {
+    Directory flutterDir;
+    if (Directory.current.path.endsWith('flutter')) {
+      flutterDir = Directory.current;
+    } else if (Directory.current.path.endsWith('client')) {
+      flutterDir = Directory('${Directory.current.path}/flutter');
+    } else {
+      flutterDir = Directory('${Directory.current.path}/client/flutter');
+    }
+
+    final pubspec = File('${flutterDir.path}/pubspec.yaml');
+    expect(pubspec.existsSync(), isTrue);
+
+    final lines = pubspec.readAsLinesSync();
+    // Ensure no active (uncommented) line references NotoSansSC-VF or NotoSansTC-VF
+    final activeFontDeclarations = lines.where((line) {
+      final trimmed = line.trim();
+      return !trimmed.startsWith('#') &&
+          (trimmed.contains('NotoSansSC-VF.ttf') ||
+              trimmed.contains('NotoSansTC-VF.ttf'));
+    }).toList();
+
+    expect(
+      activeFontDeclarations,
+      isEmpty,
+      reason:
+          'Massive CJK variable fonts must not be statically declared in pubspec.yaml fonts section',
+    );
+  });
 }

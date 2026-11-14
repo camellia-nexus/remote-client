@@ -159,12 +159,8 @@ flutter:
     - family: More
       fonts:
         - asset: assets/more.ttf
-    - family: CamelliaSansSC
-      fonts:
-        - asset: assets/fonts/NotoSansSC-VF.ttf
-    - family: CamelliaSansTC
-      fonts:
-        - asset: assets/fonts/NotoSansTC-VF.ttf
+    # PERF-006: Massive static CJK fonts (NotoSansSC-VF, NotoSansTC-VF) decoupled
+    # from unconditional bundling to eliminate 29MB payload overhead on cold start.
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/assets-and-images/#resolution-aware.

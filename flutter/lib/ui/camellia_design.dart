@@ -6,6 +6,13 @@ abstract final class CamelliaTypography {
   static const simplifiedFamily = 'CamelliaSansSC';
   static const traditionalFamily = 'CamelliaSansTC';
 
+  static const systemFontFallbacks = <String>[
+    'PingFang SC',
+    'Microsoft YaHei',
+    'Heiti SC',
+    'sans-serif',
+  ];
+
   static CamelliaLanguage resolve({
     required String savedLanguage,
     required Locale systemLocale,
@@ -115,6 +122,7 @@ abstract final class CamelliaTheme {
     required Brightness brightness,
     required bool desktopDensity,
     String fontFamily = CamelliaTypography.simplifiedFamily,
+    List<String> fontFamilyFallback = CamelliaTypography.systemFontFallbacks,
     List<ThemeExtension<dynamic>> extensions = const [],
   }) {
     final dark = brightness == Brightness.dark;
@@ -173,9 +181,6 @@ abstract final class CamelliaTheme {
           error: dark ? const Color(0xFFFFB4AB) : const Color(0xFFB3261E),
           onError: Colors.white,
         );
-    final fallbackFamily = fontFamily == CamelliaTypography.traditionalFamily
-        ? CamelliaTypography.simplifiedFamily
-        : CamelliaTypography.traditionalFamily;
     TextStyle style(
       double size,
       FontWeight weight, {
@@ -184,7 +189,7 @@ abstract final class CamelliaTheme {
       Color? color,
     }) => TextStyle(
       fontFamily: fontFamily,
-      fontFamilyFallback: <String>[fallbackFamily],
+      fontFamilyFallback: fontFamilyFallback,
       fontSize: size,
       fontWeight: weight,
       height: height,
@@ -224,7 +229,7 @@ abstract final class CamelliaTheme {
       useMaterial3: true,
       brightness: brightness,
       fontFamily: fontFamily,
-      fontFamilyFallback: <String>[fallbackFamily],
+      fontFamilyFallback: fontFamilyFallback,
       colorScheme: scheme,
       scaffoldBackgroundColor: canvas,
       canvasColor: canvas,
