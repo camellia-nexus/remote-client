@@ -119,11 +119,7 @@ impl LibWrapper {
         let lib = match Library::open(&lib_name) {
             Ok(lib) => lib,
             Err(e) => {
-                log::warn!(
-                    "Failed to load printer adapter library {}: {}",
-                    lib_name,
-                    e
-                );
+                log::warn!("Failed to load printer adapter library {}: {}", lib_name, e);
                 return Self {
                     _lib: None,
                     vtable: None,
