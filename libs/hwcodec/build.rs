@@ -21,11 +21,45 @@ fn main() {
     builder.static_crt(true).compile("hwcodec");
 }
 
+fn bindgen_builder() -> bindgen::Builder {
+    let mut builder = bindgen::builder();
+    let target = env::var("TARGET").unwrap_or_default();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "android" || target.contains("android") {
+        let raw_api = env::var("CARGO_NDK_ANDROID_PLATFORM")
+            .or_else(|_| env::var("CARGO_NDK_PLATFORM"))
+            .or_else(|_| env::var("ANDROID_PLATFORM"))
+            .or_else(|_| env::var("MIN_SDK_VERSION"))
+            .unwrap_or_else(|_| "26".to_string());
+        let trimmed_api = raw_api.trim_start_matches("android-");
+        let api_level = if trimmed_api.chars().all(|c| c.is_ascii_digit()) && !trimmed_api.is_empty() {
+            trimmed_api.to_string()
+        } else {
+            "26".to_string()
+        };
+        let versioned_target = if target.starts_with("aarch64") {
+            format!("aarch64-linux-android{}", api_level)
+        } else if target.starts_with("armv7") {
+            format!("armv7a-linux-androideabi{}", api_level)
+        } else if target.starts_with("x86_64") {
+            format!("x86_64-linux-android{}", api_level)
+        } else if target.starts_with("i686") {
+            format!("i686-linux-android{}", api_level)
+        } else {
+            format!("aarch64-linux-android{}", api_level)
+        };
+        builder = builder
+            .clang_arg(format!("--target={}", versioned_target))
+            .clang_arg(format!("-D__ANDROID_API__={}", api_level));
+    }
+    builder
+}
+
 fn build_common(builder: &mut Build) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let common_dir = manifest_dir.join("cpp").join("common");
-    bindgen::builder()
+    bindgen_builder()
         .header(common_dir.join("common.h").to_string_lossy().to_string())
         .header(common_dir.join("callback.h").to_string_lossy().to_string())
         .rustified_enum(".*")
@@ -100,7 +134,10 @@ mod ffmpeg {
 
     pub fn build_ffmpeg(builder: &mut Build) {
         ffmpeg_ffi();
-        link_vcpkg(builder, std::env::var("VCPKG_ROOT").unwrap().into());
+        let vcpkg_root = std::env::var("VCPKG_ROOT")
+            .or_else(|_| std::env::var("VCPKG_INSTALLATION_ROOT"))
+            .unwrap_or_else(|_| "/usr/local/share/vcpkg".to_string());
+        link_vcpkg(builder, vcpkg_root.into());
         link_os();
         build_ffmpeg_ram(builder);
         #[cfg(feature = "vram")]
@@ -223,7 +260,7 @@ mod ffmpeg {
             .join("ffmpeg_ffi.h")
             .to_string_lossy()
             .to_string();
-        bindgen::builder()
+        bindgen_builder()
             .header(ffi_header)
             .rustified_enum(".*")
             .generate()
@@ -239,7 +276,7 @@ mod ffmpeg {
             .join("ffmpeg_ram_ffi.h")
             .to_string_lossy()
             .to_string();
-        bindgen::builder()
+        bindgen_builder()
             .header(ffi_header)
             .rustified_enum(".*")
             .generate()
@@ -260,7 +297,7 @@ mod ffmpeg {
             .join("ffmpeg_vram_ffi.h")
             .to_string_lossy()
             .to_string();
-        bindgen::builder()
+        bindgen_builder()
             .header(ffi_header)
             .rustified_enum(".*")
             .generate()
@@ -277,7 +314,7 @@ mod ffmpeg {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let mux_dir = manifest_dir.join("cpp").join("mux");
         let mux_header = mux_dir.join("mux_ffi.h").to_string_lossy().to_string();
-        bindgen::builder()
+        bindgen_builder()
             .header(mux_header)
             .rustified_enum(".*")
             .generate()
@@ -307,7 +344,7 @@ mod sdk {
         println!("cargo:rerun-if-changed=src");
         println!("cargo:rerun-if-changed={}", common_dir.display());
         println!("cargo:rerun-if-changed={}", externals_dir.display());
-        bindgen::builder()
+        bindgen_builder()
             .header(&nv_dir.join("nv_ffi.h").to_string_lossy().to_string())
             .rustified_enum(".*")
             .generate()
@@ -372,7 +409,7 @@ mod sdk {
         let amf_dir = manifest_dir.join("cpp").join("amf");
         println!("cargo:rerun-if-changed=src");
         println!("cargo:rerun-if-changed={}", externals_dir.display());
-        bindgen::builder()
+        bindgen_builder()
             .header(amf_dir.join("amf_ffi.h").to_string_lossy().to_string())
             .rustified_enum(".*")
             .generate()
@@ -414,7 +451,7 @@ mod sdk {
         let mfx_dir = manifest_dir.join("cpp").join("mfx");
         println!("cargo:rerun-if-changed=src");
         println!("cargo:rerun-if-changed={}", externals_dir.display());
-        bindgen::builder()
+        bindgen_builder()
             .header(&mfx_dir.join("mfx_ffi.h").to_string_lossy().to_string())
             .rustified_enum(".*")
             .generate()

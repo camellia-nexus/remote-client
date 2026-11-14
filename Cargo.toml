@@ -25,7 +25,7 @@ path = "src/service.rs"
 [features]
 use_dasp = ["dasp"]
 flutter = []
-default = ["use_dasp", "flutter", "linux-pkg-config"]
+default = ["use_dasp", "flutter"]
 hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
 mediacodec = ["scrap/mediacodec"]
@@ -165,6 +165,8 @@ bytemuck = "1.23"
 ttf-parser = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+scrap = { path = "libs/scrap", features = ["linux-pkg-config"] }
+magnum-opus = { path = "libs/magnum-opus", features = ["linux-pkg-config"] }
 libxdo-sys = "0.11"
 psimple = { package = "libpulse-simple-binding", version = ">=2.27, <2.29" }
 pulse = { package = "libpulse-binding", version = ">=2.27, <2.29" }

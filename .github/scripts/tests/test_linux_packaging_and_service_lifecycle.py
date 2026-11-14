@@ -161,6 +161,15 @@ class LinuxPackagingAndServiceLifecycleContractTests(unittest.TestCase):
         self.assertIn("AppRun", content)
         self.assertIn("LD_LIBRARY_PATH", content)
 
+    def test_build005_linux_ci_check_appimage_path(self) -> None:
+        """Verify Linux CI passes AppImage artifact to check-linux-package.sh."""
+        ci_path = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+        ci_content = ci_path.read_text(encoding="utf-8")
+        self.assertIn(
+            'check-linux-package.sh "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.deb" "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.AppImage" "x86_64"',
+            ci_content,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

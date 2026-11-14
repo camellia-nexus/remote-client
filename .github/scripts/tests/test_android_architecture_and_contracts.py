@@ -33,6 +33,83 @@ class AndroidArchitectureAndContractsTest(unittest.TestCase):
         self.scan_page = CLIENT_ROOT / "flutter/lib/mobile/pages/scan_page.dart"
         self.ffi_rs = CLIENT_ROOT / "libs/scrap/src/android/ffi.rs"
         self.check_script = CLIENT_ROOT / ".github/scripts/check-android-package.sh"
+        self.hwcodec_build_rs = CLIENT_ROOT / "libs/hwcodec/build.rs"
+        self.ci_workflow = CLIENT_ROOT / ".github/workflows/ci.yml"
+
+    def test_build005_android_bindgen_versioned_target_contracts(self):
+        """BUILD-005: Android NDK 30 bindgen requires versioned target triples or __ANDROID_API__."""
+        hwcodec_content = self.hwcodec_build_rs.read_text(encoding="utf-8")
+        self.assertIn("fn bindgen_builder() -> bindgen::Builder", hwcodec_content)
+        self.assertIn("--target=", hwcodec_content)
+        self.assertIn("__ANDROID_API__", hwcodec_content)
+        self.assertIn("is_ascii_digit", hwcodec_content)
+        self.assertIn("aarch64-linux-android", hwcodec_content)
+        self.assertIn("armv7a-linux-androideabi", hwcodec_content)
+        self.assertIn("x86_64-linux-android", hwcodec_content)
+        self.assertIn("i686-linux-android", hwcodec_content)
+        # Ensure direct unconfigured bindgen::builder() is not called anywhere except inside bindgen_builder()
+        bindgen_calls = [
+            line.strip()
+            for line in hwcodec_content.splitlines()
+            if "bindgen::builder()" in line
+        ]
+        self.assertEqual(
+            len(bindgen_calls),
+            1,
+            f"Expected exactly 1 bindgen::builder() call inside bindgen_builder, found: {bindgen_calls}",
+        )
+
+        build_py_content = self.build_py.read_text(encoding="utf-8")
+        self.assertIn("BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android", build_py_content)
+        self.assertIn("--target=aarch64-linux-android26", build_py_content)
+        self.assertIn("-D__ANDROID_API__=26", build_py_content)
+
+        ci_content = self.ci_workflow.read_text(encoding="utf-8")
+        self.assertIn("BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android", ci_content)
+        self.assertIn("VCPKG_ROOT", ci_content)
+
+    def test_build005_android_triple_resolution_logic(self):
+        """BUILD-005: Verify api_level sanitization and target triple formatting logic."""
+        def resolve_triple(raw_api: str, target: str) -> tuple[str, str]:
+            trimmed_api = raw_api.removeprefix("android-")
+            api_level = trimmed_api if trimmed_api.isdigit() and len(trimmed_api) > 0 else "26"
+            if target.startswith("aarch64"):
+                versioned = f"aarch64-linux-android{api_level}"
+            elif target.startswith("armv7"):
+                versioned = f"armv7a-linux-androideabi{api_level}"
+            elif target.startswith("x86_64"):
+                versioned = f"x86_64-linux-android{api_level}"
+            elif target.startswith("i686"):
+                versioned = f"i686-linux-android{api_level}"
+            else:
+                versioned = f"aarch64-linux-android{api_level}"
+            return versioned, api_level
+
+        # Case 1: CARGO_NDK_PLATFORM="arm64-v8a" (non-digit platform string passed by cargo-ndk)
+        target, api = resolve_triple("arm64-v8a", "aarch64-linux-android")
+        self.assertEqual(api, "26")
+        self.assertEqual(target, "aarch64-linux-android26")
+
+        # Case 2: standard android-26
+        target, api = resolve_triple("android-26", "aarch64-linux-android")
+        self.assertEqual(api, "26")
+        self.assertEqual(target, "aarch64-linux-android26")
+
+        # Case 3: numeric string 28
+        target, api = resolve_triple("28", "armv7-linux-androideabi")
+        self.assertEqual(api, "28")
+        self.assertEqual(target, "armv7a-linux-androideabi28")
+
+        # Case 4: x86_64 and i686
+        target, api = resolve_triple("26", "x86_64-linux-android")
+        self.assertEqual(target, "x86_64-linux-android26")
+        target, api = resolve_triple("26", "i686-linux-android")
+        self.assertEqual(target, "i686-linux-android26")
+
+        # Case 5: empty string fallback
+        target, api = resolve_triple("", "aarch64-linux-android")
+        self.assertEqual(api, "26")
+        self.assertEqual(target, "aarch64-linux-android26")
 
     def test_build014_gradle_abi_filter_and_packaging_closure(self):
         """BUILD-014: Gradle must enforce arm64-v8a abiFilter and libc++_shared packaging pick."""
@@ -51,6 +128,8 @@ class AndroidArchitectureAndContractsTest(unittest.TestCase):
         self.assertIn('jni_libs / "libcamellia_remote.so"', content)
         self.assertNotIn('copy2(\n        ROOT / "target/aarch64-linux-android/release/libcamellia_remote.so",\n        jni_libs / "camellia_remote.so"', content)
         self.assertIn("libc++_shared.so", content)
+        self.assertIn('"flutter,mediacodec"', content)
+        self.assertNotIn('"flutter,hwcodec"', content)
 
     def test_build014_check_package_script_repo_validation(self):
         """BUILD-014: check-android-package.sh must validate the repo successfully."""
