@@ -635,6 +635,15 @@ extern "system" {
     fn BlockInput(v: BOOL) -> BOOL;
 }
 
+fn replace_process_handle(current: &mut HANDLE, new_handle: HANDLE) {
+    if !current.is_null() && *current != INVALID_HANDLE_VALUE {
+        unsafe {
+            let _ = CloseHandle(*current);
+        }
+    }
+    *current = new_handle;
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
@@ -688,7 +697,8 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                 // https://github.com/rustdesk/rustdesk/discussions/10039
                 let count = ipc::get_port_forward_session_count(1000).await.unwrap_or(0);
                 if count == 0 {
-                    h_process = launch_server(session_id, true).await.unwrap_or(NULL);
+                    let next = launch_server(session_id, true).await.unwrap_or(NULL);
+                    replace_process_handle(&mut h_process, next);
                 }
             }
         }
@@ -725,8 +735,9 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                                         );
                                         session_id = usid;
                                         stored_usid = Some(session_id);
-                                        h_process =
+                                        let next =
                                             launch_server(session_id, true).await.unwrap_or(NULL);
+                                        replace_process_handle(&mut h_process, next);
                                     }
                                 }
                             }
@@ -761,9 +772,10 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                     {
                         match launch_server(session_id, !close_sent).await {
                             Ok(ptr) => {
-                                h_process = ptr;
+                                replace_process_handle(&mut h_process, ptr);
                             }
                             Err(err) => {
+                                replace_process_handle(&mut h_process, NULL);
                                 log::error!("Failed to launch server: {}", err);
                             }
                         }
@@ -775,7 +787,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
 
     if !h_process.is_null() {
         send_close_async("").await.ok();
-        unsafe { CloseHandle(h_process) };
+        replace_process_handle(&mut h_process, NULL);
     }
 
     status_handle.set_service_status(ServiceStatus {
@@ -899,6 +911,12 @@ pub fn run_exe_in_session(
             session_id,
             io::Error::last_os_error()
         );
+    }
+    // LaunchProcessWin returned an open process handle; close it immediately to prevent handle leaks (RES-028)
+    unsafe {
+        if h != INVALID_HANDLE_VALUE {
+            let _ = CloseHandle(h);
+        }
     }
     Ok(None)
 }
@@ -3795,8 +3813,26 @@ pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
 }
 
 fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
-    type NtTerminateProcess = unsafe extern "system" fn(HANDLE, DWORD) -> DWORD;
     unsafe {
+        // Standard Win32 TerminateProcess with minimal required rights (PLATFORM-003)
+        let h_process = OpenProcess(
+            winapi::um::winnt::PROCESS_TERMINATE | winapi::um::winnt::SYNCHRONIZE,
+            0,
+            process_id,
+        );
+        if !h_process.is_null() && h_process != INVALID_HANDLE_VALUE {
+            let res = winapi::um::processthreadsapi::TerminateProcess(h_process, 1);
+            let _ = CloseHandle(h_process);
+            if res != 0 {
+                log::info!(
+                    "terminate process {} success via TerminateProcess",
+                    process_id
+                );
+                return Ok(());
+            }
+        }
+
+        // Fallback to NtTerminateProcess with RAII module and handle cleanup
         let h_module = if is_win_10_or_greater() {
             LoadLibraryExA(
                 CString::new("ntdll.dll")?.as_ptr(),
@@ -3806,26 +3842,51 @@ fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
         } else {
             LoadLibraryA(CString::new("ntdll.dll")?.as_ptr())
         };
-        if !h_module.is_null() {
-            let f_nt_terminate_process: NtTerminateProcess = std::mem::transmute(GetProcAddress(
-                h_module,
-                CString::new("NtTerminateProcess")?.as_ptr(),
-            ));
-            let h_token = OpenProcess(PROCESS_ALL_ACCESS, 0, process_id);
-            if !h_token.is_null() {
-                if f_nt_terminate_process(h_token, 1) == 0 {
-                    log::info!("terminate process {} success", process_id);
-                    CloseHandle(h_token);
-                    return Ok(());
-                } else {
-                    CloseHandle(h_token);
-                    bail!("NtTerminateProcess {} failed", process_id);
-                }
-            } else {
-                bail!("OpenProcess {} failed", process_id);
-            }
-        } else {
+        if h_module.is_null() {
             bail!("Failed to load ntdll.dll");
+        }
+        let _module_guard = crate::common::SimpleCallOnReturn {
+            b: true,
+            f: Box::new(move || {
+                unsafe { winapi::um::libloaderapi::FreeLibrary(h_module) };
+            }),
+        };
+
+        let proc_addr = GetProcAddress(h_module, CString::new("NtTerminateProcess")?.as_ptr());
+        if proc_addr.is_null() {
+            bail!("Failed to locate NtTerminateProcess symbol in ntdll.dll");
+        }
+
+        type NtTerminateProcess = unsafe extern "system" fn(HANDLE, DWORD) -> DWORD;
+        let f_nt_terminate_process: NtTerminateProcess = std::mem::transmute(proc_addr);
+
+        let h_target = OpenProcess(
+            winapi::um::winnt::PROCESS_TERMINATE | winapi::um::winnt::SYNCHRONIZE,
+            0,
+            process_id,
+        );
+        if h_target.is_null() || h_target == INVALID_HANDLE_VALUE {
+            bail!(
+                "OpenProcess {} failed: {}",
+                process_id,
+                io::Error::last_os_error()
+            );
+        }
+        let _handle_guard = crate::common::SimpleCallOnReturn {
+            b: true,
+            f: Box::new(move || {
+                unsafe { CloseHandle(h_target) };
+            }),
+        };
+
+        if f_nt_terminate_process(h_target, 1) == 0 {
+            log::info!(
+                "terminate process {} success via NtTerminateProcess",
+                process_id
+            );
+            Ok(())
+        } else {
+            bail!("NtTerminateProcess {} failed", process_id);
         }
     }
 }

@@ -1,4 +1,3 @@
-use camellia_remote_protocol::regex::Regex;
 use std::ops::Deref;
 
 mod cn;
@@ -90,14 +89,17 @@ pub fn translate_locale(name: String, locale: &str) -> String {
 // Example:
 // Write in the UI: translate("There are {24} hours in a day")
 // Write in the translation file: ("There are {} hours in a day", "{} hours make up a day")
+// Linear, zero-regex placeholder extraction (PERF-005)
 fn extract_placeholder(input: &str) -> (String, Option<String>) {
-    if let Ok(re) = Regex::new(r#"\{(.*?)\}"#) {
-        if let Some(captures) = re.captures(input) {
-            if let Some(inner_match) = captures.get(1) {
-                let name = re.replace(input, "{}").to_string();
-                let value = inner_match.as_str().to_string();
-                return (name, Some(value));
-            }
+    if let Some(start) = input.find('{') {
+        if let Some(rel_end) = input[start + 1..].find('}') {
+            let end = start + 1 + rel_end;
+            let value = &input[start + 1..end];
+            let mut name = String::with_capacity(input.len() + 2 - (end - start + 1));
+            name.push_str(&input[..start]);
+            name.push_str("{}");
+            name.push_str(&input[end + 1..]);
+            return (name, Some(value.to_string()));
         }
     }
     (input.to_string(), None)
