@@ -97,25 +97,7 @@
       <div class="pulse" aria-hidden="true"></div>
     </div>
     <noscript>Camellia Web Client requires JavaScript to run.</noscript>
-    <script>
-      window.__CAMELLIA_REMOTE_WEB__ = window.__CAMELLIA_REMOTE_WEB__ || {
-        appName: "Camellia",
-        version: "",
-        buildDate: "",
-        apiServer: "",
-        isPublicServer: true
-      };
-      function removeLoading() {
-        var loader = document.getElementById("loading");
-        if (loader) {
-          loader.remove();
-        }
-      }
-      window.addEventListener("flutter-first-frame", removeLoading);
-      window.addEventListener("load", function () {
-        window.setTimeout(removeLoading, 8000);
-      });
-    </script>
+    <script src="bootstrap.js" defer></script>
     <script type="module" src="js/dist/web_bridge.js"></script>
     <script src="flutter_bootstrap.js" async></script>
   </body>
