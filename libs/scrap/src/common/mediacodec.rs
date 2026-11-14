@@ -43,7 +43,7 @@ impl MediaCodecDecoder {
             CodecFormat::H264 => create_media_codec(H264_MIME_TYPE, MediaCodecDirection::Decoder),
             CodecFormat::H265 => create_media_codec(H265_MIME_TYPE, MediaCodecDirection::Decoder),
             _ => {
-                log::error!("Unsupported codec format: {}", format);
+                log::error!("Unsupported codec format: {:?}", format);
                 None
             }
         }
@@ -51,8 +51,6 @@ impl MediaCodecDecoder {
 
     // rgb [in/out] fmt and stride must be set in ImageRgb
     pub fn decode(&mut self, data: &[u8], rgb: &mut ImageRgb) -> ResultType<bool> {
-        // take dst_stride into account please
-        let dst_stride = rgb.stride();
         match self.dequeue_input_buffer(Duration::from_millis(10))? {
             Some(mut input_buffer) => {
                 let mut buf = input_buffer.buffer_mut();
@@ -105,7 +103,7 @@ impl MediaCodecDecoder {
                                 h as _,
                             );
                         }
-                        ImageFormat::ARGB => {
+                        ImageFormat::ABGR => {
                             I420ToABGR(
                                 y_ptr,
                                 stride,
@@ -161,11 +159,16 @@ fn create_media_codec(name: &str, direction: MediaCodecDirection) -> Option<Medi
 pub fn check_mediacodec() {
     std::thread::spawn(move || {
         // check decoders
-        let decoders = MediaCodecDecoder::new_decoders();
-        H264_DECODER_SUPPORT.swap(decoders.h264.is_some(), Ordering::SeqCst);
-        H265_DECODER_SUPPORT.swap(decoders.h265.is_some(), Ordering::SeqCst);
-        decoders.h264.map(|d| d.stop());
-        decoders.h265.map(|d| d.stop());
+        let h264 = MediaCodecDecoder::new(CodecFormat::H264);
+        let h265 = MediaCodecDecoder::new(CodecFormat::H265);
+        H264_DECODER_SUPPORT.swap(h264.is_some(), Ordering::SeqCst);
+        H265_DECODER_SUPPORT.swap(h265.is_some(), Ordering::SeqCst);
+        if let Some(d) = h264 {
+            let _ = d.stop();
+        }
+        if let Some(d) = h265 {
+            let _ = d.stop();
+        }
         // TODO encoders
     });
 }

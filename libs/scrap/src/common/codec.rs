@@ -113,9 +113,9 @@ pub struct Decoder {
     #[cfg(feature = "vram")]
     h265_vram: Option<VRamDecoder>,
     #[cfg(feature = "mediacodec")]
-    h264_media_codec: MediaCodecDecoder,
+    h264_media_codec: Option<MediaCodecDecoder>,
     #[cfg(feature = "mediacodec")]
-    h265_media_codec: MediaCodecDecoder,
+    h265_media_codec: Option<MediaCodecDecoder>,
     format: CodecFormat,
     valid: bool,
     #[cfg(feature = "hwcodec")]

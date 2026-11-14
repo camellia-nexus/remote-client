@@ -101,6 +101,19 @@ impl ImageRgb {
     pub fn set_align(&mut self, align: usize) {
         self.align = align;
     }
+
+    #[inline]
+    pub fn stride(&self) -> usize {
+        let bytes_per_pixel = match self.fmt {
+            ImageFormat::Raw => 3,
+            ImageFormat::ARGB | ImageFormat::ABGR => 4,
+        };
+        if self.align > 0 {
+            (self.w * bytes_per_pixel + self.align - 1) & !(self.align - 1)
+        } else {
+            self.w * bytes_per_pixel
+        }
+    }
 }
 
 pub struct ImageTexture {
