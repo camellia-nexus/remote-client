@@ -133,11 +133,12 @@ fn bindgen_builder() -> bindgen::Builder {
             .or_else(|_| env::var("MIN_SDK_VERSION"))
             .unwrap_or_else(|_| "26".to_string());
         let trimmed_api = raw_api.trim_start_matches("android-");
-        let api_level = if trimmed_api.chars().all(|c| c.is_ascii_digit()) && !trimmed_api.is_empty() {
-            trimmed_api.to_string()
-        } else {
-            "26".to_string()
-        };
+        let api_level =
+            if trimmed_api.chars().all(|c| c.is_ascii_digit()) && !trimmed_api.is_empty() {
+                trimmed_api.to_string()
+            } else {
+                "26".to_string()
+            };
         let versioned_target = if target.starts_with("aarch64") || target_arch == "aarch64" {
             format!("aarch64-linux-android{}", api_level)
         } else if target.starts_with("armv7") || target_arch == "arm" {
