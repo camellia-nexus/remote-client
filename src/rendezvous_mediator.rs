@@ -407,7 +407,8 @@ impl RendezvousMediator {
     }
 
     async fn handle_request_relay(&self, rr: RequestRelay, server: ServerPtr) -> ResultType<()> {
-        let addr = AddrMangle::decode(&rr.socket_addr);
+        let addr = AddrMangle::try_decode_addr(&rr.socket_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to decode relay socket_addr: {:?}", e))?;
         let last = *LAST_RELAY_MSG.lock().await;
         *LAST_RELAY_MSG.lock().await = (addr, Instant::now());
         // skip duplicate relay request messages
@@ -445,7 +446,8 @@ impl RendezvousMediator {
         rendezvous_token: bytes::Bytes,
         meta: ConnectionMeta,
     ) -> ResultType<()> {
-        let peer_addr = AddrMangle::decode(&socket_addr);
+        let peer_addr = AddrMangle::try_decode_addr(&socket_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to decode create_relay socket_addr: {:?}", e))?;
         log::info!(
             "create_relay requested from {:?}, relay_server: {}, uuid: {}, secure: {}",
             peer_addr,
@@ -485,14 +487,19 @@ impl RendezvousMediator {
     }
 
     async fn handle_intranet(&self, fla: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
-        let addr = AddrMangle::decode(&fla.socket_addr);
+        let addr = AddrMangle::try_decode_addr(&fla.socket_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to decode intranet socket_addr: {:?}", e))?;
         let last = *LAST_MSG.lock().await;
         *LAST_MSG.lock().await = (addr, Instant::now());
         // skip duplicate punch hole messages
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let peer_addr_v6 = camellia_remote_protocol::AddrMangle::decode(&fla.socket_addr_v6);
+        let peer_addr_v6 =
+            camellia_remote_protocol::AddrMangle::try_decode_optional_addr(&fla.socket_addr_v6)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| Config::get_any_listen_addr(false));
         let relay_server = self.get_relay_server(fla.relay_server.clone());
         let relay = use_ws() || Config::is_proxy();
         let mut socket_addr_v6 = Default::default();
@@ -542,7 +549,8 @@ impl RendezvousMediator {
         socket_addr_v6: bytes::Bytes,
         meta: ConnectionMeta,
     ) -> ResultType<()> {
-        let peer_addr = AddrMangle::decode(&fla.socket_addr);
+        let peer_addr = AddrMangle::try_decode_addr(&fla.socket_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to decode intranet_ socket_addr: {:?}", e))?;
         log::debug!("Handle intranet from {:?}", peer_addr);
         let mut socket = Self::connect_control(&self.host).await?;
         let local_addr = socket.local_addr();
@@ -567,14 +575,19 @@ impl RendezvousMediator {
     }
 
     async fn handle_punch_hole(&self, ph: PunchHole, server: ServerPtr) -> ResultType<()> {
-        let mut peer_addr = AddrMangle::decode(&ph.socket_addr);
+        let mut peer_addr = AddrMangle::try_decode_addr(&ph.socket_addr)
+            .map_err(|e| anyhow::anyhow!("Failed to decode punch hole socket_addr: {:?}", e))?;
         let last = *LAST_MSG.lock().await;
         *LAST_MSG.lock().await = (peer_addr, Instant::now());
         // skip duplicate punch hole messages
         if last.0 == peer_addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let peer_addr_v6 = camellia_remote_protocol::AddrMangle::decode(&ph.socket_addr_v6);
+        let peer_addr_v6 =
+            camellia_remote_protocol::AddrMangle::try_decode_optional_addr(&ph.socket_addr_v6)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| Config::get_any_listen_addr(false));
         let relay = use_ws() || Config::is_proxy() || ph.force_relay;
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
