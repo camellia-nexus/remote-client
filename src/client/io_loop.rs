@@ -2078,12 +2078,20 @@ impl<T: InvokeUiSession> Remote<T> {
                             match write_result {
                                 Ok((fs::JobType::Generic, _)) => self.update_jobs_status(),
                                 Ok((fs::JobType::Printer, total_written)) => {
-                                    if let Err(err) = crate::client::print_dispatcher::PrintDispatcher::global()
-                                        .update_job_bytes(id, total_written)
+                                    if let Err(err) =
+                                        crate::client::print_dispatcher::PrintDispatcher::global()
+                                            .update_job_bytes(id, total_written)
                                     {
                                         log::error!("Print job {id} exceeded limits: {err}");
                                         let _ = fs::remove_job(id, &mut self.write_jobs);
-                                        allow_err!(peer.send(&fs::new_error(id, &err.to_string(), file_num)).await);
+                                        allow_err!(
+                                            peer.send(&fs::new_error(
+                                                id,
+                                                &err.to_string(),
+                                                file_num
+                                            ))
+                                            .await
+                                        );
                                         self.handle_job_status(id, file_num, Some(err.to_string()));
                                     }
                                 }
@@ -2122,10 +2130,12 @@ impl<T: InvokeUiSession> Remote<T> {
                                     self.handle_job_status(d.id, d.file_num, err);
                                 }
                                 fs::JobType::Printer => {
-                                    let _ = self.handler.printer_names.write().unwrap().remove(&d.id);
+                                    let _ =
+                                        self.handler.printer_names.write().unwrap().remove(&d.id);
                                     if let Some(err) = err {
                                         log::error!("Receive print job failed, error {err}");
-                                        crate::client::print_dispatcher::PrintDispatcher::global().cancel_job(d.id);
+                                        crate::client::print_dispatcher::PrintDispatcher::global()
+                                            .cancel_job(d.id);
                                     } else {
                                         log::info!("Receive print job done for id {}", d.id);
                                         if let Err(e) = crate::client::print_dispatcher::PrintDispatcher::global()
@@ -2155,7 +2165,12 @@ impl<T: InvokeUiSession> Remote<T> {
                                     }
                                     fs::JobType::Printer => {
                                         log::error!("Printer job error: {}", e.error);
-                                        let _ = self.handler.printer_names.write().unwrap().remove(&e.id);
+                                        let _ = self
+                                            .handler
+                                            .printer_names
+                                            .write()
+                                            .unwrap()
+                                            .remove(&e.id);
                                         crate::client::print_dispatcher::PrintDispatcher::global()
                                             .cancel_job(e.id);
                                     }

@@ -211,8 +211,7 @@ struct DispatcherState {
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
-pub type PrintExecutorFn =
-    Arc<dyn Fn(Option<String>, Vec<u8>) -> Result<(), String> + Send + Sync>;
+pub type PrintExecutorFn = Arc<dyn Fn(Option<String>, Vec<u8>) -> Result<(), String> + Send + Sync>;
 
 pub struct PrintDispatcher {
     pub max_concurrent_jobs: usize,
@@ -254,8 +253,7 @@ impl PrintDispatcher {
     }
 
     pub fn global() -> &'static PrintDispatcher {
-        static GLOBAL_DISPATCHER: std::sync::OnceLock<PrintDispatcher> =
-            std::sync::OnceLock::new();
+        static GLOBAL_DISPATCHER: std::sync::OnceLock<PrintDispatcher> = std::sync::OnceLock::new();
         GLOBAL_DISPATCHER.get_or_init(|| {
             PrintDispatcher::new(
                 MAX_CONCURRENT_PRINT_JOBS,

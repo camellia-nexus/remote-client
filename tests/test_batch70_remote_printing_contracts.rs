@@ -30,10 +30,11 @@ use camellia_remote::client::print_dispatcher::{
     MAX_PRINT_JOB_BYTES, MAX_TOTAL_SPOOL_BYTES,
 };
 use camellia_remote::server::printer_service::{
-    CamelliaPrinterAdapterHeader, CamelliaPrinterAdapterVtable, CAMELLIA_PRINTER_ADAPTER_ABI_VERSION,
-    CAMELLIA_PRINTER_ADAPTER_MAGIC, CAMELLIA_PRN_ERR_BUFFER_TOO_SMALL, CAMELLIA_PRN_ERR_GENERIC,
-    CAMELLIA_PRN_ERR_INVALID_PARAM, CAMELLIA_PRN_ERR_NOT_INITIALIZED, CAMELLIA_PRN_ERR_NO_DATA,
-    CAMELLIA_PRN_SUCCESS, MAX_PRN_BUFFER_BYTES,
+    CamelliaPrinterAdapterHeader, CamelliaPrinterAdapterVtable,
+    CAMELLIA_PRINTER_ADAPTER_ABI_VERSION, CAMELLIA_PRINTER_ADAPTER_MAGIC,
+    CAMELLIA_PRN_ERR_BUFFER_TOO_SMALL, CAMELLIA_PRN_ERR_GENERIC, CAMELLIA_PRN_ERR_INVALID_PARAM,
+    CAMELLIA_PRN_ERR_NOT_INITIALIZED, CAMELLIA_PRN_ERR_NO_DATA, CAMELLIA_PRN_SUCCESS,
+    MAX_PRN_BUFFER_BYTES,
 };
 
 fn get_client_root() -> PathBuf {
@@ -88,10 +89,7 @@ fn test_res042_concurrency_limit_rejects_third_job() {
     assert!(
         matches!(
             res3,
-            Err(PrintDispatcherError::ConcurrencyLimitExceeded {
-                active: 2,
-                max: 2
-            })
+            Err(PrintDispatcherError::ConcurrencyLimitExceeded { active: 2, max: 2 })
         ),
         "Third concurrent job must be rejected by PrintDispatcher"
     );
@@ -120,31 +118,46 @@ fn test_res042_spool_byte_bounds_enforcement() {
     );
 
     // 2. Updating job bytes to exceed MAX_PRINT_JOB_BYTES
-    let p11 = dispatcher.register_job(11, 1, None, 1024).expect("register job 11");
+    let p11 = dispatcher
+        .register_job(11, 1, None, 1024)
+        .expect("register job 11");
     assert!(p11.exists(), "Spool file must be created on registration");
     let res_update_oversize = dispatcher.update_job_bytes(11, oversize_bytes);
     assert!(
-        matches!(res_update_oversize, Err(PrintDispatcherError::JobBytesExceeded { .. })),
+        matches!(
+            res_update_oversize,
+            Err(PrintDispatcherError::JobBytesExceeded { .. })
+        ),
         "Updating job bytes beyond 64MiB must fail and remove job"
     );
     // Spool file must have been cleaned up automatically upon bounds violation
-    assert!(!p11.exists(), "Spool file must be deleted upon byte bounds violation");
+    assert!(
+        !p11.exists(),
+        "Spool file must be deleted upon byte bounds violation"
+    );
 
     // 3. Global MAX_TOTAL_SPOOL_BYTES (128 MiB) enforcement
     // Register Job 20 with 60 MiB
     let size_60mib = 60 * 1024 * 1024;
-    let _p20 = dispatcher.register_job(20, 1, None, size_60mib).expect("register job 20");
+    let _p20 = dispatcher
+        .register_job(20, 1, None, size_60mib)
+        .expect("register job 20");
     assert_eq!(dispatcher.current_spool_bytes(), size_60mib);
 
     // Register Job 21 with 60 MiB (total 120 MiB <= 128 MiB)
-    let _p21 = dispatcher.register_job(21, 1, None, size_60mib).expect("register job 21");
+    let _p21 = dispatcher
+        .register_job(21, 1, None, size_60mib)
+        .expect("register job 21");
     assert_eq!(dispatcher.current_spool_bytes(), 120 * 1024 * 1024);
 
     // Attempt to register Job 22 with 10 MiB (total would be 130 MiB > 128 MiB)
     let size_10mib = 10 * 1024 * 1024;
     let res_global_exceeded = dispatcher.register_job(22, 1, None, size_10mib);
     assert!(
-        matches!(res_global_exceeded, Err(PrintDispatcherError::TotalSpoolBytesExceeded { .. })),
+        matches!(
+            res_global_exceeded,
+            Err(PrintDispatcherError::TotalSpoolBytesExceeded { .. })
+        ),
         "Global spool limit (128MiB) must reject additional jobs exceeding capacity"
     );
 }
@@ -159,14 +172,19 @@ fn test_res042_stale_generation_cancellation_and_spool_cleanup() {
     );
 
     // Register Job 30 under connection generation 1
-    let p30 = dispatcher.register_job(30, 1, None, 2048).expect("register job 30");
+    let p30 = dispatcher
+        .register_job(30, 1, None, 2048)
+        .expect("register job 30");
     assert!(p30.exists(), "Spool file must exist for registered job 30");
 
     // Advance connection generation to 2 (simulating session restart or new connection)
     dispatcher.advance_generation(2);
 
     // Job 30 must have been removed and its spool file deleted
-    assert!(!p30.exists(), "Advancing generation must immediately delete stale spool files");
+    assert!(
+        !p30.exists(),
+        "Advancing generation must immediately delete stale spool files"
+    );
     assert_eq!(dispatcher.registered_jobs_count(), 0);
 
     // Submitting stale Job 30 must fail closed
@@ -179,33 +197,54 @@ fn test_res042_stale_generation_cancellation_and_spool_cleanup() {
     // Attempting to register with stale generation 1 must be rejected
     let stale_reg = dispatcher.register_job(31, 1, None, 1024);
     assert!(
-        matches!(stale_reg, Err(PrintDispatcherError::StaleGeneration { job_generation: 1, current_generation: 2 })),
+        matches!(
+            stale_reg,
+            Err(PrintDispatcherError::StaleGeneration {
+                job_generation: 1,
+                current_generation: 2
+            })
+        ),
         "Registering with stale generation must be rejected"
     );
 
     // Register Job 32 with generation 2, then cancel generation 2 explicitly
-    let p32 = dispatcher.register_job(32, 2, None, 2048).expect("register job 32");
+    let p32 = dispatcher
+        .register_job(32, 2, None, 2048)
+        .expect("register job 32");
     assert!(p32.exists(), "Spool file must exist for job 32");
     dispatcher.cancel_generation(2);
-    assert!(!p32.exists(), "cancel_generation must delete unsubmitted spool files");
+    assert!(
+        !p32.exists(),
+        "cancel_generation must delete unsubmitted spool files"
+    );
 }
 
 #[test]
 fn test_res042_spool_file_guard_raii_drop_and_consume() {
     let mut guard = SpoolFileGuard::create(99).expect("create SpoolFileGuard");
     let path = guard.path().to_path_buf();
-    assert!(path.exists(), "Temporary spool file must be created on disk");
+    assert!(
+        path.exists(),
+        "Temporary spool file must be created on disk"
+    );
 
     // Write some data to simulate streaming
     {
-        let mut f = fs::OpenOptions::new().write(true).open(&path).expect("open spool file");
-        f.write_all(b"sample-xps-stream-data").expect("write sample data");
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open spool file");
+        f.write_all(b"sample-xps-stream-data")
+            .expect("write sample data");
     }
 
     // consume_data reads data and cleans up file immediately
     let data = guard.consume_data().expect("consume_data");
     assert_eq!(data, b"sample-xps-stream-data");
-    assert!(!path.exists(), "consume_data must delete spool file from disk");
+    assert!(
+        !path.exists(),
+        "consume_data must delete spool file from disk"
+    );
 
     // Test RAII Drop cleanup
     let drop_path = {
@@ -215,7 +254,10 @@ fn test_res042_spool_file_guard_raii_drop_and_consume() {
         p
         // g2 drops here
     };
-    assert!(!drop_path.exists(), "Dropping SpoolFileGuard must delete temporary spool file");
+    assert!(
+        !drop_path.exists(),
+        "Dropping SpoolFileGuard must delete temporary spool file"
+    );
 }
 
 #[test]
@@ -227,12 +269,17 @@ fn test_res042_graceful_shutdown_join() {
         Duration::from_millis(500),
     );
 
-    let p = dispatcher.register_job(50, 1, None, 1024).expect("register job 50");
+    let p = dispatcher
+        .register_job(50, 1, None, 1024)
+        .expect("register job 50");
     fs::write(&p, b"xps-data").expect("write xps");
     dispatcher.submit_job(50).expect("submit job 50");
 
     dispatcher.shutdown();
-    assert!(dispatcher.is_shutdown(), "Dispatcher must be marked shutdown");
+    assert!(
+        dispatcher.is_shutdown(),
+        "Dispatcher must be marked shutdown"
+    );
 
     // New registrations after shutdown must fail closed
     let res = dispatcher.register_job(51, 1, None, 1024);
@@ -350,7 +397,11 @@ fn test_res029_owned_printer_handle_raii_semantics() {
         let handle = MockPrinterHandle::new(1234, closed.clone()).expect("valid handle");
         assert_eq!(handle.as_raw(), 1234);
     }
-    assert_eq!(closed.load(Ordering::SeqCst), 1, "Handle drop must call close exactly once");
+    assert_eq!(
+        closed.load(Ordering::SeqCst),
+        1,
+        "Handle drop must call close exactly once"
+    );
 
     // 3. into_raw() transfers ownership and suppresses Drop close
     {
@@ -358,7 +409,11 @@ fn test_res029_owned_printer_handle_raii_semantics() {
         let raw2 = handle2.into_raw();
         assert_eq!(raw2, 5678);
     }
-    assert_eq!(closed.load(Ordering::SeqCst), 1, "into_raw must not invoke drop close");
+    assert_eq!(
+        closed.load(Ordering::SeqCst),
+        1,
+        "into_raw must not invoke drop close"
+    );
 }
 
 // ============================================================================
@@ -411,7 +466,10 @@ fn test_abi002_vtable_validation_success() {
 
     assert_eq!(vtable.header.magic, 0x4350524E, "Magic must be CPRN");
     assert_eq!(vtable.header.abi_version, 1, "ABI version must be 1");
-    assert!(vtable.validate().is_ok(), "Valid vtable must pass validation");
+    assert!(
+        vtable.validate().is_ok(),
+        "Valid vtable must pass validation"
+    );
 }
 
 #[test]
@@ -460,7 +518,10 @@ fn test_abi002_vtable_validation_fail_closed() {
 
     vtable.uninit = Some(dummy_adapter_uninit);
     vtable.get_prn_data = None;
-    assert_eq!(vtable.validate(), Err("Missing get_prn_data function pointer"));
+    assert_eq!(
+        vtable.validate(),
+        Err("Missing get_prn_data function pointer")
+    );
 }
 
 #[test]
