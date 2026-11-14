@@ -497,8 +497,12 @@ jobs:
         run: |
           ANDROID_NDK_HOME="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
           export ANDROID_NDK_HOME
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          {
+            echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+            echo "NDK_HOME=$ANDROID_NDK_HOME"
+            echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android26 -D__ANDROID_API__=26"
+          } >> "$GITHUB_ENV"
 
       - name: Build Android client
         run: python3 build.py android
