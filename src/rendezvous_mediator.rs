@@ -495,11 +495,16 @@ impl RendezvousMediator {
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let peer_addr_v6 =
-            camellia_remote_protocol::AddrMangle::try_decode_optional_addr(&fla.socket_addr_v6)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| Config::get_any_listen_addr(false));
+        let peer_addr_v6 = match camellia_remote_protocol::AddrMangle::try_decode_optional_addr(
+            &fla.socket_addr_v6,
+        ) {
+            Ok(Some(addr)) => addr,
+            Ok(None) => Config::get_any_listen_addr(false),
+            Err(err) => {
+                log::warn!("Invalid intranet socket_addr_v6: {:?}", err);
+                Config::get_any_listen_addr(false)
+            }
+        };
         let relay_server = self.get_relay_server(fla.relay_server.clone());
         let relay = use_ws() || Config::is_proxy();
         let mut socket_addr_v6 = Default::default();
@@ -583,11 +588,16 @@ impl RendezvousMediator {
         if last.0 == peer_addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let peer_addr_v6 =
-            camellia_remote_protocol::AddrMangle::try_decode_optional_addr(&ph.socket_addr_v6)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| Config::get_any_listen_addr(false));
+        let peer_addr_v6 = match camellia_remote_protocol::AddrMangle::try_decode_optional_addr(
+            &ph.socket_addr_v6,
+        ) {
+            Ok(Some(addr)) => addr,
+            Ok(None) => Config::get_any_listen_addr(false),
+            Err(err) => {
+                log::warn!("Invalid punch hole socket_addr_v6: {:?}", err);
+                Config::get_any_listen_addr(false)
+            }
+        };
         let relay = use_ws() || Config::is_proxy() || ph.force_relay;
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(

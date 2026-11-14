@@ -482,14 +482,21 @@ impl Client {
                             }
                             let s = ipv6.0.take();
                             if !ph.socket_addr_v6.is_empty() && s.is_some() {
-                                if let Ok(Some(addr)) =
-                                    AddrMangle::try_decode_optional_addr(&ph.socket_addr_v6)
-                                {
-                                    if addr.port() > 0 {
-                                        if let Some(s) = s {
-                                            allow_err!(s.connect(addr).await);
-                                            ipv6.0 = Some(s);
+                                match AddrMangle::try_decode_optional_addr(&ph.socket_addr_v6) {
+                                    Ok(Some(addr)) => {
+                                        if addr.port() > 0 {
+                                            if let Some(s) = s {
+                                                allow_err!(s.connect(addr).await);
+                                                ipv6.0 = Some(s);
+                                            }
                                         }
+                                    }
+                                    Ok(None) => {}
+                                    Err(err) => {
+                                        log::warn!(
+                                            "Invalid optional punch hole socket_addr_v6: {:?}",
+                                            err
+                                        );
                                     }
                                 }
                             }
@@ -506,15 +513,19 @@ impl Client {
                         start = Instant::now();
                         let mut connect_futures = Vec::new();
                         if let Some(s) = ipv6.0 {
-                            if let Ok(Some(addr)) =
-                                AddrMangle::try_decode_optional_addr(&rr.socket_addr_v6)
-                            {
-                                if addr.port() > 0 {
-                                    if s.connect(addr).await.is_ok() {
-                                        connect_futures.push(
-                                            udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed(),
-                                        );
+                            match AddrMangle::try_decode_optional_addr(&rr.socket_addr_v6) {
+                                Ok(Some(addr)) => {
+                                    if addr.port() > 0 {
+                                        if s.connect(addr).await.is_ok() {
+                                            connect_futures.push(
+                                                udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed(),
+                                            );
+                                        }
                                     }
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    log::warn!("Invalid optional relay socket_addr_v6: {:?}", err);
                                 }
                             }
                         }
