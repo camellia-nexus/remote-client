@@ -75,6 +75,42 @@ pub fn get_printer_installed_on_port(port: &PCWSTR) -> ResultType<Option<Vec<u16
     )
 }
 
+/// RAII wrapper around a Windows spooler printer HANDLE (RES-029).
+/// Ensures ClosePrinter is deterministically called upon drop on all paths.
+pub struct OwnedPrinterHandle(HANDLE);
+
+impl OwnedPrinterHandle {
+    pub fn new(handle: HANDLE) -> Option<Self> {
+        if handle.is_null() {
+            None
+        } else {
+            Some(Self(handle))
+        }
+    }
+
+    pub fn as_raw(&self) -> HANDLE {
+        self.0
+    }
+
+    #[allow(dead_code)]
+    pub fn into_raw(mut self) -> HANDLE {
+        let h = self.0;
+        self.0 = null_mut();
+        h
+    }
+}
+
+impl Drop for OwnedPrinterHandle {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                ClosePrinter(self.0);
+            }
+            self.0 = null_mut();
+        }
+    }
+}
+
 pub fn add_printer(name: &PCWSTR, driver: &PCWSTR, port: &PCWSTR) -> ResultType<()> {
     let mut printer_info = PRINTER_INFO_2W {
         pServerName: null_mut(),
@@ -99,7 +135,7 @@ pub fn add_printer(name: &PCWSTR, driver: &PCWSTR, port: &PCWSTR) -> ResultType<
         cJobs: 0,
         AveragePPM: 0,
     };
-    unsafe {
+    let _handle = unsafe {
         let h_printer = AddPrinterW(
             null_mut(),
             2,
@@ -109,9 +145,10 @@ pub fn add_printer(name: &PCWSTR, driver: &PCWSTR, port: &PCWSTR) -> ResultType<
             bail!(format!(
                 "Failed to add printer. Error: {}",
                 io::Error::last_os_error()
-            ))
+            ));
         }
-    }
+        OwnedPrinterHandle::new(h_printer).expect("non-null printer handle")
+    };
     Ok(())
 }
 
@@ -121,12 +158,12 @@ pub fn delete_printer(name: &PCWSTR) -> ResultType<()> {
         pDevMode: null_mut(),
         DesiredAccess: PRINTER_ALL_ACCESS,
     };
-    let mut h_printer: HANDLE = null_mut();
-    unsafe {
+    let mut raw_handle: HANDLE = null_mut();
+    let handle = unsafe {
         if FALSE
             == OpenPrinterW(
                 name.as_ptr() as _,
-                &mut h_printer,
+                &mut raw_handle,
                 &mut dft as *mut PRINTER_DEFAULTSW as _,
             )
         {
@@ -137,24 +174,26 @@ pub fn delete_printer(name: &PCWSTR) -> ResultType<()> {
                 bail!(format!("Failed to open printer. Error: {}", err))
             }
         }
+        if raw_handle.is_null() {
+            bail!("Failed to open printer: invalid handle");
+        }
+        OwnedPrinterHandle::new(raw_handle).expect("non-null printer handle")
+    };
 
-        if FALSE == SetPrinterW(h_printer, 0, null_mut(), PRINTER_CONTROL_PURGE) {
-            ClosePrinter(h_printer);
+    unsafe {
+        if FALSE == SetPrinterW(handle.as_raw(), 0, null_mut(), PRINTER_CONTROL_PURGE) {
             bail!(format!(
                 "Failed to purge printer queue. Error: {}",
                 io::Error::last_os_error()
             ))
         }
 
-        if FALSE == DeletePrinter(h_printer) {
-            ClosePrinter(h_printer);
+        if FALSE == DeletePrinter(handle.as_raw()) {
             bail!(format!(
                 "Failed to delete printer. Error: {}",
                 io::Error::last_os_error()
             ))
         }
-
-        ClosePrinter(h_printer);
     }
 
     Ok(())

@@ -57,10 +57,12 @@ use std::{
     num::NonZeroI64,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock,
     },
 };
+
+static NEXT_SESSION_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
 // RES-014: Voice Call Bounded Queue & Reconfigurable Worker
@@ -158,6 +160,7 @@ pub struct Remote<T: InvokeUiSession> {
     chroma: Arc<RwLock<Option<Chroma>>>,
     last_record_state: bool,
     sent_close_reason: bool,
+    pub connection_generation: u64,
 }
 
 #[derive(Default)]
@@ -208,6 +211,7 @@ impl<T: InvokeUiSession> Remote<T> {
             chroma: Default::default(),
             last_record_state: false,
             sent_close_reason: false,
+            connection_generation: NEXT_SESSION_GENERATION.fetch_add(1, Ordering::SeqCst),
         }
     }
 
@@ -760,7 +764,18 @@ impl<T: InvokeUiSession> Remote<T> {
                     let to = match r#type {
                         fs::JobType::Generic => fs::DataSource::FilePath(PathBuf::from(&to)),
                         fs::JobType::Printer => {
-                            fs::DataSource::MemoryCursor(std::io::Cursor::new(Vec::new()))
+                            let printer_name =
+                                self.handler.printer_names.read().unwrap().get(&id).cloned();
+                            match crate::client::print_dispatcher::PrintDispatcher::global()
+                                .register_job(id, self.connection_generation, printer_name, 0)
+                            {
+                                Ok(spool_path) => fs::DataSource::FilePath(spool_path),
+                                Err(err) => {
+                                    log::error!("Print job registration failed for {id}: {err}");
+                                    self.handle_job_status(id, file_num, Some(err.to_string()));
+                                    return true;
+                                }
+                            }
                         }
                     };
                     self.write_jobs.push(fs::TransferJob::new_write(
@@ -2056,15 +2071,29 @@ impl<T: InvokeUiSession> Remote<T> {
                                 Some(job) => job
                                     .write(block)
                                     .await
-                                    .map(|_| job.r#type)
+                                    .map(|_| (job.r#type, job.transferred()))
                                     .map_err(|err| err.to_string()),
                                 None => return true,
                             };
                             match write_result {
-                                Ok(fs::JobType::Generic) => self.update_jobs_status(),
-                                Ok(fs::JobType::Printer) => {}
+                                Ok((fs::JobType::Generic, _)) => self.update_jobs_status(),
+                                Ok((fs::JobType::Printer, total_written)) => {
+                                    if let Err(err) = crate::client::print_dispatcher::PrintDispatcher::global()
+                                        .update_job_bytes(id, total_written)
+                                    {
+                                        log::error!("Print job {id} exceeded limits: {err}");
+                                        let _ = fs::remove_job(id, &mut self.write_jobs);
+                                        allow_err!(peer.send(&fs::new_error(id, &err.to_string(), file_num)).await);
+                                        self.handle_job_status(id, file_num, Some(err.to_string()));
+                                    }
+                                }
                                 Err(err) => {
-                                    let _ = fs::remove_job(id, &mut self.write_jobs);
+                                    let removed = fs::remove_job(id, &mut self.write_jobs);
+                                    if let Some(j) = removed {
+                                        if j.r#type == fs::JobType::Printer {
+                                            crate::client::print_dispatcher::PrintDispatcher::global().cancel_job(id);
+                                        }
+                                    }
                                     allow_err!(peer.send(&fs::new_error(id, &err, file_num)).await);
                                     self.handle_job_status(id, file_num, Some(err));
                                 }
@@ -2084,19 +2113,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                 return true;
                             };
                             let job_type = job.r#type;
-                            let mut err = finalize_error;
-                            let printer_data = if err.is_none() && job_type == fs::JobType::Printer
-                            {
-                                match job.get_buf_data().await {
-                                    Ok(data) => data,
-                                    Err(error) => {
-                                        err = Some(error.to_string());
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
+                            let err = finalize_error;
                             if let Some(err) = err.as_deref() {
                                 allow_err!(peer.send(&fs::new_error(d.id, err, d.file_num)).await);
                             }
@@ -2105,33 +2122,16 @@ impl<T: InvokeUiSession> Remote<T> {
                                     self.handle_job_status(d.id, d.file_num, err);
                                 }
                                 fs::JobType::Printer => {
+                                    let _ = self.handler.printer_names.write().unwrap().remove(&d.id);
                                     if let Some(err) = err {
                                         log::error!("Receive print job failed, error {err}");
+                                        crate::client::print_dispatcher::PrintDispatcher::global().cancel_job(d.id);
                                     } else {
-                                        log::info!(
-                                            "Receive print job done, data len: {:?}",
-                                            printer_data.as_ref().map(|d| d.len()).unwrap_or(0)
-                                        );
-                                        #[cfg(target_os = "windows")]
-                                        if let Some(data) = printer_data {
-                                            let printer_name = self
-                                                .handler
-                                                .printer_names
-                                                .write()
-                                                .unwrap()
-                                                .remove(&d.id);
-                                            // Spawn a new thread to handle the print job.
-                                            // Or print job will block the ui thread.
-                                            std::thread::spawn(move || {
-                                                if let Err(e) =
-                                                    crate::platform::send_raw_data_to_printer(
-                                                        printer_name,
-                                                        data,
-                                                    )
-                                                {
-                                                    log::error!("Print job error: {}", e);
-                                                }
-                                            });
+                                        log::info!("Receive print job done for id {}", d.id);
+                                        if let Err(e) = crate::client::print_dispatcher::PrintDispatcher::global()
+                                            .submit_job(d.id)
+                                        {
+                                            log::error!("Print job submission failed for {}: {}", d.id, e);
                                         }
                                     }
                                 }
@@ -2155,6 +2155,9 @@ impl<T: InvokeUiSession> Remote<T> {
                                     }
                                     fs::JobType::Printer => {
                                         log::error!("Printer job error: {}", e.error);
+                                        let _ = self.handler.printer_names.write().unwrap().remove(&e.id);
+                                        crate::client::print_dispatcher::PrintDispatcher::global()
+                                            .cancel_job(e.id);
                                     }
                                 }
                             }
@@ -2955,6 +2958,8 @@ impl<T: InvokeUiSession> Drop for Remote<T> {
             worker.stop();
         }
         self.teardown_video_threads();
+        crate::client::print_dispatcher::PrintDispatcher::global()
+            .cancel_generation(self.connection_generation);
     }
 }
 

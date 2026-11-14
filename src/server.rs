@@ -80,7 +80,6 @@ mod service;
 mod video_qos;
 pub mod video_service;
 
-#[cfg(all(target_os = "windows", feature = "flutter"))]
 pub mod printer_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;

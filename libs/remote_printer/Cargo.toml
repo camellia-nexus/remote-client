@@ -7,5 +7,5 @@ edition = "2021"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 camellia_remote_protocol = { package = "camellia-remote-protocol", version = "0.1.0", path = "../camellia_remote_protocol" }
-winapi = { version = "0.3" }
+winapi = { version = "0.3", features = ["winspool", "winerror", "minwindef", "ntdef"] }
 windows-strings = "0.3.1"
