@@ -498,12 +498,6 @@ jobs:
         with:
           vcpkgDirectory: ${{ runner.temp }}/vcpkg
 
-      - name: Install Android native vcpkg dependencies
-        run: |
-          "$VCPKG_ROOT/vcpkg" install \
-            --triplet arm64-android \
-            --x-install-root="$VCPKG_ROOT/installed"
-
       - name: Configure Android NDK
         run: |
           ANDROID_NDK_HOME="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
@@ -515,6 +509,14 @@ jobs:
             echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android26 -D__ANDROID_API__=26"
             echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--target=aarch64-linux-android26 -D__ANDROID_API__=26"
           } >> "$GITHUB_ENV"
+
+      - name: Install Android native vcpkg dependencies
+        run: |
+          ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)}"
+          export ANDROID_NDK_HOME
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet arm64-android \
+            --x-install-root="$VCPKG_ROOT/installed"
 
       - name: Build Android client
         run: python3 build.py android
