@@ -493,6 +493,17 @@ jobs:
       - name: Prepare locked dependencies
         run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
 
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          vcpkgDirectory: ${{ runner.temp }}/vcpkg
+
+      - name: Install Android native vcpkg dependencies
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet arm64-android \
+            --x-install-root="$VCPKG_ROOT/installed"
+
       - name: Configure Android NDK
         run: |
           ANDROID_NDK_HOME="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
@@ -500,8 +511,9 @@ jobs:
           {
             echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
             echo "NDK_HOME=$ANDROID_NDK_HOME"
-            echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}"
+            echo "VCPKG_ROOT=${VCPKG_ROOT:-${VCPKG_INSTALLATION_ROOT:-/usr/local/share/vcpkg}}"
             echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--target=aarch64-linux-android26 -D__ANDROID_API__=26"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=--target=aarch64-linux-android26 -D__ANDROID_API__=26"
           } >> "$GITHUB_ENV"
 
       - name: Build Android client
@@ -589,7 +601,7 @@ jobs:
       - name: Compile Linux native Rust library
         run: |
           "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
-          cargo build --locked --release --target x86_64-unknown-linux-gnu --lib --features flutter,hwcodec,unix-file-copy-paste
+          cargo build --locked --release --target x86_64-unknown-linux-gnu --lib --features flutter,hwcodec,unix-file-copy-paste,linux-pkg-config
           mkdir -p target/release
           cp target/x86_64-unknown-linux-gnu/release/libcamellia_remote.so target/release/libcamellia_remote.so
 

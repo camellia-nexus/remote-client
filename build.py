@@ -102,8 +102,22 @@ def build_linux(args):
 def build_android(args):
     ensure_tool("cargo")
     ensure_tool("flutter")
+    api_level = "26"
+    canonical_triple = "aarch64-linux-android"
+    bindgen_flags = f"--target=aarch64-linux-android26 -D__ANDROID_API__=26"
+    ndk_home = os.environ.get("ANDROID_NDK_HOME") or os.environ.get("NDK_HOME")
+    if ndk_home:
+        sysroots = list(Path(ndk_home).glob("toolchains/llvm/prebuilt/*/sysroot"))
+        if sysroots:
+            ndk_sysroot = sysroots[0]
+            bindgen_flags += f" --sysroot={ndk_sysroot} -I{ndk_sysroot}/usr/include/{canonical_triple}"
     android_env = {
-        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android": "--target=aarch64-linux-android26 -D__ANDROID_API__=26",
+        "TARGET": canonical_triple,
+        "CARGO_NDK_PLATFORM": api_level,
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android": bindgen_flags,
+        f"BINDGEN_EXTRA_CLANG_ARGS_{canonical_triple}": bindgen_flags,
+        "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android": bindgen_flags,
+        "BINDGEN_EXTRA_CLANG_ARGS": bindgen_flags,
     }
     run(
         [
