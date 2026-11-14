@@ -163,6 +163,6 @@ fn test_batch74_source_provenance_contract() {
     assert_eq!(json["component"], "camellia-remote-client");
     assert_eq!(
         json["protocol_source_commit"],
-        "f394d58ec0f084c3b2fbdb64d6f90f3619927412"
+        "891f70bc9507e13a5a555bd9c34e777f8bc2b1c1"
     );
 }

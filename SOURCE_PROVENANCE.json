@@ -1,7 +1,7 @@
 {
-  "project_name": "remote-client",
-  "provenance_schema_version": 1,
-  "canonical_repository": "https://git.aimmv.com/grace/remote-client.git",
+  "schema_version": 1,
+  "component": "camellia-remote-client",
+  "source_repository": "https://github.com/XavierAlpha/rustdesk",
   "source_commit": "cb2c7e57fc4dc5c00c59eee0603f465bc50805c5",
   "upstream_repository": "https://github.com/rustdesk/rustdesk",
   "protocol_repository": "../remote-protocol.git",
