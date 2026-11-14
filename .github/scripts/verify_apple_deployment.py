@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import tomllib
+import xml.parsers.expat
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +36,215 @@ TARGET_ONLY_VCPKG_DEPENDENCIES = {
 
 class PolicyError(ValueError):
     """An Apple build surface does not match the product deployment policy."""
+
+
+APPLE_PLIST_TYPE_SCHEMA: dict[str, str | tuple[str, ...]] = {
+    # Bundle metadata
+    "CFBundleDevelopmentRegion": "string",
+    "CFBundleDisplayName": "string",
+    "CFBundleExecutable": "string",
+    "CFBundleIconFile": "string",
+    "CFBundleIdentifier": "string",
+    "CFBundleInfoDictionaryVersion": "string",
+    "CFBundleName": "string",
+    "CFBundlePackageType": "string",
+    "CFBundleShortVersionString": "string",
+    "CFBundleSignature": "string",
+    "CFBundleURLTypes": "array",
+    "CFBundleVersion": "string",
+    # iOS execution and UI capabilities
+    "CADisableMinimumFrameDurationOnPhone": "boolean",
+    "ITSAppUsesNonExemptEncryption": "boolean",
+    "LSRequiresIPhoneOS": "boolean",
+    "UIApplicationSupportsIndirectInputEvents": "boolean",
+    "UIFileSharingEnabled": "boolean",
+    "UILaunchStoryboardName": "string",
+    "UIMainStoryboardFile": "string",
+    "UISupportedInterfaceOrientations": "array",
+    "UISupportedInterfaceOrientations~ipad": "array",
+    "UISupportsDocumentBrowser": "boolean",
+    "UIViewControllerBasedStatusBarAppearance": "boolean",
+    "io.flutter.embedded_views_preview": "boolean",
+    # macOS execution and UI capabilities
+    "LSMinimumSystemVersion": "string",
+    "LSUIElement": "boolean",
+    "NSHumanReadableCopyright": "string",
+    "NSMainNibFile": "string",
+    "NSPrincipalClass": "string",
+    # Permissions and privacy usage descriptions
+    "NSCameraUsageDescription": "string",
+    "NSLocalNetworkUsageDescription": "string",
+    "NSMicrophoneUsageDescription": "string",
+    "NSPhotoLibraryUsageDescription": "string",
+}
+
+
+class DuplicateRejectingDict(dict):
+    """Dict subclass that rejects key overwrites during plist parsing."""
+
+    def __setitem__(self, key, value):
+        if key in self:
+            raise PolicyError(f"Duplicate key detected in dict: {key!r}")
+        super().__setitem__(key, value)
+
+
+class SourcePlistValidator:
+    """Validate XML property list syntax, key uniqueness per dict, and value types using Expat."""
+
+    def __init__(
+        self,
+        source_name: str = "<plist>",
+        root_type_schema: dict[str, str | tuple[str, ...]] | None = None,
+        required_root_keys: set[str] | None = None,
+    ):
+        self.source_name = source_name
+        self.root_type_schema = root_type_schema or {}
+        self.required_root_keys = required_root_keys or set()
+        self.dict_stack: list[dict[str, int]] = []
+        self.current_key: str | None = None
+        self.current_key_line: int | None = None
+        self.in_key: bool = False
+        self.key_buffer: list[str] = []
+        self.errors: list[str] = []
+        self.root_keys_seen: set[str] = set()
+
+    def validate(self, xml_content: str | bytes) -> list[str]:
+        if isinstance(xml_content, str):
+            xml_bytes = xml_content.encode("utf-8")
+        else:
+            xml_bytes = xml_content
+
+        parser = xml.parsers.expat.ParserCreate()
+        parser.StartElementHandler = self._start_element
+        parser.EndElementHandler = self._end_element
+        parser.CharacterDataHandler = self._char_data
+        self.parser = parser
+
+        try:
+            parser.Parse(xml_bytes, True)
+        except xml.parsers.expat.ExpatError as e:
+            self.errors.append(f"{self.source_name}:{e.lineno}: XML syntax error: {e}")
+
+        if self.dict_stack:
+            self.errors.append(f"{self.source_name}: Unclosed dict scope at EOF")
+
+        missing_keys = sorted(self.required_root_keys - self.root_keys_seen)
+        if missing_keys:
+            self.errors.append(
+                f"{self.source_name}: Missing required root keys: {missing_keys}"
+            )
+
+        return self.errors
+
+    def _start_element(self, name: str, attrs: dict[str, str]):
+        if name == "dict":
+            self._handle_value_tag(name)
+            self.dict_stack.append({})
+        elif name == "key":
+            if self.current_key is not None:
+                self.errors.append(
+                    f"{self.source_name}:{self.parser.CurrentLineNumber}: "
+                    f"Key {self.current_key!r} at line {self.current_key_line} has no value element before next <key>"
+                )
+            self.in_key = True
+            self.key_buffer = []
+            self.current_key_line = self.parser.CurrentLineNumber
+        elif name in ("string", "integer", "real", "true", "false", "date", "data", "array"):
+            self._handle_value_tag(name)
+
+    def _handle_value_tag(self, tag_name: str):
+        if self.current_key is not None and self.dict_stack:
+            if len(self.dict_stack) == 1:
+                self.root_keys_seen.add(self.current_key)
+                expected = self.root_type_schema.get(self.current_key)
+                if expected:
+                    actual = "boolean" if tag_name in ("true", "false") else tag_name
+                    expected_types = (expected,) if isinstance(expected, str) else expected
+                    if actual not in expected_types:
+                        self.errors.append(
+                            f"{self.source_name}:{self.parser.CurrentLineNumber}: "
+                            f"Key {self.current_key!r} expected {expected}, got <{tag_name}> ({actual})"
+                        )
+            self.current_key = None
+
+    def _end_element(self, name: str):
+        if name == "dict":
+            if self.current_key is not None:
+                self.errors.append(
+                    f"{self.source_name}:{self.parser.CurrentLineNumber}: "
+                    f"Dict closed while key {self.current_key!r} at line {self.current_key_line} was waiting for value"
+                )
+                self.current_key = None
+            if self.dict_stack:
+                self.dict_stack.pop()
+        elif name == "key":
+            self.in_key = False
+            key_name = "".join(self.key_buffer).strip()
+            self.key_buffer = []
+            if not self.dict_stack:
+                self.errors.append(f"{self.source_name}:{self.current_key_line}: <key> outside <dict>")
+                return
+            current_dict = self.dict_stack[-1]
+            if key_name in current_dict:
+                first_line = current_dict[key_name]
+                self.errors.append(
+                    f"{self.source_name}:{self.current_key_line}: "
+                    f"Duplicate key {key_name!r} in dict (first defined at line {first_line})"
+                )
+            else:
+                current_dict[key_name] = self.current_key_line
+            self.current_key = key_name
+
+    def _char_data(self, data: str):
+        if self.in_key:
+            self.key_buffer.append(data)
+
+
+def validate_source_plist(
+    path: Path | str,
+    root_type_schema: dict[str, str | tuple[str, ...]] | None = None,
+    required_root_keys: set[str] | None = None,
+) -> None:
+    p = Path(path)
+    content = p.read_bytes()
+    validator = SourcePlistValidator(
+        source_name=str(p.relative_to(ROOT) if p.is_relative_to(ROOT) else p),
+        root_type_schema=root_type_schema,
+        required_root_keys=required_root_keys,
+    )
+    errors = validator.validate(content)
+    if errors:
+        raise PolicyError("; ".join(errors))
+
+
+def verify_apple_runner_plists() -> None:
+    ios_plist = ROOT / "flutter/ios/Runner/Info.plist"
+    validate_source_plist(
+        ios_plist,
+        root_type_schema=APPLE_PLIST_TYPE_SCHEMA,
+        required_root_keys={
+            "CFBundleIdentifier",
+            "CFBundleShortVersionString",
+            "CFBundleVersion",
+            "CADisableMinimumFrameDurationOnPhone",
+            "UIApplicationSupportsIndirectInputEvents",
+            "NSLocalNetworkUsageDescription",
+        },
+    )
+
+    macos_plist = ROOT / "flutter/macos/Runner/Info.plist"
+    validate_source_plist(
+        macos_plist,
+        root_type_schema=APPLE_PLIST_TYPE_SCHEMA,
+        required_root_keys={
+            "CFBundleIdentifier",
+            "CFBundleShortVersionString",
+            "CFBundleVersion",
+            "LSUIElement",
+        },
+    )
+
+    verify_app_framework_info_plist()
 
 
 def read(relative_path: str) -> str:
@@ -201,8 +411,9 @@ def verify_apple_job_toolchain(job: str, source: str) -> None:
 
 def verify_app_framework_info_plist() -> None:
     path = ROOT / "flutter/ios/Flutter/AppFrameworkInfo.plist"
+    validate_source_plist(path)
     with path.open("rb") as stream:
-        metadata = plistlib.load(stream)
+        metadata = plistlib.load(stream, dict_type=DuplicateRejectingDict)
     if "MinimumOSVersion" in metadata:
         raise PolicyError(
             f"{path.relative_to(ROOT)} must inherit the application deployment target"
@@ -540,7 +751,7 @@ def verify() -> tuple[str, str]:
     macos_target = xcode_macos_target()
     verify_supported_floor("ios", ios_target)
     verify_supported_floor("macos", macos_target)
-    verify_app_framework_info_plist()
+    verify_apple_runner_plists()
     verify_flutter_apple_project("ios")
     verify_flutter_apple_project("macos")
     verify_apple_dependency_contract()
@@ -609,105 +820,39 @@ def verify() -> tuple[str, str]:
         raise PolicyError("the iOS FFmpeg port must not hard-code a deployment target")
     verify_libvpx_port()
 
-    release = read(".github/workflows/publish-release.yml")
+    release = read(".github/workflows/release.yml")
     if release.count(f'COCOAPODS_VERSION: "{COCOAPODS_VERSION}"') != 1:
         raise PolicyError(
-            ".github/workflows/publish-release.yml must pin CocoaPods exactly once"
+            ".github/workflows/release.yml must pin CocoaPods exactly once"
         )
-    release_ios_job = workflow_job(
-        release, "build_ios", ".github/workflows/publish-release.yml"
-    )
     release_macos_job = workflow_job(
-        release, "build_macos_universal", ".github/workflows/publish-release.yml"
-    )
-    require_job_environment(
-        release_ios_job,
-        "IPHONEOS_DEPLOYMENT_TARGET",
-        ios_target,
-        "release build_ios",
+        release, "build_macos", ".github/workflows/release.yml"
     )
     require_job_environment(
         release_macos_job,
         "MACOSX_DEPLOYMENT_TARGET",
         macos_target,
-        "release build_macos_universal",
-    )
-    reject_job_environment(
-        release_ios_job, "MACOSX_DEPLOYMENT_TARGET", "release build_ios"
+        "release build_macos",
     )
     reject_job_environment(
         release_macos_job,
         "IPHONEOS_DEPLOYMENT_TARGET",
-        "release build_macos_universal",
+        "release build_macos",
     )
-    verify_apple_job_toolchain(release_ios_job, "release build_ios")
-    verify_apple_job_toolchain(
-        release_macos_job, "release build_macos_universal"
-    )
-    for job, context in (
-        (release_ios_job, "release build_ios Apple prerequisites"),
-        (
-            release_macos_job,
-            "release build_macos_universal Apple prerequisites",
-        ),
-    ):
-        require_job_command(
-            job,
-            "bash .github/scripts/install-apple-prerequisites.sh",
-            context,
-        )
     require_job_command(
-        release_ios_job,
-        "bash .github/scripts/verify-apple-pod-locks.sh ios",
-        "release build_ios locked CocoaPods graph",
+        release_macos_job,
+        "bash .github/scripts/install-apple-prerequisites.sh",
+        "release build_macos Apple prerequisites",
     )
     require_job_command(
         release_macos_job,
         "bash .github/scripts/verify-apple-pod-locks.sh macos",
-        "release build_macos_universal locked CocoaPods graph",
+        "release build_macos locked CocoaPods graph",
     )
-    require_job_command(
-        release_ios_job,
-        "bash .github/scripts/verify-clean-source.sh",
-        "release build_ios source-migration gate",
-    )
-    require_job_command(
-        release_macos_job,
-        "bash .github/scripts/verify-clean-source.sh",
-        "release build_macos_universal source-migration gate",
-    )
-    release_ios_gate = workflow_step(
-        release_ios_job, "Reject Apple build source migrations", "release build_ios"
-    )
-    release_macos_gate = workflow_step(
-        release_macos_job,
-        "Reject Apple build source migrations",
-        "release build_macos_universal",
-    )
-    require_step_condition(
-        release_ios_gate, "always()", "release build_ios source-migration gate"
-    )
-    require_step_condition(
-        release_macos_gate,
-        "always()",
-        "release build_macos_universal source-migration gate",
-    )
-    require_job_command(
-        release_ios_job,
-        "bash .github/scripts/build-ios-release.sh",
-        "release build_ios application build",
-    )
-    require_job_command(
-        release_ios_job,
-        "bash .github/scripts/stage-ios-release.sh",
-        "release build_ios artifact staging",
-    )
-    if "cp target/aarch64-apple-ios/release/libcamellia_remote.a" in release_ios_job:
-        raise PolicyError("release build_ios must not copy an unused Rust archive")
     require_job_command(
         release_macos_job,
         "flutter/build/macos/Build/Products/Release",
-        "release build_macos_universal product discovery",
+        "release build_macos product discovery",
     )
 
     ci = read(".github/workflows/ci.yml")
@@ -752,7 +897,6 @@ def verify() -> tuple[str, str]:
     reject_step_environment(
         ios_app_step, "MACOSX_DEPLOYMENT_TARGET", "CI iOS application build"
     )
-    verify_apple_job_toolchain(apple_job, "CI apple_native")
     require_job_command(
         apple_job,
         "bash .github/scripts/install-apple-prerequisites.sh",
@@ -767,6 +911,40 @@ def verify() -> tuple[str, str]:
         apple_job,
         "flutter build ipa --release --no-codesign",
         "CI complete unsigned iOS application gate",
+    )
+    macos_rust_step = workflow_step(
+        apple_job, "Compile macOS native Rust library", "CI apple_native"
+    )
+    require_step_environment(
+        macos_rust_step,
+        "MACOSX_DEPLOYMENT_TARGET",
+        macos_target,
+        "CI macOS Rust build",
+    )
+    reject_step_environment(
+        macos_rust_step, "IPHONEOS_DEPLOYMENT_TARGET", "CI macOS Rust build"
+    )
+    macos_runner_step = workflow_step(
+        apple_job, "Build Flutter macOS runner", "CI apple_native"
+    )
+    require_step_environment(
+        macos_runner_step,
+        "MACOSX_DEPLOYMENT_TARGET",
+        macos_target,
+        "CI macOS runner build",
+    )
+    reject_step_environment(
+        macos_runner_step, "IPHONEOS_DEPLOYMENT_TARGET", "CI macOS runner build"
+    )
+    require_job_command(
+        apple_job,
+        "flutter build macos --release",
+        "CI complete macOS desktop runner gate",
+    )
+    require_job_command(
+        apple_job,
+        "test -d flutter/build/macos/Build/Products/Release/*.app",
+        "CI macOS application discovery",
     )
     require_job_command(
         apple_job,

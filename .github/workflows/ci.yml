@@ -335,7 +335,7 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios, aarch64-apple-darwin
 
       - name: Restore Cargo cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -407,9 +407,206 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET: "13.0"
         run: flutter build ipa --release --no-codesign
 
+      - name: Compile macOS native Rust library
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet arm64-osx \
+            --x-install-root="$VCPKG_ROOT/installed"
+          cargo build --locked --release \
+            --target aarch64-apple-darwin \
+            --lib \
+            --features flutter,hwcodec,screencapturekit,unix-file-copy-paste
+          mkdir -p target/release
+          cp target/aarch64-apple-darwin/release/libcamellia_remote.dylib target/release/libcamellia_remote.dylib
+
+      - name: Build Flutter macOS runner
+        working-directory: flutter
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: FLUTTER_XCODE_ARCHS="arm64" flutter build macos --release
+
+      - name: Verify macOS application discovery
+        run: |
+          test -d flutter/build/macos/Build/Products/Release/*.app
+          echo "macOS application bundle discovery OK"
+
       - name: Reject Apple build source migrations
         if: always()
         run: bash .github/scripts/verify-clean-source.sh
+
+  android_native:
+    name: Android native verification
+    needs: [metadata, generate_bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      JAVA_VERSION: "17"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Setup Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-linux-android
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: android-native
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Synchronize declared version
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+
+      - name: Prepare locked dependencies
+        run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
+
+      - name: Configure Android NDK
+        run: |
+          ANDROID_NDK_HOME="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          export ANDROID_NDK_HOME
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_NDK_HOME" >> "$GITHUB_ENV"
+
+      - name: Build Android client
+        run: python3 build.py android
+
+      - name: Validate Android package contracts
+        run: |
+          bash .github/scripts/check-android-package.sh --repo-check
+          bash .github/scripts/check-android-package.sh --apk flutter/build/app/outputs/flutter-apk/app-release.apk
+          bash .github/scripts/check-android-package.sh --aab flutter/build/app/outputs/bundle/release/app-release.aab
+          bash .github/scripts/check-android-package.sh --jni-dir flutter/android/app/src/main/jniLibs
+          python3 -m unittest discover -s .github/scripts/tests -p "test_android_*.py"
+
+      - name: Upload Android test artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-test-android
+          path: |
+            flutter/build/app/outputs/flutter-apk/app-release.apk
+            flutter/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 1
+
+  linux_native:
+    name: Linux native runner verification
+    needs: [metadata, generate_bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
+            libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxdo-dev libxfixes-dev libvpx-dev libyuv-dev gnupg nasm ninja-build pkg-config unzip wget
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux-native
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Synchronize declared version
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+
+      - name: Prepare locked dependencies
+        run: bash .github/scripts/prepare-dependencies.sh "$DEPENDENCY_MODE"
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          doNotCache: true
+          vcpkgDirectory: ${{ runner.temp }}/vcpkg
+
+      - name: Compile Linux native Rust library
+        run: |
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+          cargo build --locked --release --target x86_64-unknown-linux-gnu --lib --features flutter,hwcodec,unix-file-copy-paste
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-gnu/release/libcamellia_remote.so target/release/libcamellia_remote.so
+
+      - name: Build Flutter Linux runner
+        working-directory: flutter
+        run: flutter build linux --release
+
+      - name: Verify Linux package contracts
+        run: |
+          test -x flutter/build/linux/x64/release/bundle/camellia-remote
+          bash .github/scripts/package-linux.sh "${{ needs.metadata.outputs.version }}" "x64" "amd64" "x86_64"
+          bash .github/scripts/check-linux-package.sh "artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-linux-x64.deb" "flutter/build/linux/x64/release/bundle" "x86_64"
+          python3 -m unittest discover -s .github/scripts/tests -p "test_linux_*.py"
+
+      - name: Upload Linux test artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-test-linux
+          path: artifacts/camellia-remote-*.deb
+          if-no-files-found: error
+          retention-days: 1
 
   quality:
     name: Rust, Flutter, and Web quality
@@ -518,6 +715,8 @@ jobs:
       - windows_rust
       - windows_native
       - apple_native
+      - android_native
+      - linux_native
       - quality
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -531,6 +730,8 @@ jobs:
           WINDOWS_RUST_RESULT: ${{ needs.windows_rust.result }}
           WINDOWS_NATIVE_RESULT: ${{ needs.windows_native.result }}
           APPLE_NATIVE_RESULT: ${{ needs.apple_native.result }}
+          ANDROID_NATIVE_RESULT: ${{ needs.android_native.result }}
+          LINUX_NATIVE_RESULT: ${{ needs.linux_native.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
         run: |
           failure=false
@@ -549,6 +750,8 @@ jobs:
           require_success "Windows Rust smoke check" "$WINDOWS_RUST_RESULT"
           require_success "Windows native runner verification" "$WINDOWS_NATIVE_RESULT"
           require_success "Apple native smoke checks" "$APPLE_NATIVE_RESULT"
+          require_success "Android native verification" "$ANDROID_NATIVE_RESULT"
+          require_success "Linux native runner verification" "$LINUX_NATIVE_RESULT"
           require_success "Rust, Flutter, and Web quality" "$QUALITY_RESULT"
           if [[ "$failure" == "true" ]]; then
             exit 1
