@@ -50,6 +50,11 @@ jobs:
           python3 .github/scripts/tests/test_release_metadata.py
           python3 .github/scripts/release_metadata.py --github-output
 
+      - name: Test and validate source provenance
+        run: |
+          python3 .github/scripts/tests/test_source_provenance.py
+          python3 .github/scripts/validate_source_provenance.py --component camellia-remote-client
+
       - name: Resolve reproducible source timestamp
         id: source
         shell: bash

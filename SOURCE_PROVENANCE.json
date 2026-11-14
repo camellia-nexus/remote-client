@@ -2,10 +2,10 @@
   "schema_version": 1,
   "component": "camellia-remote-client",
   "source_repository": "https://github.com/XavierAlpha/rustdesk",
-  "source_commit": "cb2c7e57fc4dc5c00c59eee0603f465bc50805c",
+  "source_commit": "cb2c7e57fc4dc5c00c59eee0603f465bc50805c5",
   "upstream_repository": "https://github.com/rustdesk/rustdesk",
   "protocol_repository": "../remote-protocol.git",
-  "protocol_source_commit": "9007cf0cf6e0d87d077dd886f2bd167e6ffe3e02",
+  "protocol_source_commit": "4937f02903207247a2e2ef707487a78e4bb6d4da",
   "history_policy": "fresh-root-snapshot",
   "license": "AGPL-3.0-only"
 }
