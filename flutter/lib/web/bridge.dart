@@ -2078,9 +2078,11 @@ class RustdeskImpl {
   }
 
   bool isCustomClient({dynamic hint}) {
-    // Mirrors is_custom_client(): rebranding alone does not make this an
-    // OEM-restricted build, so no product feature is hidden.
-    return false;
+    return mainGetHardOption(key: "custom-client", hint: hint).isNotEmpty ||
+        isDisableSettings(hint: hint) ||
+        isDisableAb(hint: hint) ||
+        isDisableAccount(hint: hint) ||
+        isDisableGroupPanel(hint: hint);
   }
 
   bool isDisableSettings({dynamic hint}) {
@@ -2089,19 +2091,19 @@ class RustdeskImpl {
   }
 
   bool isDisableAb({dynamic hint}) {
-    return false;
+    return mainGetHardOption(key: "disable-ab", hint: hint) == "Y";
   }
 
   bool isDisableGroupPanel({dynamic hint}) {
-    return false;
+    return mainGetHardOption(key: "disable-group", hint: hint) == "Y";
   }
 
   bool isDisableAccount({dynamic hint}) {
-    return false;
+    return mainGetHardOption(key: "disable-account", hint: hint) == "Y";
   }
 
   bool isDisableInstallation({dynamic hint}) {
-    return false;
+    return mainGetHardOption(key: "disable-installation", hint: hint) == "Y";
   }
 
   Future<bool> isPresetPassword({dynamic hint}) {

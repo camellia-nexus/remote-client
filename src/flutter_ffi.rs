@@ -2020,12 +2020,19 @@ pub fn main_start_dbus_server() {
     }
 }
 
+static AB_SAVE_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+static GROUP_SAVE_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 pub fn main_save_ab(json: String) {
     if json.len() > 1024 {
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
+            let _lock = AB_SAVE_LOCK.lock().unwrap();
             config::Ab::store(json);
         });
     } else {
+        let _lock = AB_SAVE_LOCK.lock().unwrap();
         config::Ab::store(json);
     }
 }
@@ -2040,10 +2047,12 @@ pub fn main_load_ab() -> String {
 
 pub fn main_save_group(json: String) {
     if json.len() > 1024 {
-        std::thread::spawn(|| {
+        std::thread::spawn(move || {
+            let _lock = GROUP_SAVE_LOCK.lock().unwrap();
             config::Group::store(json);
         });
     } else {
+        let _lock = GROUP_SAVE_LOCK.lock().unwrap();
         config::Group::store(json);
     }
 }
@@ -2725,7 +2734,7 @@ pub fn is_disable_account() -> bool {
 
 #[frb(sync)]
 pub fn is_disable_group_panel() -> bool {
-    false
+    config::is_disable_group()
 }
 
 // windows only
