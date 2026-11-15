@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 
 from . import transport
 from .batch_operations import (
@@ -46,19 +47,25 @@ def replayable_mutation(
 
 def get_personal_ab(url, token):
     """Get personal address book GUID"""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    response = transport.get(f"{url}/api/ab/personal", headers=headers)
+    response = transport.post(f"{url}/api/ab/personal", headers=headers, json={})
 
     if response.status_code != 200:
-        return f"Error: {response.status_code}"
+        print(f"Error: HTTP {response.status_code}")
+        sys.exit(1)
 
-    return response.json()
+    response_json = response.json()
+    if "error" in response_json:
+        print("Error: Management rejected the request")
+        sys.exit(1)
+
+    return response_json
 
 
 def view_shared_abs(url, token, name=None):
     """View all shared address books (excluding personal ones)"""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     pageSize = 30
     params = {
         "name": name,
@@ -77,17 +84,17 @@ def view_shared_abs(url, token, name=None):
     while True:
         current += 1
         filtered_params["current"] = current
-        response = transport.get(
-            f"{url}/api/ab/shared/profiles", headers=headers, params=filtered_params
+        response = transport.post(
+            f"{url}/api/ab/shared/profiles", headers=headers, params=filtered_params, json={}
         )
         if response.status_code != 200:
             print(f"Error: HTTP {response.status_code}")
-            exit(1)
+            sys.exit(1)
 
         response_json = response.json()
         if "error" in response_json:
             print("Error: Management rejected the request")
-            exit(1)
+            sys.exit(1)
 
         data = response_json.get("data", [])
         abs.extend(data)
@@ -110,7 +117,7 @@ def get_ab_by_name(url, token, ab_name):
 
 def view_ab_peers(url, token, ab_guid, peer_id=None, alias=None):
     """View peers in an address book"""
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     pageSize = 30
     params = {
         "ab": ab_guid,
@@ -131,17 +138,17 @@ def view_ab_peers(url, token, ab_guid, peer_id=None, alias=None):
     while True:
         current += 1
         filtered_params["current"] = current
-        response = transport.get(
-            f"{url}/api/ab/peers", headers=headers, params=filtered_params
+        response = transport.post(
+            f"{url}/api/ab/peers", headers=headers, params=filtered_params, json={}
         )
         if response.status_code != 200:
             print(f"Error: HTTP {response.status_code}")
-            exit(1)
+            sys.exit(1)
 
         response_json = response.json()
         if "error" in response_json:
             print("Error: Management rejected the request")
-            exit(1)
+            sys.exit(1)
 
         data = response_json.get("data", [])
         peers.extend(data)
@@ -155,33 +162,35 @@ def view_ab_peers(url, token, ab_guid, peer_id=None, alias=None):
 
 def view_ab_tags(url, token, ab_guid):
     """View tags in an address book"""
-    headers = {"Authorization": f"Bearer {token}"}
-    response = transport.get(f"{url}/api/ab/tags/{ab_guid}", headers=headers)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    response = transport.post(f"{url}/api/ab/tags/{ab_guid}", headers=headers, json={})
     response_json = check_response(response)
 
+    tags = response_json.get("data", []) if isinstance(response_json, dict) else response_json
+
     # Format color values as hex
-    if response_json:
-        for tag in response_json:
-            if "color" in tag and tag["color"] is not None:
+    if isinstance(tags, list):
+        for tag in tags:
+            if isinstance(tag, dict) and "color" in tag and tag["color"] is not None:
                 # Convert color to hex format
                 color_value = tag["color"]
                 if isinstance(color_value, int):
                     tag["color"] = f"0x{color_value:08X}"
 
-    return response_json if response_json else []
+    return tags if isinstance(tags, list) else []
 
 
 def check_response(response):
     """Check API response and return result"""
     if response.status_code != 200:
         print(f"Error: HTTP {response.status_code}")
-        exit(1)
+        sys.exit(1)
 
     try:
         response_json = response.json()
         if "error" in response_json:
             print("Error: Management rejected the request")
-            exit(1)
+            sys.exit(1)
         return response_json
     except ValueError:
         fail("Management response is not JSON")
@@ -368,10 +377,14 @@ def add_tag(
         # Get existing tags to avoid color conflicts
         try:
             existing_tags = view_ab_tags(url, token, ab_guid)
-            existing_colors = [tag.get("color", 0) for tag in existing_tags]
+            existing_colors = [
+                int(tag["color"], 16) if isinstance(tag.get("color"), str) and tag["color"].startswith("0x")
+                else tag.get("color", 0)
+                for tag in existing_tags if isinstance(tag, dict)
+            ]
             color = str2color(tag_name, existing_colors)
-        except:
-            # Fallback to default color if we can't get existing tags
+        except (KeyError, ValueError, TypeError):
+            # Fallback to default color if tag list structure is empty/unexpected
             color = str2color(tag_name)
 
     payload = {
@@ -597,12 +610,12 @@ def view_ab_rules(url, token, ab_guid):
         response = transport.get(f"{url}/api/ab/rules", headers=headers, params=params)
         if response.status_code != 200:
             print(f"Error: HTTP {response.status_code}")
-            exit(1)
+            sys.exit(1)
 
         response_json = response.json()
         if "error" in response_json:
             print("Error: Management rejected the request")
-            exit(1)
+            sys.exit(1)
 
         data = response_json.get("data", [])
         rules.extend(data)
@@ -705,7 +718,7 @@ def delete_ab_rules(
 def main(argv=None):
     def parse_color(value):
         """Parse color value - supports both hex (0xFF00FF00) and decimal"""
-        if value.startswith("0x") or value.startswith("0X"):
+        if value.startswith(("0x", "0X")):
             return int(value, 16)
         else:
             return int(value)

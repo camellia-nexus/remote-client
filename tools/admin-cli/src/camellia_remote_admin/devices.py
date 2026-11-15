@@ -1,5 +1,5 @@
 import argparse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from . import transport
 from .batch_operations import (
@@ -65,7 +65,7 @@ def view(
                 fail("Device last_online field is not a valid timestamp")
             if last_online.tzinfo is None:
                 fail("Device last_online field requires a timezone")
-            if (datetime.now(timezone.utc) - last_online).days >= offline_days:
+            if (datetime.now(UTC) - last_online).days >= offline_days:
                 devices.append(device)
 
         total = response_json.get("total", 0)

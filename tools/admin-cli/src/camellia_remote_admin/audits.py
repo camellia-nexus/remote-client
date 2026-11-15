@@ -1,6 +1,7 @@
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+import sys
+from datetime import UTC, datetime, timedelta
 
 from . import transport
 from .outcomes import CliError
@@ -12,31 +13,40 @@ def format_timestamp(timestamp):
         return None
     try:
         # Convert to local time
-        local_dt = datetime.fromtimestamp(timestamp)
+        local_dt = datetime.fromtimestamp(timestamp, tz=UTC).astimezone()
         return local_dt.strftime("%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):
         return timestamp
 
 
 def parse_local_time_to_utc_string(time_str):
-    """Parse local time string to UTC time string for API filtering"""
+    """Parse local or explicit offset time string to UTC time string for API filtering.
+
+    Interprets naive strings using the query date's local timezone rules (preventing
+    DST seasonal shift) and supports ISO 8601 strings with explicit UTC or offset values.
+    """
+    if not isinstance(time_str, str) or not time_str.strip():
+        return None
+    time_str = time_str.strip()
+
+    # Try ISO format first (handles explicit offsets, Z, T separator, etc.)
     try:
-        # Parse the local time string
-        local_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f")
-        # Make the datetime object timezone-aware using system's local timezone
-        local_dt = local_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-        utc_dt = local_dt.astimezone(timezone.utc)
+        iso_candidate = time_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_candidate)
+        utc_dt = dt.astimezone(UTC)
         return utc_dt.strftime("%Y-%m-%d %H:%M:%S.000")
-    except ValueError:
+    except (ValueError, TypeError):
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            # Try without microseconds
-            local_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-            # Make the datetime object timezone-aware using system's local timezone
-            local_dt = local_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
-            utc_dt = local_dt.astimezone(timezone.utc)
+            local_dt = datetime.strptime(time_str, fmt)  # noqa: DTZ007
+            utc_dt = local_dt.astimezone(UTC)
             return utc_dt.strftime("%Y-%m-%d %H:%M:%S.000")
         except ValueError:
-            return None
+            continue
+
+    return None
 
 
 def get_connection_type_name(conn_type):
@@ -155,13 +165,13 @@ def check_response(response):
     """Check API response and return result"""
     if response.status_code != 200:
         print(f"Error: HTTP {response.status_code}")
-        exit(1)
+        sys.exit(1)
 
     try:
         response_json = response.json()
         if "error" in response_json:
             print("Error: Management rejected the request")
-            exit(1)
+            sys.exit(1)
         return response_json
     except ValueError:
         raise CliError("Management response is not JSON") from None
@@ -198,10 +208,10 @@ def view_audits_common(
     # Handle time filters
     if days_ago is not None:
         # Calculate datetime from days ago
-        target_time = datetime.now() - timedelta(days=days_ago)
+        target_time = datetime.now(tz=UTC) - timedelta(days=days_ago)
         # Convert to UTC time string using system timezone
         utc_timestamp = target_time.timestamp()
-        utc_dt = datetime.fromtimestamp(utc_timestamp, timezone.utc)
+        utc_dt = datetime.fromtimestamp(utc_timestamp, UTC)
         params["created_at"] = utc_dt.strftime("%Y-%m-%d %H:%M:%S.000")
     elif created_at:
         # Parse local time string and convert to UTC time string
