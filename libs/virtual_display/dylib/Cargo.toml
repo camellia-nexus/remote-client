@@ -2,6 +2,11 @@
 name = "dylib_virtual_display"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+repository = "https://github.com/camellia-nexus/remote-client"
+publish = false
+description = "Virtual display dylib implementation for Camellia Remote"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

@@ -30,6 +30,18 @@ class FontAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("SIL OPEN FONT LICENSE Version 1.1", license_text)
 
+        # LEGAL-002: Verify bundled legal compliance assets in flutter/assets/legal/
+        legal_dir = ROOT / "flutter" / "assets" / "legal"
+        self.assertTrue((legal_dir / "OFL.txt").is_file(), "OFL.txt missing in assets/legal")
+        self.assertTrue((legal_dir / "LICENSE").is_file(), "LICENSE missing in assets/legal")
+        self.assertTrue((legal_dir / "NOTICE").is_file(), "NOTICE missing in assets/legal")
+        self.assertTrue((legal_dir / "SOURCE_PROVENANCE.json").is_file(), "SOURCE_PROVENANCE missing in assets/legal")
+
+        # Verify pubspec.yaml includes legal assets
+        pubspec_text = (ROOT / "flutter" / "pubspec.yaml").read_text(encoding="utf-8")
+        self.assertIn("- assets/legal/", pubspec_text, "assets/legal/ must be declared in pubspec.yaml")
+        self.assertIn("- assets/fonts/OFL.txt", pubspec_text, "assets/fonts/OFL.txt must be declared in pubspec.yaml")
+
 
 if __name__ == "__main__":
     unittest.main()

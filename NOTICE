@@ -77,3 +77,24 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
 ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Workspace Components Licensing & Attribution
+
+The client repository includes the following workspace components:
+1. AGPL-3.0-only Core and Platform Integrations:
+   - camellia-remote (root crate)
+   - camellia-remote-protocol (libs/camellia_remote_protocol)
+   - camellia-platform-power (libs/platform_power)
+   - camellia-printing (libs/printing)
+   - camellia-windows-bootstrap (libs/windows-bootstrap)
+   - camellia-remote-portable-packer (libs/portable)
+   - clipboard (libs/clipboard)
+   - remote_printer (libs/remote_printer)
+   - virtual_display & dylib_virtual_display (libs/virtual_display)
+   - libxdo-sys stub (libs/libxdo-sys-stub)
+   - hwcodec (libs/hwcodec)
+
+2. Third-Party Permissive Components:
+   - scrap (libs/scrap): MIT License (Copyright (c) Ram <quadrupleslap@gmail.com>, retained in libs/scrap/LICENSE)
+   - enigo (libs/enigo): MIT License (Copyright (c) Dustin Bensing, retained in libs/enigo/LICENSE)
+   - magnum-opus (libs/magnum-opus): MIT / Apache-2.0 License

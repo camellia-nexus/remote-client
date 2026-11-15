@@ -2,7 +2,11 @@
 name = "camellia-remote-portable-packer"
 version = "0.1.0"
 edition = "2021"
-description = "Camellia Remote Desktop"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+repository = "https://github.com/camellia-nexus/remote-client"
+publish = false
+description = "Camellia Remote Desktop portable service packer"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
