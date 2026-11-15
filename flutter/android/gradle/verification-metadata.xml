@@ -84,6 +84,14 @@
             <sha256 value="9473e63ac67c4b43ee5db9c5d1fd8858b60a738d435a20245de0b1bfd5413a36"/>
          </artifact>
       </component>
+      <component group="com.squareup" name="javawriter" version="2.5.0">
+         <artifact name="javawriter-2.5.0.jar">
+            <sha256 value="fcfb09fb0ea0aa97d3cfe7ea792398081348e468f126b3603cb3803f240197f0" origin="MavenRepo"/>
+         </artifact>
+         <artifact name="javawriter-2.5.0.pom">
+            <sha256 value="e1abd7f1116cf5e0c59947693e2189208ec94296b2a3394c959e3511d399a7b0" origin="MavenRepo"/>
+         </artifact>
+      </component>
       <component group="org.gradle.kotlin" name="gradle-kotlin-dsl-plugins" version="6.5.2">
          <artifact name="gradle-kotlin-dsl-plugins-6.5.2.jar">
             <sha256 value="3bff4a0700e1c815d194489f07bba06cb190e8f29b773d37cfee37ac8d5c7644"/>
@@ -124,6 +132,24 @@
             <sha256 value="4eb87defec3e7c2fece0e1a1ecdf22a70cdd61898262555b1d92e7c7b3f3b95d" origin="Gradle Central Plugin Repository">
                <also-trust value="ad436ee59c91259d6dc67dfde6a8bff00b26524d4123afa61053d1040a963a19"/>
             </sha256>
+         </artifact>
+      </component>
+      <component group="org.ow2" name="ow2" version="1.5.1">
+         <artifact name="ow2-1.5.1.pom">
+            <sha256 value="321ddbb7ee6fe4f53dea6b4cd6db74154d6bfa42391c1f763b361b9f485acf05" origin="MavenRepo"/>
+         </artifact>
+      </component>
+      <component group="org.ow2.asm" name="asm" version="9.7.1">
+         <artifact name="asm-9.7.1.jar">
+            <sha256 value="8cadd43ac5eb6d09de05faecca38b917a040bb9139c7edeb4cc81c740b713281" origin="MavenRepo"/>
+         </artifact>
+         <artifact name="asm-9.7.1.pom">
+            <sha256 value="7229b03b30a73ee91008072d9e4569a51d8547fae8c50f527841aef4c1b0baa8" origin="MavenRepo"/>
+         </artifact>
+      </component>
+      <component group="org.sonatype.oss" name="oss-parent" version="7">
+         <artifact name="oss-parent-7.pom">
+            <sha256 value="b51f8867c92b6a722499557fc3a1fdea77bdf9ef574722fe90ce436a29559454" origin="MavenRepo"/>
          </artifact>
       </component>
    </components>
