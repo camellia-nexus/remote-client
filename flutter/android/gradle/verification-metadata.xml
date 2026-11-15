@@ -33,6 +33,10 @@
          <trust group="^org\.jvnet(\..*)?" regex="true" reason="JVNet libraries"/>
          <trust group="^org\.tensorflow(\..*)?" regex="true" reason="TensorFlow Lite metadata"/>
          <trust group="^kr\.motd\.maven(\..*)?" regex="true" reason="kr.motd.maven os-maven-plugin for native toolchain resolution"/>
+         <trust group="^io\.grpc(\..*)?" regex="true" reason="io.grpc dependencies for Android plugins"/>
+         <trust group="^org\.codehaus(\..*)?" regex="true" reason="Codehaus Mojo dependencies"/>
+         <trust group="^io\.netty(\..*)?" regex="true" reason="Netty network transport for gRPC"/>
+         <trust group="^com\.google\.protobuf(\..*)?" regex="true" reason="Google Protobuf toolchain"/>
       </trusted-artifacts>
    </configuration>
    <components>
