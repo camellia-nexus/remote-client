@@ -7,8 +7,9 @@
       <trusted-artifacts>
          <trust group="^org\.jetbrains(\..*)?" regex="true" reason="JetBrains annotations, Kotlin toolchain and Gradle plugins"/>
          <trust group="^org\.gradle(\..*)?" regex="true" reason="Gradle official and Kotlin DSL plugins"/>
-         <trust group="^com\.google\.errorprone$" regex="true" reason="Google errorprone annotations"/>
-         <trust group="^com\.google\.code\.gson$" regex="true" reason="Google GSON library"/>
+         <trust group="^com\.android(\..*)?" regex="true" reason="Android Gradle Plugin and Google Android build tools"/>
+         <trust group="^com\.google(\..*)?" regex="true" reason="Google libraries, annotations, and plugins"/>
+         <trust group="^androidx(\..*)?" regex="true" reason="AndroidX official libraries and plugins"/>
          <trust group="^dev\.flutter(\..*)?" regex="true" reason="Flutter tools and plugin loaders"/>
       </trusted-artifacts>
    </configuration>
