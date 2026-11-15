@@ -249,7 +249,10 @@ static ACTIVE_GEOMETRY_UNEXPECTED_ERROR: AtomicBool = AtomicBool::new(false);
 /// Catches BadWindow errors during active window geometry queries, attributes errors
 /// strictly by Display pointer rather than process-wide mutation, and forwards
 /// non-query errors to the previously installed handler.
-unsafe extern "C" fn unified_x_error_handler(display: *mut c_void, event: *mut XErrorEvent) -> c_int {
+unsafe extern "C" fn unified_x_error_handler(
+    display: *mut c_void,
+    event: *mut XErrorEvent,
+) -> c_int {
     if !event.is_null() {
         let active_disp = ACTIVE_GEOMETRY_DISPLAY.load(Ordering::SeqCst);
         let in_flight = ACTIVE_GEOMETRY_IN_FLIGHT.load(Ordering::SeqCst);

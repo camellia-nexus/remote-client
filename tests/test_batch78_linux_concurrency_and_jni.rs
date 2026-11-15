@@ -194,7 +194,10 @@ fn test_ffi001_android_jni_panic_and_bounds_contracts() {
     let client_dir = get_workspace_client_dir();
     let ffi_path = client_dir.join("libs/scrap/src/android/ffi.rs");
 
-    assert!(ffi_path.exists(), "ffi.rs must exist at libs/scrap/src/android/ffi.rs");
+    assert!(
+        ffi_path.exists(),
+        "ffi.rs must exist at libs/scrap/src/android/ffi.rs"
+    );
 
     let content = fs::read_to_string(&ffi_path).expect("Failed to read ffi.rs");
 
@@ -206,7 +209,8 @@ fn test_ffi001_android_jni_panic_and_bounds_contracts() {
 
     // 2. Safe processing function signature
     assert!(
-        content.contains("pub fn process_clipboard_bytes(data: &[u8]) -> Result<bool, &'static str>"),
+        content
+            .contains("pub fn process_clipboard_bytes(data: &[u8]) -> Result<bool, &'static str>"),
         "FFI-001 violation: process_clipboard_bytes must be declared with bounds checks"
     );
 
