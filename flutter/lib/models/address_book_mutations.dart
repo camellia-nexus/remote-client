@@ -237,6 +237,19 @@ Object? _publicMutationIntent(Object? value, [int depth = 0]) {
   if (depth > 256) {
     throw const AddressBookMutationException('invalid_payload');
   }
+  if (value is num) {
+    if (value.isNaN || value.isInfinite) {
+      throw const AddressBookMutationException('invalid_payload');
+    }
+    if (value == 0) return 0; // Collapses -0.0 to 0
+    if (value is double &&
+        value.truncateToDouble() == value &&
+        value >= -9007199254740991 &&
+        value <= 9007199254740991) {
+      return value.toInt(); // Normalizes 1.0 to 1 on native Dart VM
+    }
+    return value;
+  }
   if (value is Map) {
     if (value.keys.any((key) => key is! String)) {
       throw const AddressBookMutationException('invalid_payload');
@@ -260,6 +273,9 @@ Object? _publicMutationIntent(Object? value, [int depth = 0]) {
   }
   return value;
 }
+
+Object? publicMutationIntent(Object? value, [int depth = 0]) =>
+    _publicMutationIntent(value, depth);
 
 String addressBookRequestDigest({
   required String operation,

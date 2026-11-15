@@ -63,12 +63,46 @@ bool _isPersonalGuid(String? guid) {
 
 enum ForcePullAb { listAndCurrent, current }
 
+String getProfileDisplayName(AbProfile profile, [List<AbProfile>? profiles]) {
+  final list = profiles ??
+      (() {
+        try {
+          return gFFI.abModel.profiles;
+        } catch (_) {
+          return [profile];
+        }
+      })();
+  final count = list.where((p) => p.name == profile.name).length;
+  if (count > 1 && profile.owner.isNotEmpty) {
+    return "${profile.name} (${profile.owner})";
+  }
+  return profile.name;
+}
+
 class AbModel {
   final addressbooks = Map<String, BaseAb>.fromEntries([]).obs;
+  final RxString _currentGuid = ''.obs;
+  RxString get currentGuid => _currentGuid;
   final RxString _currentName = ''.obs;
-  RxString get currentName => _currentName;
+  RxString get currentName {
+    _currentName.value = addressbooks[_currentGuid.value]?.name() ?? '';
+    return _currentName;
+  }
   final _dummyAb = DummyAb();
-  BaseAb get current => addressbooks[_currentName.value] ?? _dummyAb;
+  BaseAb get current => addressbooks[_currentGuid.value] ?? _dummyAb;
+
+  List<AbProfile> get profiles => addressbooks.values
+      .map((e) => e.sharedProfile())
+      .whereType<AbProfile>()
+      .toList();
+
+  String getProfileDisplayName(AbProfile profile) {
+    final count = profiles.where((p) => p.name == profile.name).length;
+    if (count > 1 && profile.owner.isNotEmpty) {
+      return "${profile.name} (${profile.owner})";
+    }
+    return profile.name;
+  }
 
   RxList<Peer> get currentAbPeers => current.peers;
   RxList<String> get currentAbTags => current.tags;
@@ -392,7 +426,7 @@ class AbModel {
 
   late final Peers peersModel;
 
-  WeakReference<FFI> parent;
+  WeakReference<FFI>? parent;
 
   Timer? _pollerTimer;
   bool _disposed = false;
@@ -468,7 +502,7 @@ class AbModel {
     _pollerTimer = null;
   }
 
-  AbModel(this.parent) {
+  AbModel([this.parent]) {
     addressbooks.clear();
     peersModel = Peers(
       name: PeersModelName.addressBook,
@@ -480,7 +514,7 @@ class AbModel {
     }
   }
 
-  reset() async {
+  Future<void> reset() async {
     print("reset ab model");
     _listEpoch++;
     _mutationViewEpoch++;
@@ -494,10 +528,12 @@ class AbModel {
       book.invalidateSnapshot();
     }
     addressbooks.clear();
-    _currentName.value = '';
+    _currentGuid.value = '';
     _listPullError.value = '';
     _pulledOnce = false;
-    await bind.mainClearAb();
+    if (!isTest) {
+      await bind.mainClearAb();
+    }
     listInitialized = false;
   }
 
@@ -585,35 +621,29 @@ class AbModel {
             token != bind.mainGetLocalOption(key: 'access_token')) {
           throw const AddressBookSnapshotException('context_changed');
         }
-        addressbooks.removeWhere((key, value) {
-          final removed =
-              abProfiles.firstWhereOrNull((e) => e.name == key) == null;
-          if (removed && value is Ab) value.invalidateSnapshot();
-          return removed;
-        });
-        for (int i = 0; i < abProfiles.length; i++) {
-          AbProfile p = abProfiles[i];
-          if (addressbooks[p.name]?.sharedProfile()?.guid == p.guid) {
-            addressbooks[p.name]?.setSharedProfile(p);
-          } else {
-            final previous = addressbooks[p.name];
-            if (previous is Ab) previous.invalidateSnapshot();
-            addressbooks[p.name] = Ab(p, p.guid == _personalAbGuid);
-          }
-        }
-        // set current address book name
+        setAbProfiles(abProfiles);
+        // set current address book guid
         if (!listInitialized) {
           listInitialized = true;
           trySetCurrentToLast();
         }
-        if (!addressbooks.containsKey(_currentName.value)) {
-          setCurrentName(_personalAbName);
+        if (!addressbooks.containsKey(_currentGuid.value)) {
+          if (_personalAbGuid != null &&
+              addressbooks.containsKey(_personalAbGuid)) {
+            await setCurrentGuid(_personalAbGuid!);
+          } else if (addressbooks.isNotEmpty) {
+            await setCurrentGuid(addressbooks.keys.first);
+          } else {
+            _currentGuid.value = '';
+          }
         }
         // pull current address book
         await current.pullAb(quiet: quiet);
         // try initialize personal address book
         if (!current.isPersonal()) {
-          final personalAb = addressbooks[_personalAbName];
+          final personalAb = _personalAbGuid != null
+              ? addressbooks[_personalAbGuid]
+              : null;
           if (personalAb != null && !personalAb.initialized) {
             await personalAb.pullAb(quiet: quiet);
           }
@@ -789,7 +819,7 @@ class AbModel {
               for (final profile in data) {
                 AddressBookSnapshotIdentity.parse(profile);
                 final u = AbProfile.fromJson(profile);
-                int index = profiles.indexWhere((e) => e.name == u.name);
+                int index = profiles.indexWhere((e) => e.guid == u.guid);
                 if (index < 0) {
                   profiles.add(u);
                 } else {
@@ -808,14 +838,53 @@ class AbModel {
     return false;
   }
 
+  void setAbProfiles(List<AbProfile> abProfiles) {
+    addressbooks.removeWhere((key, value) {
+      final removed =
+          abProfiles.firstWhereOrNull((e) => e.guid == key) == null;
+      if (removed && value is Ab) value.invalidateSnapshot();
+      return removed;
+    });
+    for (int i = 0; i < abProfiles.length; i++) {
+      AbProfile p = abProfiles[i];
+      final isPersonal = p.guid == _personalAbGuid ||
+          _isPersonalGuid(p.guid) ||
+          p.name == _personalAddressBookName;
+      if (isPersonal) {
+        _personalAbGuid ??= p.guid;
+        _personalAbName = p.name;
+      }
+      if (addressbooks[p.guid] != null) {
+        addressbooks[p.guid]?.setSharedProfile(p);
+      } else {
+        final previous = addressbooks[p.guid];
+        if (previous is Ab) previous.invalidateSnapshot();
+        addressbooks[p.guid] = Ab(p, isPersonal);
+      }
+    }
+  }
+
+  BaseAb? _findBook(String guidOrName) {
+    if (addressbooks.containsKey(guidOrName)) {
+      return addressbooks[guidOrName];
+    }
+    for (final book in addressbooks.values) {
+      if (book.name() == guidOrName ||
+          book.sharedProfile()?.name == guidOrName) {
+        return book;
+      }
+    }
+    return null;
+  }
+
   // #endregion
 
   // #region rule
   List<String> addressBooksCanWrite() {
     List<String> list = [];
-    addressbooks.forEach((key, value) async {
+    addressbooks.forEach((key, value) {
       if (value.canWrite()) {
-        list.add(key);
+        list.add(value.name());
       }
     });
     return list;
@@ -832,7 +901,7 @@ class AbModel {
     String note,
   ) async {
     if (currentAbPeers.where((element) => element.id == id).isNotEmpty) {
-      return "$id already exists in address book $_currentName";
+      return "$id already exists in address book ${current.name()}";
     }
     Map<String, dynamic> peer = {'id': id, 'alias': alias, 'tags': tags};
     // avoid set existing password to empty
@@ -842,7 +911,7 @@ class AbModel {
     if (note.isNotEmpty) {
       peer['note'] = note;
     }
-    final ret = await addPeersTo([peer], _currentName.value);
+    final ret = await addPeersTo([peer], _currentGuid.value);
     _syncAllFromRecent = true;
     return ret;
   }
@@ -850,7 +919,7 @@ class AbModel {
   // Preserve absent fields and caller-owned selections; the service freezes the
   // whole batch before its first await.
   Future<String?> addPeersTo(List<Map<String, dynamic>> ps, String name) async {
-    final book = addressbooks[name];
+    final book = _findBook(name);
     if (book == null) return 'Address book is unavailable.';
     final selection = ps.map((peer) => Map<String, dynamic>.of(peer)).toList();
     for (final peer in selection) {
@@ -874,7 +943,7 @@ class AbModel {
       current.changeNote(id: id, note: note);
 
   Future<bool> changePersonalHashPassword(String id, String hash) async {
-    final book = addressbooks[_personalAbName];
+    final book = _findBook(_personalAbGuid ?? _personalAbName);
     return book == null ? false : book.changePersonalHashPassword(id, hash);
   }
 
@@ -883,7 +952,7 @@ class AbModel {
     String id,
     String password,
   ) async {
-    final book = addressbooks[abName];
+    final book = _findBook(abName);
     return book == null ? false : book.changeSharedPassword(id, password);
   }
 
@@ -999,7 +1068,8 @@ class AbModel {
   // #endregion
 
   // #region cache
-  _saveCache() {
+  void _saveCache() {
+    if (isTest) return;
     try {
       var ab_entries = _serializeCache();
       Map<String, dynamic> m = <String, dynamic>{
@@ -1012,13 +1082,18 @@ class AbModel {
     }
   }
 
+  List<dynamic> serializeCache() => _serializeCache();
+
   List<dynamic> _serializeCache() {
     var res = [];
     addressbooks.forEach((key, value) {
-      if (!value.isPersonal() && key != current.name()) return;
+      if (!value.isPersonal() && !_isPersonalGuid(key) && key != _currentGuid.value) return;
+      final profile = value.sharedProfile();
+      final guid = profile?.guid.isNotEmpty == true ? profile!.guid : key;
       res.add({
-        "guid": value.sharedProfile()?.guid ?? '',
-        "name": key,
+        "guid": guid,
+        "name": value.name(),
+        "owner": profile?.owner ?? '',
         "tags": value.tags,
         "peers": value.peers
             .map((e) => e.toCustomJson(includingHash: value.isPersonal()))
@@ -1029,10 +1104,25 @@ class AbModel {
     return res;
   }
 
-  trySetCurrentToLast() {
-    final name = bind.getLocalFlutterOption(k: kOptionCurrentAbName);
-    if (addressbooks.containsKey(name)) {
-      _currentName.value = name;
+  void trySetCurrentToLast() {
+    final last = bind.getLocalFlutterOption(k: kOptionCurrentAbName);
+    if (addressbooks.containsKey(last)) {
+      _currentGuid.value = last;
+    } else {
+      MapEntry<String, BaseAb>? entry;
+      for (final e in addressbooks.entries) {
+        if (e.value.name() == last) {
+          entry = e;
+          break;
+        }
+      }
+      if (entry != null) {
+        _currentGuid.value = entry.key;
+      } else if (_personalAbGuid != null && addressbooks.containsKey(_personalAbGuid)) {
+        _currentGuid.value = _personalAbGuid!;
+      } else if (addressbooks.isNotEmpty) {
+        _currentGuid.value = addressbooks.keys.first;
+      }
     }
   }
 
@@ -1053,52 +1143,77 @@ class AbModel {
     }
   }
 
-  _deserializeCache(dynamic data) {
+  void deserializeCache(dynamic data) => _deserializeCache(data);
+
+  void _deserializeCache(dynamic data) {
     if (data == null) return;
     reset();
     final abEntries = data['ab_entries'];
+    List<dynamic> entriesList = [];
     if (abEntries is List) {
-      for (var i = 0; i < abEntries.length; i++) {
-        var abEntry = abEntries[i];
-        if (abEntry is Map<String, dynamic>) {
-          var guid = abEntry['guid'];
-          var name = abEntry['name'];
-          if (name == null) {
-            continue;
-          }
-          final nameStr = name.toString();
-          if (guid == null) {
-            continue;
-          }
-          final guidStr = guid.toString();
-          final isPersonal = _isPersonalGuid(guidStr);
-          if (isPersonal) {
-            _personalAbName = nameStr;
-          }
-          final BaseAb ab = Ab(
-            AbProfile(guidStr, nameStr, '', '', ShareRule.read.value, null),
-            isPersonal,
-          );
-          addressbooks[nameStr] = ab;
-          if (abEntry['tags'] is List) {
-            ab.tags.value = (abEntry['tags'] as List)
-                .map((e) => e.toString())
-                .toList();
-          }
-          if (abEntry['peers'] is List) {
-            for (var peer in abEntry['peers']) {
-              ab.peers.add(Peer.fromJson(peer));
-            }
-          }
-          if (abEntry['tag_colors'] is String) {
-            Map<String, dynamic> map = jsonDecode(abEntry['tag_colors']);
-            ab.tagColors.value = Map<String, int>.from(map);
-          }
+      entriesList = abEntries;
+    } else if (abEntries is Map) {
+      for (final entry in abEntries.entries) {
+        if (entry.value is Map) {
+          final map = Map<String, dynamic>.from(entry.value as Map);
+          map.putIfAbsent('name', () => entry.key);
+          map.putIfAbsent('guid', () => entry.key);
+          entriesList.add(map);
         }
       }
-      if (abEntries.isNotEmpty) {
-        _callbackPeerUpdate();
+    }
+
+    for (var i = 0; i < entriesList.length; i++) {
+      var abEntry = entriesList[i];
+      if (abEntry is Map) {
+        final map = Map<String, dynamic>.from(abEntry);
+        var guid = map['guid'];
+        var name = map['name'];
+        if (name == null && guid == null) {
+          continue;
+        }
+        final nameStr = (name ?? guid).toString();
+        String guidStr = guid?.toString() ?? '';
+        if (guidStr.isEmpty) {
+          guidStr = nameStr;
+        }
+        final isPersonal = _isPersonalGuid(guidStr) || nameStr == _personalAddressBookName;
+        if (isPersonal) {
+          _personalAbName = nameStr;
+          _personalAbGuid = guidStr;
+        }
+        final ownerStr = map['owner']?.toString() ?? '';
+        final BaseAb ab = Ab(
+          AbProfile(guidStr, nameStr, ownerStr, '', ShareRule.read.value, null),
+          isPersonal,
+        );
+        addressbooks[guidStr] = ab;
+        if (map['tags'] is List) {
+          ab.tags.value = (map['tags'] as List)
+              .map((e) => e.toString())
+              .toList();
+        }
+        if (map['peers'] is List) {
+          for (var peer in map['peers']) {
+            if (peer is Map) {
+              ab.peers.add(Peer.fromJson(Map<String, dynamic>.from(peer)));
+            }
+          }
+        }
+        if (map['tag_colors'] is String) {
+          try {
+            Map<String, dynamic> colorMap = jsonDecode(map['tag_colors'] as String);
+            ab.tagColors.value = Map<String, int>.from(colorMap);
+          } catch (_) {}
+        } else if (map['tag_colors'] is Map) {
+          try {
+            ab.tagColors.value = Map<String, int>.from(map['tag_colors'] as Map);
+          } catch (_) {}
+        }
       }
+    }
+    if (addressbooks.isNotEmpty) {
+      _callbackPeerUpdate();
     }
   }
 
@@ -1147,6 +1262,10 @@ class AbModel {
   }
 
   List<String> addressBookNames() {
+    return addressbooks.values.map((v) => v.name()).toList();
+  }
+
+  List<String> addressBookGuids() {
     return addressbooks.keys.toList();
   }
 
@@ -1154,32 +1273,50 @@ class AbModel {
     return _personalAbName;
   }
 
-  Future<void> setCurrentName(String name) async {
-    final oldName = _currentName.value;
-    if (addressbooks.containsKey(name)) {
-      _currentName.value = name;
+  Future<void> setCurrentGuid(String guid) async {
+    final oldGuid = _currentGuid.value;
+    if (addressbooks.containsKey(guid)) {
+      _currentGuid.value = guid;
+    } else if (_personalAbGuid != null && addressbooks.containsKey(_personalAbGuid)) {
+      _currentGuid.value = _personalAbGuid!;
+    } else if (addressbooks.isNotEmpty) {
+      _currentGuid.value = addressbooks.keys.first;
     } else {
-      if (addressbooks.containsKey(_personalAbName)) {
-        _currentName.value = _personalAbName;
-      } else {
-        _currentName.value = '';
-      }
+      _currentGuid.value = '';
     }
-    if (oldName != _currentName.value) {
+    bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: _currentGuid.value);
+    if (oldGuid != _currentGuid.value) {
       _mutationViewEpoch++;
       _mutationCancellation?.cancel();
-      final previous = addressbooks[oldName];
+      final previous = addressbooks[oldGuid];
       if (previous is Ab && previous._readCancellation != null) {
         previous.invalidateSnapshot();
       }
     }
-    if (!current.initialized) {
+    if (!current.initialized && !isTest) {
       await current.pullAb(quiet: false);
     }
     _refreshTab();
-    if (oldName != _currentName.value) {
+    if (oldGuid != _currentGuid.value) {
       _syncAllFromRecent = true;
       _saveCache();
+    }
+  }
+
+  Future<void> setCurrentName(String name) async {
+    MapEntry<String, BaseAb>? entry;
+    for (final e in addressbooks.entries) {
+      if (e.value.name() == name || e.key == name) {
+        entry = e;
+        break;
+      }
+    }
+    if (entry != null) {
+      await setCurrentGuid(entry.key);
+    } else if (_personalAbGuid != null && addressbooks.containsKey(_personalAbGuid)) {
+      await setCurrentGuid(_personalAbGuid!);
+    } else {
+      await setCurrentGuid('');
     }
   }
 
@@ -1202,7 +1339,7 @@ class AbModel {
     List<String> v = [];
     addressbooks.forEach((key, value) {
       if (value.peers.any((e) => e.id == id)) {
-        v.add(key);
+        v.add(value.name());
       }
     });
     return v;
@@ -1290,7 +1427,7 @@ abstract class BaseAb {
     return false;
   }
 
-  Future<void> pullAb({quiet = false}) async {
+  Future<void> pullAb({bool quiet = false}) async {
     if (abPulling) return;
     abPulling = true;
     if (!quiet) {
@@ -1309,18 +1446,18 @@ abstract class BaseAb {
     }
   }
 
-  Future<bool> pullAbImpl({quiet = false});
+  Future<bool> pullAbImpl({bool quiet = false});
 
   Future<String?> addPeers(List<Map<String, dynamic>> ps);
-  removeHash(Map<String, dynamic> p) {
+  void removeHash(Map<String, dynamic> p) {
     p.remove('hash');
   }
 
-  removePassword(Map<String, dynamic> p) {
+  void removePassword(Map<String, dynamic> p) {
     p.remove('password');
   }
 
-  removeNonExistentTags(Map<String, dynamic> p) {
+  void removeNonExistentTags(Map<String, dynamic> p) {
     try {
       final oldTags = p.remove('tags');
       if (oldTags is List) {
@@ -1455,7 +1592,7 @@ class Ab extends BaseAb {
   }
 
   @override
-  Future<bool> pullAbImpl({quiet = false}) async {
+  Future<bool> pullAbImpl({bool quiet = false}) async {
     if (gFFI.abModel.mutationBusy.value) return false;
     final cancellation = http.HttpCancellation();
     int? statusCode;
@@ -1773,7 +1910,7 @@ class DummyAb extends BaseAb {
   }
 
   @override
-  Future<bool> pullAbImpl({quiet = false}) async {
+  Future<bool> pullAbImpl({bool quiet = false}) async {
     return false;
   }
 
