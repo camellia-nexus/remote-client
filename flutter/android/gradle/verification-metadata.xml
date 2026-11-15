@@ -5,8 +5,11 @@
       <verify-signatures>false</verify-signatures>
       <key-servers/>
       <trusted-artifacts>
-         <trust group="^org\.jetbrains\.kotlin.*" regex="true" reason="Kotlin toolchain and Gradle plugins"/>
-         <trust group="^org\.gradle\.kotlin.*" regex="true" reason="Gradle Kotlin DSL plugins"/>
+         <trust group="^org\.jetbrains(\..*)?" regex="true" reason="JetBrains annotations, Kotlin toolchain and Gradle plugins"/>
+         <trust group="^org\.gradle(\..*)?" regex="true" reason="Gradle official and Kotlin DSL plugins"/>
+         <trust group="^com\.google\.errorprone$" regex="true" reason="Google errorprone annotations"/>
+         <trust group="^com\.google\.code\.gson$" regex="true" reason="Google GSON library"/>
+         <trust group="^dev\.flutter(\..*)?" regex="true" reason="Flutter tools and plugin loaders"/>
       </trusted-artifacts>
    </configuration>
    <components>
@@ -32,6 +35,32 @@
          </artifact>
          <artifact name="XXPermissions-18.5.pom">
             <sha256 value="a8d26a9c926711ee49b48b37199befc3c566b7b6fe78273718d31e7027e60e18"/>
+         </artifact>
+      </component>
+      <component group="com.google.code.gson" name="gson" version="2.11.0">
+         <artifact name="gson-2.11.0.jar">
+            <sha256 value="57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+         <artifact name="gson-2.11.0.pom">
+            <sha256 value="c0e547bea998888e6e25c5886a90e762272bc88b5275343dd2c05ded6ca2e360" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+      </component>
+      <component group="com.google.code.gson" name="gson-parent" version="2.11.0">
+         <artifact name="gson-parent-2.11.0.pom">
+            <sha256 value="8acb1f3b72a6f026916ac0735bad9aab0293d527edb7b365327def13a9367b7a" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_annotations" version="2.27.0">
+         <artifact name="error_prone_annotations-2.27.0.jar">
+            <sha256 value="24c923372c58e35d0b9f16a028929bb9aedc77521867c274f2bd0735df5ba1f5" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+         <artifact name="error_prone_annotations-2.27.0.pom">
+            <sha256 value="4ca5a35d61235e16549ac346d1e34551cdf0fe27e84aa57e03cbeb255ea4e5da" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_parent" version="2.27.0">
+         <artifact name="error_prone_parent-2.27.0.pom">
+            <sha256 value="fa81829d049559df6927f9c9a6fd6bbd09f8b50e6d4736ae72c8300b6c3d7654" origin="Gradle Central Plugin Repository"/>
          </artifact>
       </component>
       <component group="com.google.protobuf" name="protobuf-javalite" version="3.25.5">
@@ -64,6 +93,14 @@
       <component group="org.gradle.kotlin.kotlin-dsl" name="org.gradle.kotlin.kotlin-dsl.gradle.plugin" version="6.5.2">
          <artifact name="org.gradle.kotlin.kotlin-dsl.gradle.plugin-6.5.2.pom">
             <sha256 value="e5a6af17b58560d746cab42c795fe3a42a1ebe4050e55a4f00d8cf54cf31f1ea"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains" name="annotations" version="13.0">
+         <artifact name="annotations-13.0.jar">
+            <sha256 value="ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478" origin="Gradle Central Plugin Repository"/>
+         </artifact>
+         <artifact name="annotations-13.0.pom">
+            <sha256 value="965aeb2bedff369819bdde1bf7a0b3b89b8247dd69c88b86375d76163bb8c397" origin="Gradle Central Plugin Repository"/>
          </artifact>
       </component>
       <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin" version="2.2.20">
