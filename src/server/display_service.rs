@@ -17,14 +17,35 @@ pub const NAME: &'static str = "display";
 #[cfg(windows)]
 const DUMMY_DISPLAY_SIDE_MAX_SIZE: usize = 1024;
 
-struct ChangedResolution {
-    original: (i32, i32),
-    changed: (i32, i32),
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolutionChangeStatus {
+    Requested {
+        original: (i32, i32),
+        target: (i32, i32),
+    },
+    Applied {
+        original: (i32, i32),
+        current: (i32, i32),
+    },
+    Failed {
+        original: (i32, i32),
+        attempted: (i32, i32),
+        error: String,
+    },
+    RestorePending {
+        original: (i32, i32),
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedResolutionEntry {
+    pub original: (i32, i32),
+    pub status: ResolutionChangeStatus,
 }
 
 lazy_static::lazy_static! {
     static ref IS_CAPTURER_MAGNIFIER_SUPPORTED: bool = is_capturer_mag_supported();
-    static ref CHANGED_RESOLUTIONS: Arc<RwLock<HashMap<String, ChangedResolution>>> = Default::default();
+    static ref CHANGED_RESOLUTIONS: Arc<RwLock<HashMap<String, ChangedResolutionEntry>>> = Default::default();
     static ref SYNC_DISPLAYS: Arc<Mutex<SyncDisplaysInfo>> = Default::default();
 }
 
@@ -245,36 +266,122 @@ pub(super) fn check_display_changed(
 
 #[inline]
 pub fn set_last_changed_resolution(display_name: &str, original: (i32, i32), changed: (i32, i32)) {
+    record_resolution_applied(display_name, original, changed);
+}
+
+pub fn record_resolution_requested(display_name: &str, original: (i32, i32), target: (i32, i32)) {
     let mut lock = CHANGED_RESOLUTIONS.write().unwrap();
-    match lock.get_mut(display_name) {
-        Some(res) => res.changed = changed,
-        None => {
-            lock.insert(
-                display_name.to_owned(),
-                ChangedResolution { original, changed },
-            );
-        }
-    }
+    let original = match lock.get(display_name) {
+        Some(res) => res.original,
+        None => original,
+    };
+    lock.insert(
+        display_name.to_owned(),
+        ChangedResolutionEntry {
+            original,
+            status: ResolutionChangeStatus::Requested { original, target },
+        },
+    );
+}
+
+pub fn record_resolution_applied(display_name: &str, original: (i32, i32), current: (i32, i32)) {
+    let mut lock = CHANGED_RESOLUTIONS.write().unwrap();
+    let original = match lock.get(display_name) {
+        Some(res) => res.original,
+        None => original,
+    };
+    lock.insert(
+        display_name.to_owned(),
+        ChangedResolutionEntry {
+            original,
+            status: ResolutionChangeStatus::Applied { original, current },
+        },
+    );
+}
+
+pub fn record_resolution_failed(
+    display_name: &str,
+    original: (i32, i32),
+    attempted: (i32, i32),
+    error: String,
+) {
+    let mut lock = CHANGED_RESOLUTIONS.write().unwrap();
+    let original = match lock.get(display_name) {
+        Some(res) => res.original,
+        None => original,
+    };
+    lock.insert(
+        display_name.to_owned(),
+        ChangedResolutionEntry {
+            original,
+            status: ResolutionChangeStatus::Failed {
+                original,
+                attempted,
+                error,
+            },
+        },
+    );
+}
+
+pub fn get_resolution_status(display_name: &str) -> Option<ResolutionChangeStatus> {
+    let lock = CHANGED_RESOLUTIONS.read().unwrap();
+    lock.get(display_name).map(|e| e.status.clone())
+}
+
+pub fn has_pending_restores() -> bool {
+    let lock = CHANGED_RESOLUTIONS.read().unwrap();
+    lock.values()
+        .any(|e| matches!(e.status, ResolutionChangeStatus::RestorePending { .. }))
+}
+
+pub fn clear_changed_resolutions_for_test() {
+    CHANGED_RESOLUTIONS.write().unwrap().clear();
 }
 
 #[inline]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn restore_resolutions() {
-    for (name, res) in CHANGED_RESOLUTIONS.read().unwrap().iter() {
-        let (w, h) = res.original;
-        log::info!("Restore resolution of display '{}' to ({}, {})", name, w, h);
-        if let Err(e) = crate::platform::change_resolution(name, w as _, h as _) {
-            log::error!(
-                "Failed to restore resolution of display '{}' to ({},{}): {}",
-                name,
-                w,
-                h,
-                e
-            );
+pub fn restore_resolutions() -> bool {
+    let mut lock = CHANGED_RESOLUTIONS.write().unwrap();
+    let mut restored_keys = Vec::new();
+
+    for (name, entry) in lock.iter_mut() {
+        match &entry.status {
+            ResolutionChangeStatus::Applied { original, .. }
+            | ResolutionChangeStatus::RestorePending { original }
+            | ResolutionChangeStatus::Requested { original, .. } => {
+                let (w, h) = *original;
+                log::info!("Restore resolution of display '{}' to ({}, {})", name, w, h);
+                if let Err(e) = crate::platform::change_resolution(name, w as _, h as _) {
+                    log::error!(
+                        "Failed to restore resolution of display '{}' to ({},{}): {}",
+                        name,
+                        w,
+                        h,
+                        e
+                    );
+                    entry.status = ResolutionChangeStatus::RestorePending { original: (w, h) };
+                } else {
+                    log::info!(
+                        "Successfully restored resolution of display '{}' to ({}, {})",
+                        name,
+                        w,
+                        h
+                    );
+                    restored_keys.push(name.clone());
+                }
+            }
+            ResolutionChangeStatus::Failed { .. } => {
+                // Resolution change never applied to host platform; safe to remove from snapshot
+                restored_keys.push(name.clone());
+            }
         }
     }
-    // Can be cleared because restore resolutions is called when there is no client connected.
-    CHANGED_RESOLUTIONS.write().unwrap().clear();
+
+    for key in restored_keys {
+        lock.remove(&key);
+    }
+
+    lock.is_empty()
 }
 
 #[inline]

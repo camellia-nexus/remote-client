@@ -1,21 +1,21 @@
 use crate::AlarmAuditType;
-use camellia_remote_protocol::get_time;
 #[cfg(target_os = "windows")]
 use camellia_remote_protocol::tokio::sync::{Mutex as TokioMutex, OwnedMutexGuard};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-const OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET_MS: i64 = 120 * 60 * 1_000;
-const OS_CREDENTIAL_LOGIN_BACKOFF_BASE_SECONDS: i64 = 15;
-const OS_CREDENTIAL_LOGIN_BACKOFF_MAX_SECONDS: i64 = 30 * 60;
+const OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET: Duration = Duration::from_secs(120 * 60);
+const OS_CREDENTIAL_LOGIN_BACKOFF_BASE_SECONDS: u64 = 15;
+const OS_CREDENTIAL_LOGIN_BACKOFF_MAX_SECONDS: u64 = 30 * 60;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum FailureScope {
+pub enum FailureScope {
     Default,
     TerminalOsLogin,
 }
 
-pub(crate) struct OsCredentialPolicyDecision {
+pub struct OsCredentialPolicyDecision {
     pub allowed: bool,
     pub login_error: Option<String>,
     pub audit: Option<AlarmAuditType>,
@@ -24,8 +24,8 @@ pub(crate) struct OsCredentialPolicyDecision {
 #[derive(Copy, Clone, Debug, Default)]
 struct OsCredentialFailureState {
     total_failures: i32,
-    backoff_until_ms: Option<i64>,
-    last_failure_ms: Option<i64>,
+    backoff_until: Option<Instant>,
+    last_failure: Option<Instant>,
 }
 
 lazy_static::lazy_static! {
@@ -59,29 +59,29 @@ fn backoff_audit_type_for_scope(scope: FailureScope) -> Option<AlarmAuditType> {
     }
 }
 
-fn os_credential_login_backoff_seconds(total_failures: i32) -> i64 {
+fn os_credential_login_backoff_seconds(total_failures: i32) -> u64 {
     if total_failures <= 2 {
         return 0;
     }
-    let exp = (total_failures - 3).min(7);
-    let seconds = OS_CREDENTIAL_LOGIN_BACKOFF_BASE_SECONDS * (1_i64 << exp);
+    let exp = (total_failures - 3).min(7) as u32;
+    let seconds = OS_CREDENTIAL_LOGIN_BACKOFF_BASE_SECONDS.saturating_mul(1_u64 << exp);
     seconds.min(OS_CREDENTIAL_LOGIN_BACKOFF_MAX_SECONDS)
 }
 
-fn normalize_backoff(state: &mut OsCredentialFailureState, now_ms: i64) {
-    if let Some(until_ms) = state.backoff_until_ms {
-        if until_ms <= now_ms {
-            state.backoff_until_ms = None;
+fn normalize_backoff(state: &mut OsCredentialFailureState, now: Instant) {
+    if let Some(until) = state.backoff_until {
+        if now >= until {
+            state.backoff_until = None;
         }
     }
 }
 
-fn reset_totals_on_idle(state: &mut OsCredentialFailureState, now_ms: i64) {
-    if let Some(last_ms) = state.last_failure_ms {
-        if now_ms.saturating_sub(last_ms) >= OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET_MS {
+fn reset_totals_on_idle(state: &mut OsCredentialFailureState, now: Instant) {
+    if let Some(last) = state.last_failure {
+        if now.saturating_duration_since(last) >= OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET {
             state.total_failures = 0;
-            state.backoff_until_ms = None;
-            state.last_failure_ms = None;
+            state.backoff_until = None;
+            state.last_failure = None;
         }
     }
 }
@@ -105,9 +105,13 @@ fn block_decision(
     }
 }
 
-pub(crate) fn evaluate_os_credential_policy(
+pub fn evaluate_os_credential_policy(scope: FailureScope) -> OsCredentialPolicyDecision {
+    evaluate_os_credential_policy_at(scope, Instant::now())
+}
+
+pub fn evaluate_os_credential_policy_at(
     scope: FailureScope,
-    now_ms: i64,
+    now: Instant,
 ) -> OsCredentialPolicyDecision {
     if !is_os_credential_scope(scope) {
         return allow_decision();
@@ -116,30 +120,39 @@ pub(crate) fn evaluate_os_credential_policy(
         return allow_decision();
     };
     let mut state = state_mutex.lock().unwrap();
-    reset_totals_on_idle(&mut state, now_ms);
-    normalize_backoff(&mut state, now_ms);
+    reset_totals_on_idle(&mut state, now);
+    normalize_backoff(&mut state, now);
 
-    if let Some(until_ms) = state.backoff_until_ms {
-        let remaining_ms = (until_ms - now_ms).max(0);
-        let remaining_seconds = ((remaining_ms + 999) / 1_000).max(1);
-        let seconds_label = if remaining_seconds == 1 {
-            "second"
+    if let Some(until) = state.backoff_until {
+        if now < until {
+            let remaining = until.saturating_duration_since(now);
+            let remaining_seconds = remaining.as_millis().div_ceil(1_000).max(1);
+            let seconds_label = if remaining_seconds == 1 {
+                "second"
+            } else {
+                "seconds"
+            };
+            block_decision(
+                format!(
+                    "Please try again in {} {}.",
+                    remaining_seconds, seconds_label
+                ),
+                backoff_audit_type_for_scope(scope),
+            )
         } else {
-            "seconds"
-        };
-        block_decision(
-            format!(
-                "Please try again in {} {}.",
-                remaining_seconds, seconds_label
-            ),
-            backoff_audit_type_for_scope(scope),
-        )
+            state.backoff_until = None;
+            allow_decision()
+        }
     } else {
         allow_decision()
     }
 }
 
-pub(crate) fn record_os_credential_failure(scope: FailureScope) {
+pub fn record_os_credential_failure(scope: FailureScope) {
+    record_os_credential_failure_at(scope, Instant::now());
+}
+
+pub fn record_os_credential_failure_at(scope: FailureScope, now: Instant) {
     if !is_os_credential_scope(scope) {
         return;
     }
@@ -147,14 +160,21 @@ pub(crate) fn record_os_credential_failure(scope: FailureScope) {
         return;
     };
     let mut state = state_mutex.lock().unwrap();
-    let now_ms = get_time();
-    reset_totals_on_idle(&mut state, now_ms);
-    normalize_backoff(&mut state, now_ms);
+    reset_totals_on_idle(&mut state, now);
+    normalize_backoff(&mut state, now);
     state.total_failures = state.total_failures.saturating_add(1);
-    state.last_failure_ms = Some(now_ms);
+    state.last_failure = Some(now);
     let backoff_seconds = os_credential_login_backoff_seconds(state.total_failures);
     if backoff_seconds > 0 {
-        state.backoff_until_ms = Some(now_ms + backoff_seconds * 1_000);
+        state.backoff_until = Some(now + Duration::from_secs(backoff_seconds));
+    }
+}
+
+pub fn reset_os_credential_failure_state() {
+    if let Some(state_mutex) = state_for_os_credential_scope(FailureScope::TerminalOsLogin) {
+        if let Ok(mut state) = state_mutex.lock() {
+            *state = OsCredentialFailureState::default();
+        }
     }
 }
 
@@ -167,15 +187,16 @@ pub(crate) fn try_acquire_os_credential_login_gate() -> Result<OwnedMutexGuard<(
 }
 
 // ============================================================================
-// AUTH-003 & RES-010: Bounded Login Rate Limiter & Atomic Admission Reservation
+// AUTH-003, RES-010, AUTH-024: Monotonic Login Rate Limiter & Atomic Reservation
 // ============================================================================
 
 pub const MAX_RATE_LIMIT_ENTRIES: usize = 4_096;
 pub const MAX_IN_FLIGHT_PER_IP: u32 = 2;
 pub const MAX_FAILURES_PER_MINUTE: u32 = 6;
 pub const MAX_TOTAL_FAILURES_LOCKOUT: u32 = 30;
-pub const LOCKOUT_COOLDOWN_MS: i64 = 15 * 60 * 1_000; // 15-minute temporary lockout
-pub const TOTAL_IDLE_RESET_MS: i64 = 120 * 60 * 1_000; // 2-hour idle counter decay
+pub const LOCKOUT_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+pub const TOTAL_IDLE_RESET: Duration = Duration::from_secs(120 * 60);
+pub const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 pub const IPV6_PREFIX_64_LIMIT: u32 = 60;
 pub const IPV6_PREFIX_56_LIMIT: u32 = 80;
@@ -214,42 +235,41 @@ impl RateLimitKey {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RateLimitBucket {
     pub in_flight: u32,
-    pub window_minute: i32,
-    pub minute_failures: u32,
+    pub recent_failures: Vec<Instant>,
     pub total_failures: u32,
-    pub last_attempt_ms: i64,
-    pub locked_until_ms: Option<i64>,
+    pub last_attempt: Instant,
+    pub locked_until: Option<Instant>,
 }
 
 impl RateLimitBucket {
-    pub fn new(now_ms: i64) -> Self {
+    pub fn new(now: Instant) -> Self {
         Self {
             in_flight: 0,
-            window_minute: (now_ms / 60_000) as i32,
-            minute_failures: 0,
+            recent_failures: Vec::with_capacity(8),
             total_failures: 0,
-            last_attempt_ms: now_ms,
-            locked_until_ms: None,
+            last_attempt: now,
+            locked_until: None,
         }
     }
 
-    pub fn normalize(&mut self, now_ms: i64) {
-        if now_ms.saturating_sub(self.last_attempt_ms) >= TOTAL_IDLE_RESET_MS {
-            self.minute_failures = 0;
+    pub fn minute_failures(&self) -> u32 {
+        self.recent_failures.len() as u32
+    }
+
+    pub fn normalize(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_attempt) >= TOTAL_IDLE_RESET {
+            self.recent_failures.clear();
             self.total_failures = 0;
-            self.locked_until_ms = None;
+            self.locked_until = None;
         }
-        let current_minute = (now_ms / 60_000) as i32;
-        if self.window_minute != current_minute {
-            self.window_minute = current_minute;
-            self.minute_failures = 0;
-        }
-        if let Some(until) = self.locked_until_ms {
-            if now_ms >= until {
-                self.locked_until_ms = None;
+        self.recent_failures
+            .retain(|&t| now.saturating_duration_since(t) < RATE_LIMIT_WINDOW);
+        if let Some(until) = self.locked_until {
+            if now >= until {
+                self.locked_until = None;
                 self.total_failures = 0;
             }
         }
@@ -264,7 +284,7 @@ pub struct LoginAdmissionDecision {
 }
 
 pub struct LoginRateLimiter {
-    map: std::collections::HashMap<RateLimitKey, RateLimitBucket>,
+    pub(crate) map: std::collections::HashMap<RateLimitKey, RateLimitBucket>,
 }
 
 impl Default for LoginRateLimiter {
@@ -280,17 +300,17 @@ impl LoginRateLimiter {
         Self::default()
     }
 
-    fn prune_if_needed(&mut self, now_ms: i64) {
+    fn prune_if_needed(&mut self, now: Instant) {
         if self.map.len() >= MAX_RATE_LIMIT_ENTRIES {
             self.map.retain(|_, b| {
-                b.in_flight > 0 || now_ms.saturating_sub(b.last_attempt_ms) < TOTAL_IDLE_RESET_MS
+                b.in_flight > 0 || now.saturating_duration_since(b.last_attempt) < TOTAL_IDLE_RESET
             });
             if self.map.len() >= MAX_RATE_LIMIT_ENTRIES {
-                let mut removable: Vec<(RateLimitKey, i64)> = self
+                let mut removable: Vec<(RateLimitKey, Instant)> = self
                     .map
                     .iter()
                     .filter(|(_, b)| b.in_flight == 0)
-                    .map(|(&k, b)| (k, b.last_attempt_ms))
+                    .map(|(&k, b)| (k, b.last_attempt))
                     .collect();
                 removable.sort_by_key(|(_, ts)| *ts);
                 for (k, _) in removable.into_iter().take(256) {
@@ -303,10 +323,18 @@ impl LoginRateLimiter {
     pub fn check_and_reserve(
         &mut self,
         addr: std::net::IpAddr,
-        now_ms: i64,
+        category: usize,
+    ) -> (LoginAdmissionDecision, Option<LoginAdmissionPermit>) {
+        self.check_and_reserve_at(addr, Instant::now(), category)
+    }
+
+    pub fn check_and_reserve_at(
+        &mut self,
+        addr: std::net::IpAddr,
+        now: Instant,
         category: usize, // 0 for primary password, 1 for 2fa
     ) -> (LoginAdmissionDecision, Option<LoginAdmissionPermit>) {
-        self.prune_if_needed(now_ms);
+        self.prune_if_needed(now);
 
         let keys = RateLimitKey::keys_for_addr(addr);
 
@@ -315,11 +343,11 @@ impl LoginRateLimiter {
         let direct_bucket = self
             .map
             .entry(direct_key)
-            .or_insert_with(|| RateLimitBucket::new(now_ms));
-        direct_bucket.normalize(now_ms);
+            .or_insert_with(|| RateLimitBucket::new(now));
+        direct_bucket.normalize(now);
 
-        if let Some(until) = direct_bucket.locked_until_ms {
-            if now_ms < until {
+        if let Some(until) = direct_bucket.locked_until {
+            if now < until {
                 return (
                     LoginAdmissionDecision {
                         allowed: false,
@@ -342,7 +370,7 @@ impl LoginRateLimiter {
             );
         }
 
-        if direct_bucket.minute_failures + direct_bucket.in_flight >= MAX_FAILURES_PER_MINUTE {
+        if direct_bucket.minute_failures() + direct_bucket.in_flight >= MAX_FAILURES_PER_MINUTE {
             return (
                 LoginAdmissionDecision {
                     allowed: false,
@@ -354,7 +382,7 @@ impl LoginRateLimiter {
         }
 
         if direct_bucket.total_failures >= MAX_TOTAL_FAILURES_LOCKOUT {
-            direct_bucket.locked_until_ms = Some(now_ms + LOCKOUT_COOLDOWN_MS);
+            direct_bucket.locked_until = Some(now + LOCKOUT_COOLDOWN);
             return (
                 LoginAdmissionDecision {
                     allowed: false,
@@ -371,8 +399,8 @@ impl LoginRateLimiter {
                 let bucket = self
                     .map
                     .entry(key)
-                    .or_insert_with(|| RateLimitBucket::new(now_ms));
-                bucket.normalize(now_ms);
+                    .or_insert_with(|| RateLimitBucket::new(now));
+                bucket.normalize(now);
                 let (thresh, prefix_num) = match key {
                     RateLimitKey::V6Prefix64(_) => (IPV6_PREFIX_64_LIMIT, 64),
                     RateLimitKey::V6Prefix56(_) => (IPV6_PREFIX_56_LIMIT, 56),
@@ -399,7 +427,7 @@ impl LoginRateLimiter {
         for &key in &keys {
             if let Some(bucket) = self.map.get_mut(&key) {
                 bucket.in_flight = bucket.in_flight.saturating_add(1);
-                bucket.last_attempt_ms = now_ms;
+                bucket.last_attempt = now;
             }
         }
 
@@ -419,31 +447,31 @@ impl LoginRateLimiter {
         )
     }
 
-    pub fn complete_attempt(
+    pub fn complete_attempt_at(
         &mut self,
         keys: &[RateLimitKey],
         category: usize,
         success: bool,
-        now_ms: i64,
+        now: Instant,
     ) {
         let _ = category;
         for (idx, &key) in keys.iter().enumerate() {
             if let Some(bucket) = self.map.get_mut(&key) {
                 bucket.in_flight = bucket.in_flight.saturating_sub(1);
-                bucket.last_attempt_ms = now_ms;
+                bucket.last_attempt = now;
                 if success {
                     if idx == 0 {
                         // Direct IP success: clear direct failure counters
-                        bucket.minute_failures = 0;
+                        bucket.recent_failures.clear();
                         bucket.total_failures = 0;
-                        bucket.locked_until_ms = None;
+                        bucket.locked_until = None;
                     }
                     // Prefix counters are preserved to prevent subnet wiping attacks
                 } else {
-                    bucket.minute_failures = bucket.minute_failures.saturating_add(1);
+                    bucket.recent_failures.push(now);
                     bucket.total_failures = bucket.total_failures.saturating_add(1);
                     if idx == 0 && bucket.total_failures >= MAX_TOTAL_FAILURES_LOCKOUT {
-                        bucket.locked_until_ms = Some(now_ms + LOCKOUT_COOLDOWN_MS);
+                        bucket.locked_until = Some(now + LOCKOUT_COOLDOWN);
                     }
                 }
             }
@@ -464,19 +492,30 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new([LoginRateLimiter::new(), LoginRateLimiter::new()]));
 }
 
+pub fn reset_global_login_rate_limiter() {
+    if let Ok(mut lock) = GLOBAL_LOGIN_RATE_LIMITER.lock() {
+        *lock = [LoginRateLimiter::new(), LoginRateLimiter::new()];
+    }
+}
+
+pub fn reset_login_failure_state() {
+    reset_os_credential_failure_state();
+    reset_global_login_rate_limiter();
+}
+
 pub struct LoginAdmissionPermit {
-    keys: Vec<RateLimitKey>,
-    category: usize,
-    completed: bool,
+    pub keys: Vec<RateLimitKey>,
+    pub category: usize,
+    pub completed: bool,
 }
 
 impl LoginAdmissionPermit {
     pub fn complete(&mut self, success: bool) {
         if !self.completed {
             self.completed = true;
-            let now_ms = get_time();
+            let now = Instant::now();
             if let Ok(mut lock) = GLOBAL_LOGIN_RATE_LIMITER.lock() {
-                lock[self.category].complete_attempt(&self.keys, self.category, success, now_ms);
+                lock[self.category].complete_attempt_at(&self.keys, self.category, success, now);
             }
         }
     }
@@ -509,11 +548,11 @@ mod tests {
     fn os_credential_policy_prioritizes_backoff() {
         let _guard = TEST_MUTEX.lock().unwrap();
         clear_os_credential_failure_state(FailureScope::TerminalOsLogin);
-        let now_ms = get_time();
+        let now = Instant::now();
         for _ in 0..3 {
-            record_os_credential_failure(FailureScope::TerminalOsLogin);
+            record_os_credential_failure_at(FailureScope::TerminalOsLogin, now);
         }
-        let decision = evaluate_os_credential_policy(FailureScope::TerminalOsLogin, now_ms);
+        let decision = evaluate_os_credential_policy_at(FailureScope::TerminalOsLogin, now);
         assert!(!decision.allowed);
         assert!(decision.login_error.is_some());
         clear_os_credential_failure_state(FailureScope::TerminalOsLogin);
@@ -523,15 +562,15 @@ mod tests {
     fn os_credential_policy_idle_window_resets_total_counter() {
         let _guard = TEST_MUTEX.lock().unwrap();
         clear_os_credential_failure_state(FailureScope::TerminalOsLogin);
+        let start = Instant::now();
         for _ in 0..13 {
-            record_os_credential_failure(FailureScope::TerminalOsLogin);
+            record_os_credential_failure_at(FailureScope::TerminalOsLogin, start);
         }
-        let blocked = evaluate_os_credential_policy(FailureScope::TerminalOsLogin, get_time());
+        let blocked = evaluate_os_credential_policy_at(FailureScope::TerminalOsLogin, start);
         assert!(!blocked.allowed);
 
-        let after_failures_ms = get_time();
-        let after_idle_ms = after_failures_ms + OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET_MS + 1_000;
-        let allowed = evaluate_os_credential_policy(FailureScope::TerminalOsLogin, after_idle_ms);
+        let after_idle = start + OS_CREDENTIAL_LOGIN_TOTAL_IDLE_RESET + Duration::from_secs(1);
+        let allowed = evaluate_os_credential_policy_at(FailureScope::TerminalOsLogin, after_idle);
         assert!(allowed.allowed);
         clear_os_credential_failure_state(FailureScope::TerminalOsLogin);
     }
@@ -540,13 +579,16 @@ mod tests {
     fn os_credential_policy_audits_every_backoff_block() {
         let _guard = TEST_MUTEX.lock().unwrap();
         clear_os_credential_failure_state(FailureScope::TerminalOsLogin);
+        let now = Instant::now();
 
         for _ in 0..3 {
-            record_os_credential_failure(FailureScope::TerminalOsLogin);
+            record_os_credential_failure_at(FailureScope::TerminalOsLogin, now);
         }
-        let now_ms = get_time();
-        let first = evaluate_os_credential_policy(FailureScope::TerminalOsLogin, now_ms);
-        let second = evaluate_os_credential_policy(FailureScope::TerminalOsLogin, now_ms + 1_000);
+        let first = evaluate_os_credential_policy_at(FailureScope::TerminalOsLogin, now);
+        let second = evaluate_os_credential_policy_at(
+            FailureScope::TerminalOsLogin,
+            now + Duration::from_secs(1),
+        );
         assert!(!first.allowed);
         assert!(!second.allowed);
         assert!(first.audit.is_some());
@@ -559,18 +601,18 @@ mod tests {
     fn login_rate_limiter_enforces_in_flight_concurrency_quota() {
         let mut limiter = LoginRateLimiter::new();
         let ip: std::net::IpAddr = "192.168.1.100".parse().unwrap();
-        let now = 100_000_000;
+        let now = Instant::now();
 
-        let (d1, mut p1) = limiter.check_and_reserve(ip, now, 0);
+        let (d1, mut p1) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(d1.allowed);
         assert!(p1.is_some());
 
-        let (d2, p2) = limiter.check_and_reserve(ip, now, 0);
+        let (d2, p2) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(d2.allowed);
         assert!(p2.is_some());
 
         // Third concurrent in-flight attempt must be blocked
-        let (d3, p3) = limiter.check_and_reserve(ip, now, 0);
+        let (d3, p3) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(!d3.allowed);
         assert!(p3.is_none());
 
@@ -579,7 +621,7 @@ mod tests {
         limiter.release_in_flight(&permit1.keys);
         permit1.completed = true;
 
-        let (d4, p4) = limiter.check_and_reserve(ip, now, 0);
+        let (d4, p4) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(d4.allowed);
         assert!(p4.is_some());
     }
@@ -588,30 +630,30 @@ mod tests {
     fn login_rate_limiter_lockout_cooldown_recovers_after_15_minutes() {
         let mut limiter = LoginRateLimiter::new();
         let ip: std::net::IpAddr = "10.0.0.5".parse().unwrap();
-        let mut now = 1_000_000;
+        let mut now = Instant::now();
 
         for _ in 0..30 {
-            let (d, p) = limiter.check_and_reserve(ip, now, 0);
+            let (d, p) = limiter.check_and_reserve_at(ip, now, 0);
             assert!(d.allowed);
             if let Some(mut permit) = p {
-                limiter.complete_attempt(&permit.keys, 0, false, now);
+                limiter.complete_attempt_at(&permit.keys, 0, false, now);
                 permit.completed = true;
             }
             // Advance by 1 minute to avoid hitting per-minute burst rate limit
-            now += 60_000;
+            now += Duration::from_secs(61);
         }
 
         // 31st attempt must be blocked by 30-attempt threshold
-        let (d_blocked, _) = limiter.check_and_reserve(ip, now, 0);
+        let (d_blocked, _) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(!d_blocked.allowed);
         assert_eq!(
             d_blocked.login_error.as_deref(),
             Some("Too many wrong attempts")
         );
 
-        // After 15 minutes + 1ms, lockout is lifted
-        now += LOCKOUT_COOLDOWN_MS + 1;
-        let (d_recovered, p_recovered) = limiter.check_and_reserve(ip, now, 0);
+        // After 15 minutes + 1s, lockout is lifted
+        now += LOCKOUT_COOLDOWN + Duration::from_secs(1);
+        let (d_recovered, p_recovered) = limiter.check_and_reserve_at(ip, now, 0);
         assert!(d_recovered.allowed);
         assert!(p_recovered.is_some());
     }
@@ -621,19 +663,19 @@ mod tests {
         let mut limiter = LoginRateLimiter::new();
         let ip1: std::net::IpAddr = "2001:db8:abcd:0012::1".parse().unwrap();
         let ip2: std::net::IpAddr = "2001:db8:abcd:0012::2".parse().unwrap();
-        let now = 1_000_000;
+        let now = Instant::now();
 
         // Fail from ip1
-        let (_, p1) = limiter.check_and_reserve(ip1, now, 0);
+        let (_, p1) = limiter.check_and_reserve_at(ip1, now, 0);
         if let Some(mut permit) = p1 {
-            limiter.complete_attempt(&permit.keys, 0, false, now);
+            limiter.complete_attempt_at(&permit.keys, 0, false, now);
             permit.completed = true;
         }
 
         // Login succeeds from ip2
-        let (_, p2) = limiter.check_and_reserve(ip2, now, 0);
+        let (_, p2) = limiter.check_and_reserve_at(ip2, now, 0);
         if let Some(mut permit) = p2 {
-            limiter.complete_attempt(&permit.keys, 0, true, now);
+            limiter.complete_attempt_at(&permit.keys, 0, true, now);
             permit.completed = true;
         }
 

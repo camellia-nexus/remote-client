@@ -1,3 +1,6 @@
+pub mod login_failure {
+    pub use super::super::login_failure_check::*;
+}
 use super::audit_outbox::{self, EvidenceKind, PendingEvidence};
 #[cfg(target_os = "windows")]
 use super::login_failure_check::try_acquire_os_credential_login_gate;
@@ -182,6 +185,7 @@ struct TransferJobAuditLog {
 }
 
 lazy_static::lazy_static! {
+    static ref PROCESS_START_INSTANT: Instant = Instant::now();
     static ref LOGIN_FAILURES: [Arc::<Mutex<HashMap<String, (i32, i32, i32)>>>; 2] = Default::default();
     static ref SESSIONS: Arc::<Mutex<HashMap<SessionKey, Session>>> = Default::default();
     static ref ALIVE_CONNS: Arc::<Mutex<Vec<i32>>> = Default::default();
@@ -191,6 +195,19 @@ lazy_static::lazy_static! {
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
     static ref ALARM_AUDIT_RATE_LIMITER: Arc<Mutex<HashMap<(String, i8), (Instant, u32)>>> = Default::default();
     static ref AUDIT_HTTP_SEMAPHORE: Arc<tokio::sync::Semaphore> = Arc::new(tokio::sync::Semaphore::new(16));
+}
+
+pub fn monotonic_minute() -> i32 {
+    (PROCESS_START_INSTANT.elapsed().as_secs() / 60) as i32
+}
+
+pub fn reset_login_failures() {
+    for map in LOGIN_FAILURES.iter() {
+        if let Ok(mut m) = map.lock() {
+            m.clear();
+        }
+    }
+    crate::server::login_failure_check::reset_login_failure_state();
 }
 
 #[cfg(feature = "flutter")]
@@ -5076,13 +5093,14 @@ impl Connection {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeResolution(r)) => {
                         if !self.view_camera {
-                            self.change_resolution(None, &r);
+                            self.change_resolution(None, &r).await;
                         }
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeDisplayResolution(dr)) => {
                         if !self.view_camera {
-                            self.change_resolution(Some(dr.display as _), &dr.resolution);
+                            self.change_resolution(Some(dr.display as _), &dr.resolution)
+                                .await;
                         }
                     }
                     Some(misc::Union::AutoAdjustFps(fps)) => video_service::VIDEO_QOS
@@ -5576,10 +5594,10 @@ impl Connection {
         i: usize,
         scope: FailureScope,
     ) -> (((i32, i32, i32), i32), bool) {
-        let time = (get_time() / 60_000) as i32;
+        let time = monotonic_minute();
 
         if matches!(scope, FailureScope::TerminalOsLogin) {
-            let decision = evaluate_os_credential_policy(scope, get_time());
+            let decision = evaluate_os_credential_policy(scope);
             let res = if decision.allowed {
                 true
             } else {
@@ -5596,13 +5614,14 @@ impl Connection {
                 }
                 if let Some(audit) = decision.audit {
                     // For OS blocked/backoff events, we currently emit one alarm report per blocked attempt.
-                    // TODO: Add unified cumulative/aggregation fields across alarm producers.
+                    // Decoupled from wall clock: record ISO timestamp strictly for audit logging (AUTH-024).
                     self.post_alarm_audit(
                         audit,
                         json!({
-                                    "ip": self.ip,
-                                    "id": self.lr.my_id.clone(),
-                                    "name": self.lr.my_name.clone(),
+                            "ip": self.ip,
+                            "id": self.lr.my_id.clone(),
+                            "name": self.lr.my_name.clone(),
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
                         }),
                     );
                 }
@@ -5611,7 +5630,7 @@ impl Connection {
             return (((0, 0, 0), time), res);
         }
 
-        // Bounded atomic rate limiter (AUTH-003, RES-010)
+        // Bounded atomic monotonic rate limiter (AUTH-003, RES-010, AUTH-024)
         let raw_ip = self.ip.split('%').next().unwrap_or(&self.ip).trim();
         if let Ok(ip_addr) = raw_ip.parse::<std::net::IpAddr>() {
             let (decision, permit) = {
@@ -5619,7 +5638,7 @@ impl Connection {
                     crate::server::login_failure_check::GLOBAL_LOGIN_RATE_LIMITER
                         .lock()
                         .unwrap();
-                limiter_lock[i].check_and_reserve(ip_addr, get_time(), i)
+                limiter_lock[i].check_and_reserve(ip_addr, i)
             };
             if let Some(p) = permit {
                 self.login_permit = Some(p);
@@ -5635,6 +5654,7 @@ impl Connection {
                             "ip": self.ip,
                             "id": self.lr.my_id.clone(),
                             "name": self.lr.my_name.clone(),
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
                         }),
                     );
                 }
@@ -5719,7 +5739,8 @@ impl Connection {
                             height: s.height,
                             ..Default::default()
                         },
-                    );
+                    )
+                    .await;
                 }
             }
 
@@ -5880,6 +5901,7 @@ impl Connection {
 
     #[cfg(windows)]
     async fn toggle_virtual_display(&mut self, t: ToggleVirtualDisplay) {
+        let caller_id = self.inner.id() as u64;
         let make_msg = |text: String| {
             let mut msg_out = Message::new();
             let res = MessageBox {
@@ -5898,24 +5920,67 @@ impl Connection {
                 self.send(make_msg("idd_not_support_under_win10_2004_tip".to_string()))
                     .await;
             } else {
-                if let Err(e) = virtual_display_manager::plug_in_monitor(t.display as _, Vec::new())
-                {
-                    log::error!("Failed to plug in virtual display: {}", e);
+                match virtual_display_manager::plug_in_monitor(t.display as _, Vec::new()) {
+                    Ok(()) => {
+                        virtual_display_manager::register_display_owner(
+                            t.display as usize,
+                            caller_id,
+                        );
+                        log::info!(
+                            "Virtual display {} plugged in and bound to owner {}",
+                            t.display,
+                            caller_id
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to plug in virtual display: {}", e);
+                        self.send(make_msg(format!(
+                            "Failed to plug in virtual display: {}",
+                            e
+                        )))
+                        .await;
+                    }
+                }
+            }
+        } else {
+            // STATE-002: Assert caller is registered owner before unplugging monitor
+            if !virtual_display_manager::verify_display_owner_or_admin(
+                t.display as usize,
+                caller_id,
+                false,
+            ) {
+                let registered_owner =
+                    virtual_display_manager::get_display_owner(t.display as usize);
+                log::warn!(
+                    "Rejected cross-connection virtual display plug-out attempt: display={}, caller={}, registered_owner={:?}",
+                    t.display,
+                    caller_id,
+                    registered_owner
+                );
+                self.send(make_msg(
+                    "Permission denied: virtual display is owned by another connection".to_string(),
+                ))
+                .await;
+                return;
+            }
+
+            match virtual_display_manager::plug_out_monitor(t.display, false, true) {
+                Ok(()) => {
+                    virtual_display_manager::unregister_display_owner(t.display as usize);
+                    log::info!(
+                        "Virtual display {} unplugged by owner {}",
+                        t.display,
+                        caller_id
+                    );
+                }
+                Err(e) => {
+                    log::error!("Failed to plug out virtual display {}: {}", t.display, e);
                     self.send(make_msg(format!(
-                        "Failed to plug in virtual display: {}",
+                        "Failed to plug out virtual displays: {}",
                         e
                     )))
                     .await;
                 }
-            }
-        } else {
-            if let Err(e) = virtual_display_manager::plug_out_monitor(t.display, false, true) {
-                log::error!("Failed to plug out virtual display {}: {}", t.display, e);
-                self.send(make_msg(format!(
-                    "Failed to plug out virtual displays: {}",
-                    e
-                )))
-                .await;
             }
         }
     }
@@ -5929,7 +5994,7 @@ impl Connection {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn change_resolution(&mut self, d: Option<usize>, r: &Resolution) {
+    async fn change_resolution(&mut self, d: Option<usize>, r: &Resolution) {
         // RES-027: Strictly validate resolution bounds to prevent negative casts and invalid modes
         const MIN_RESOLUTION_DIMENSION: i32 = 100;
         const MAX_RESOLUTION_DIMENSION: i32 = 16384;
@@ -5948,44 +6013,60 @@ impl Connection {
         }
 
         if self.keyboard {
-            if let Ok(displays) = display_service::try_get_displays() {
+            let display_entry = if let Ok(displays) = display_service::try_get_displays() {
                 let display_idx = d.unwrap_or(self.display_idx);
-                if let Some(display) = displays.get(display_idx) {
+                displays.get(display_idx).map(|display| {
                     let name = display.name();
-                    #[cfg(windows)]
-                    if let Some(_ok) =
-                        virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
-                            &name,
-                            r.width as _,
-                            r.height as _,
-                        )
-                    {
-                        return;
-                    }
-                    #[allow(unused_mut)]
-                    let mut record_changed = true;
-                    #[cfg(windows)]
-                    if virtual_display_manager::amyuni_idd::is_my_display(&name) {
-                        record_changed = false;
-                    }
                     #[cfg(not(target_os = "macos"))]
                     let scale = 1.0;
                     #[cfg(target_os = "macos")]
                     let scale = display.scale();
                     let original = (
-                        ((display.width() as f64) / scale).round() as _,
-                        (display.height() as f64 / scale).round() as _,
+                        ((display.width() as f64) / scale).round() as i32,
+                        (display.height() as f64 / scale).round() as i32,
                     );
-                    if record_changed {
-                        display_service::set_last_changed_resolution(
-                            &name,
-                            original,
-                            (r.width, r.height),
+                    (name, original)
+                })
+            } else {
+                None
+            };
+
+            if let Some((name, original)) = display_entry {
+                #[cfg(windows)]
+                if let Some(_ok) =
+                    virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
+                        &name,
+                        r.width as _,
+                        r.height as _,
+                    )
+                {
+                    return;
+                }
+                #[allow(unused_mut)]
+                let mut record_changed = true;
+                #[cfg(windows)]
+                if virtual_display_manager::amyuni_idd::is_my_display(&name) {
+                    record_changed = false;
+                }
+
+                // STATE-001: Execute platform change first, commit on success
+                match crate::platform::change_resolution(&name, r.width as _, r.height as _) {
+                    Ok(()) => {
+                        if record_changed {
+                            display_service::record_resolution_applied(
+                                &name,
+                                original,
+                                (r.width, r.height),
+                            );
+                        }
+                        log::info!(
+                            "Successfully applied resolution change for display '{}' to ({}, {})",
+                            name,
+                            r.width,
+                            r.height
                         );
                     }
-                    if let Err(e) =
-                        crate::platform::change_resolution(&name, r.width as _, r.height as _)
-                    {
+                    Err(e) => {
                         log::error!(
                             "Failed to change resolution '{}' to ({},{}): {:?}",
                             &name,
@@ -5993,6 +6074,24 @@ impl Connection {
                             r.height,
                             e
                         );
+                        if record_changed {
+                            display_service::record_resolution_failed(
+                                &name,
+                                original,
+                                (r.width, r.height),
+                                e.to_string(),
+                            );
+                        }
+                        let mut msg_out = Message::new();
+                        let res = MessageBox {
+                            msgtype: "nook-nocancel-hasclose".to_owned(),
+                            title: "Resolution".to_owned(),
+                            text: format!("Failed to change resolution: {}", e),
+                            link: "".to_owned(),
+                            ..Default::default()
+                        };
+                        msg_out.set_message_box(res);
+                        self.send(msg_out).await;
                     }
                 }
             }
@@ -8515,6 +8614,13 @@ mod raii {
 
     impl Drop for AuthedConnID {
         fn drop(&mut self) {
+            #[cfg(windows)]
+            {
+                let conn_id = self.0 as u64;
+                // STATE-002: RAII cleanup: auto-remove virtual displays owned by departing connection
+                let _cleaned = crate::virtual_display_manager::plug_out_owned_displays(conn_id);
+            }
+
             if self.1 == AuthConnType::Remote || self.1 == AuthConnType::ViewCamera {
                 scrap::codec::Encoder::update(scrap::codec::EncodingUpdate::Remove(self.0));
                 video_service::VIDEO_QOS
@@ -8540,7 +8646,10 @@ mod raii {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 display_service::restore_resolutions();
                 #[cfg(windows)]
-                let _ = virtual_display_manager::reset_all();
+                {
+                    let _ = virtual_display_manager::reset_all();
+                    crate::virtual_display_manager::reset_owner_registry();
+                }
                 #[cfg(target_os = "linux")]
                 scrap::wayland::pipewire::try_close_session();
             }

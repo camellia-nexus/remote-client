@@ -130,6 +130,129 @@ pub fn reset_all() -> ResultType<()> {
     }
 }
 
+// ============================================================================
+// STATE-002: Virtual Display Connection Owner Binding & RAII Cleanup
+// ============================================================================
+
+#[derive(Default, Debug)]
+pub struct VirtualDisplayOwnerRegistry {
+    owned_displays: std::collections::HashMap<usize, u64>,
+}
+
+impl VirtualDisplayOwnerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_owner(&mut self, display: usize, owner_id: u64) {
+        self.owned_displays.insert(display, owner_id);
+    }
+
+    pub fn get_owner(&self, display: usize) -> Option<u64> {
+        self.owned_displays.get(&display).copied()
+    }
+
+    pub fn is_owner(&self, display: usize, caller_id: u64) -> bool {
+        match self.owned_displays.get(&display) {
+            Some(&owner) => owner == caller_id,
+            None => false,
+        }
+    }
+
+    pub fn unregister(&mut self, display: usize) -> Option<u64> {
+        self.owned_displays.remove(&display)
+    }
+
+    pub fn get_displays_for_owner(&self, owner_id: u64) -> Vec<usize> {
+        self.owned_displays
+            .iter()
+            .filter_map(|(&disp, &owner)| if owner == owner_id { Some(disp) } else { None })
+            .collect()
+    }
+
+    pub fn remove_displays_for_owner(&mut self, owner_id: u64) -> Vec<usize> {
+        let mut displays = Vec::new();
+        self.owned_displays.retain(|&disp, owner| {
+            if *owner == owner_id {
+                displays.push(disp);
+                false
+            } else {
+                true
+            }
+        });
+        displays
+    }
+
+    pub fn clear(&mut self) {
+        self.owned_displays.clear();
+    }
+}
+
+lazy_static::lazy_static! {
+    pub static ref VIRTUAL_DISPLAY_OWNER_REGISTRY: std::sync::Mutex<VirtualDisplayOwnerRegistry> =
+        std::sync::Mutex::new(VirtualDisplayOwnerRegistry::default());
+}
+
+pub fn register_display_owner(display: usize, owner_id: u64) {
+    if let Ok(mut reg) = VIRTUAL_DISPLAY_OWNER_REGISTRY.lock() {
+        reg.register_owner(display, owner_id);
+    }
+}
+
+pub fn get_display_owner(display: usize) -> Option<u64> {
+    VIRTUAL_DISPLAY_OWNER_REGISTRY
+        .lock()
+        .ok()
+        .and_then(|reg| reg.get_owner(display))
+}
+
+pub fn verify_display_owner_or_admin(display: usize, caller_id: u64, is_admin: bool) -> bool {
+    if is_admin {
+        return true;
+    }
+    if let Ok(reg) = VIRTUAL_DISPLAY_OWNER_REGISTRY.lock() {
+        reg.is_owner(display, caller_id)
+    } else {
+        false
+    }
+}
+
+pub fn unregister_display_owner(display: usize) -> Option<u64> {
+    VIRTUAL_DISPLAY_OWNER_REGISTRY
+        .lock()
+        .ok()
+        .and_then(|mut reg| reg.unregister(display))
+}
+
+pub fn plug_out_owned_displays(owner_id: u64) -> Vec<usize> {
+    let displays = if let Ok(mut reg) = VIRTUAL_DISPLAY_OWNER_REGISTRY.lock() {
+        reg.remove_displays_for_owner(owner_id)
+    } else {
+        Vec::new()
+    };
+    for &disp in &displays {
+        camellia_remote_protocol::log::info!(
+            "RAII cleanup: plugging out virtual display {} for disconnected owner {}",
+            disp,
+            owner_id
+        );
+        if let Err(e) = plug_out_monitor(disp as i32, false, true) {
+            camellia_remote_protocol::log::warn!(
+                "Failed to plug out virtual display {}: {}",
+                disp,
+                e
+            );
+        }
+    }
+    displays
+}
+
+pub fn reset_owner_registry() {
+    if let Ok(mut reg) = VIRTUAL_DISPLAY_OWNER_REGISTRY.lock() {
+        reg.clear();
+    }
+}
+
 pub mod rustdesk_idd {
     use super::windows;
     use camellia_remote_protocol::{allow_err, bail, lazy_static, log, ResultType};
