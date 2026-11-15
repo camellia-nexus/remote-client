@@ -130,9 +130,13 @@ Future<void> main(List<String> args) async {
   }, zoneSpecification: LogSanitizer.zoneSpecification());
 }
 
-Future<void> initEnv(String appType) async {
+Future<StartupResult> initEnv(String appType) async {
   // global shared preference
-  await platformFFI.init(appType);
+  final result = await platformFFI.init(appType);
+  if (!result.isSuccess) {
+    debugPrint('initEnv failed at stage ${result.stage}: ${result.error}');
+    return result;
+  }
   // global FFI, use this **ONLY** for global configuration
   // for convenience, use global FFI on mobile platform
   // focus on multi-ffi on desktop first
@@ -141,11 +145,30 @@ Future<void> initEnv(String appType) async {
   _registerEventHandler();
   // Update the system theme.
   updateSystemWindowTheme();
+  return result;
 }
 
 void runMainApp(bool startService) async {
   // register uni links
-  await initEnv(kAppTypeMain);
+  final startupResult = await initEnv(kAppTypeMain);
+  if (!startupResult.isSuccess) {
+    debugPrint('Fatal: runMainApp startup transaction failed: ${startupResult.error}');
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Text(
+              'Camellia Remote Startup Error (${startupResult.stage}):\n${startupResult.error}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+        ),
+      ),
+    ));
+    return;
+  }
   // trigger connection status updater
   await bind.mainCheckConnectStatus();
   if (startService) {
@@ -191,7 +214,25 @@ void runMainApp(bool startService) async {
 }
 
 void runMobileApp() async {
-  await initEnv(kAppTypeMain);
+  final startupResult = await initEnv(kAppTypeMain);
+  if (!startupResult.isSuccess) {
+    debugPrint('Fatal: runMobileApp startup transaction failed: ${startupResult.error}');
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Text(
+              'Camellia Remote Startup Error (${startupResult.stage}):\n${startupResult.error}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+        ),
+      ),
+    ));
+    return;
+  }
   if (isWeb) {
     await bind.mainCheckConnectStatus();
   }
@@ -205,7 +246,11 @@ void runMobileApp() async {
 }
 
 void runMultiWindow(Map<String, dynamic> argument, String appType) async {
-  await initEnv(appType);
+  final startupResult = await initEnv(appType);
+  if (!startupResult.isSuccess) {
+    debugPrint('Fatal: runMultiWindow startup transaction failed: ${startupResult.error}');
+    return;
+  }
   final title = getWindowName();
   // set prevent close to true, we handle close event manually
   WindowController.fromWindowId(kWindowId!).setPreventClose(true);
@@ -283,7 +328,11 @@ void runMultiWindow(Map<String, dynamic> argument, String appType) async {
 }
 
 void runConnectionManagerScreen() async {
-  await initEnv(kAppTypeConnectionManager);
+  final startupResult = await initEnv(kAppTypeConnectionManager);
+  if (!startupResult.isSuccess) {
+    debugPrint('Fatal: runConnectionManagerScreen startup transaction failed: ${startupResult.error}');
+    return;
+  }
   _runApp('', const DesktopServerPage(), MyTheme.currentThemeMode());
   final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
   gFFI.serverModel.hideCm = hide;
@@ -387,7 +436,11 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
 
 void runInstallPage() async {
   await windowManager.ensureInitialized();
-  await initEnv(kAppTypeMain);
+  final startupResult = await initEnv(kAppTypeMain);
+  if (!startupResult.isSuccess) {
+    debugPrint('Fatal: runInstallPage startup transaction failed: ${startupResult.error}');
+    return;
+  }
   _runApp('', const InstallPage(), MyTheme.currentThemeMode());
   WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
     size: Size(800, 600),

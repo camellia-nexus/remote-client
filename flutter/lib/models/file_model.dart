@@ -553,15 +553,17 @@ class FileController {
     openDirectory(homePath);
   }
 
-  void goBack() {
-    if (history.isEmpty) return;
+  bool get canGoBack => history.isNotEmpty;
+
+  bool goBack() {
+    if (history.isEmpty) return false;
     final path = history.removeAt(history.length - 1);
-    if (path.isEmpty) return;
+    if (path.isEmpty) return false;
     if (directory.value.path == path) {
-      goBack();
-      return;
+      return goBack();
     }
     unawaited(_openDirectoryPath(path, isBack: true).then<void>((_) {}));
+    return true;
   }
 
   void goToParentDirectory() {

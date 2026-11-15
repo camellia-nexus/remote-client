@@ -105,15 +105,24 @@ class _FileManagerPageState extends State<FileManagerPage> {
   }
 
   @override
-  Widget build(BuildContext context) => WillPopScope(
-    onWillPop: () async {
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) async {
+      if (didPop) return;
       if (selectMode.value != SelectMode.none) {
         selectMode.value = SelectMode.none;
         setState(() {});
-      } else {
-        currentFileController.goBack();
+        return;
       }
-      return false;
+      if (currentFileController.canGoBack) {
+        currentFileController.goBack();
+        return;
+      }
+      if (gFFI.closed) {
+        Navigator.of(context).maybePop();
+      } else {
+        clientClose(gFFI.sessionId, gFFI);
+      }
     },
     child: Scaffold(
       // backgroundColor: MyTheme.grayBg,

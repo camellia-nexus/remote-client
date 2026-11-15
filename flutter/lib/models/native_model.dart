@@ -31,6 +31,39 @@ typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 /// NativeModel alias for PlatformFFI.
 typedef NativeModel = PlatformFFI;
 
+/// Staged startup states for the platform FFI subsystem (INIT-001).
+enum StartupStage {
+  uninitialized,
+  libraryLoaded,
+  bridgeInitialized,
+  eventListenerStarted,
+  deviceConfigured,
+  fullyInitialized,
+  failed,
+}
+
+/// Typed result of PlatformFFI initialization sequence (INIT-001).
+class StartupResult {
+  final bool isSuccess;
+  final StartupStage stage;
+  final Object? error;
+  final StackTrace? stackTrace;
+
+  const StartupResult.success()
+      : isSuccess = true,
+        stage = StartupStage.fullyInitialized,
+        error = null,
+        stackTrace = null;
+
+  const StartupResult.failure(this.stage, this.error, [this.stackTrace])
+      : isSuccess = false;
+
+  @override
+  String toString() => isSuccess
+      ? 'StartupResult.success(stage=$stage)'
+      : 'StartupResult.failure(stage=$stage, error=$error)';
+}
+
 /// FFI wrapper around the native Rust core.
 /// Hides the platform differences.
 class PlatformFFI {
@@ -62,6 +95,42 @@ class PlatformFFI {
   StreamSubscription<String>? _globalEventSubscription;
   final List<String> _globalEventQueue = [];
   bool _isProcessingGlobalEvent = false;
+  StartupStage _startupStage = StartupStage.uninitialized;
+
+  StartupStage get startupStage => _startupStage;
+  bool get isFullyInitialized => _startupStage == StartupStage.fullyInitialized;
+
+  /// Resets state for retrying initialization cleanly (INIT-001).
+  void resetForRetry() {
+    _globalEventSubscription?.cancel();
+    _globalEventSubscription = null;
+    _globalEventQueue.clear();
+    _isProcessingGlobalEvent = false;
+    _eventHandlers.clear();
+    _ffiBind = const RustdeskImpl();
+    _session_get_rgba = null;
+    _session_copy_rgba = null;
+    _initialized = false;
+    _startupStage = StartupStage.uninitialized;
+  }
+
+  /// Rollback state when an initialization stage fails (INIT-001).
+  void rollback(StartupStage failedAt) {
+    _rollback(failedAt);
+  }
+
+  void _rollback(StartupStage failedAt) {
+    debugPrint('Rolling back PlatformFFI from failed stage: $failedAt');
+    _startupStage = StartupStage.failed;
+    _initialized = false;
+    _globalEventSubscription?.cancel();
+    _globalEventSubscription = null;
+    _globalEventQueue.clear();
+    _isProcessingGlobalEvent = false;
+    _session_get_rgba = null;
+    _session_copy_rgba = null;
+    _ffiBind = const RustdeskImpl();
+  }
 
   static get localeName => Platform.localeName;
 
@@ -169,25 +238,37 @@ class PlatformFFI {
   bool _initialized = false;
 
   /// Init the FFI class, loads the native Rust core library.
-  Future<void> init(String appType) async {
-    if (_initialized) return;
-    _initialized = true;
+  /// Returns a typed [StartupResult] transactionally tracking staged startup (INIT-001).
+  Future<StartupResult> init(String appType) async {
+    if (_initialized && _startupStage == StartupStage.fullyInitialized) {
+      return const StartupResult.success();
+    }
+    _startupStage = StartupStage.uninitialized;
     _appType = appType;
-    final externalLibrary = isAndroid
-        ? ExternalLibrary.open('camellia_remote.so')
-        : isLinux
-        ? ExternalLibrary.open('camellia_remote.so')
-        : isWindows
-        ? ExternalLibrary.open('camellia_remote.dll')
-        :
-          // Use executable itself as the dynamic library for MacOS.
-          // Multiple dylib instances will cause some global instances to be invalid.
-          // eg. `lazy_static` objects in rust side, will be created more than once, which is not expected.
-          //
-          // isMacOS? ExternalLibrary.open("libcamellia_remote.dylib") :
-          ExternalLibrary.process(iKnowHowToUseIt: true);
-    final dylib = externalLibrary.ffiDynamicLibrary;
     debugPrint('initializing FFI $_appType');
+
+    ExternalLibrary externalLibrary;
+    DynamicLibrary dylib;
+    try {
+      externalLibrary = isAndroid
+          ? ExternalLibrary.open('camellia_remote.so')
+          : isLinux
+          ? ExternalLibrary.open('camellia_remote.so')
+          : isWindows
+          ? ExternalLibrary.open('camellia_remote.dll')
+          :
+            // Use executable itself as the dynamic library for MacOS.
+            // Multiple dylib instances will cause some global instances to be invalid.
+            ExternalLibrary.process(iKnowHowToUseIt: true);
+      dylib = externalLibrary.ffiDynamicLibrary;
+      _startupStage = StartupStage.libraryLoaded;
+    } catch (e, st) {
+      debugPrintStack(label: 'FFI library load failed: $e');
+      _rollback(StartupStage.uninitialized);
+      return StartupResult.failure(StartupStage.uninitialized, e, st);
+    }
+
+    String docDir = '';
     try {
       _session_get_rgba = dylib.lookupFunction<F3Dart, F3>("session_get_rgba");
       try {
@@ -197,7 +278,7 @@ class PlatformFFI {
       } catch (e) {
         debugPrint('session_copy_rgba lookup optional: $e');
       }
-      String docDir = '';
+
       try {
         // SYSTEM user failed
         docDir = (await getApplicationDocumentsDirectory()).path;
@@ -226,7 +307,14 @@ class PlatformFFI {
       }
       await RustLib.init(externalLibrary: externalLibrary);
       _ffiBind = const RustdeskImpl();
+      _startupStage = StartupStage.bridgeInitialized;
+    } catch (e, st) {
+      debugPrintStack(label: 'RustLib.init / bridge setup failed: $e');
+      _rollback(StartupStage.bridgeInitialized);
+      return StartupResult.failure(StartupStage.libraryLoaded, e, st);
+    }
 
+    try {
       if (isLinux) {
         if (isMain) {
           // Start a dbus service for uri links, no need to await
@@ -237,65 +325,75 @@ class PlatformFFI {
         _ffiBind.mainStartIpcUrlServer();
       }
       _startListenEvent(_ffiBind); // global event
-      try {
-        if (isAndroid) {
-          // PRIV-010: Replace unconstrained external path (/storage/emulated/0)
-          // with an app-scoped sandbox directory requiring zero system permissions
-          // and working natively under Android 11+ scoped storage.
-          final base = docDir.isNotEmpty
-              ? docDir
-              : (await getApplicationDocumentsDirectory()).path;
-          final sharedDir = Directory('$base/shared');
-          try {
-            if (!await sharedDir.exists()) {
-              await sharedDir.create(recursive: true);
-            }
-            _homeDir = sharedDir.path;
-          } catch (_) {
-            _homeDir = '$base/shared';
+      _startupStage = StartupStage.eventListenerStarted;
+    } catch (e, st) {
+      debugPrintStack(label: 'Event listener startup failed: $e');
+      _rollback(StartupStage.eventListenerStarted);
+      return StartupResult.failure(StartupStage.bridgeInitialized, e, st);
+    }
+
+    try {
+      if (isAndroid) {
+        // PRIV-010: Replace unconstrained external path (/storage/emulated/0)
+        // with an app-scoped sandbox directory requiring zero system permissions
+        // and working natively under Android 11+ scoped storage.
+        final base = docDir.isNotEmpty
+            ? docDir
+            : (await getApplicationDocumentsDirectory()).path;
+        final sharedDir = Directory('$base/shared');
+        try {
+          if (!await sharedDir.exists()) {
+            await sharedDir.create(recursive: true);
           }
-        } else if (isIOS) {
-          // CRED-011: User downloads and received data live in Documents/data
-          _homeDir = _ffiBind.mainGetDataDirIos(
-            appDir: docDir.isNotEmpty ? docDir : _dir,
-          );
-        } else {
-          // no need to set home dir
+          _homeDir = sharedDir.path;
+        } catch (_) {
+          _homeDir = '$base/shared';
         }
-      } catch (e) {
-        debugPrintStack(label: 'initialize failed: $e');
+      } else if (isIOS) {
+        // CRED-011: User downloads and received data live in Documents/data
+        _homeDir = _ffiBind.mainGetDataDirIos(
+          appDir: docDir.isNotEmpty ? docDir : _dir,
+        );
+      } else {
+        // no need to set home dir
       }
+
       String id = 'NA';
       String name = 'Flutter';
       DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-      if (isAndroid) {
-        AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-        name = '${androidInfo.brand}-${androidInfo.model}';
-        id = androidInfo.id.hashCode.toString();
-        androidVersion = androidInfo.version.sdkInt;
-      } else if (isIOS) {
-        IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
-        name = iosInfo.utsname.machine;
-        id = iosInfo.identifierForVendor.hashCode.toString();
-      } else if (isLinux) {
-        LinuxDeviceInfo linuxInfo = await deviceInfo.linuxInfo;
-        name = linuxInfo.name;
-        id = linuxInfo.machineId ?? linuxInfo.id;
-      } else if (isWindows) {
-        try {
-          WindowsDeviceInfo winInfo = await deviceInfo.windowsInfo;
-          name = winInfo.computerName;
-          id = winInfo.computerName;
-        } catch (e) {
-          debugPrintStack(label: "get windows device info failed: $e");
-          name = "unknown";
-          id = "unknown";
+      try {
+        if (isAndroid) {
+          AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+          name = '${androidInfo.brand}-${androidInfo.model}';
+          id = androidInfo.id.hashCode.toString();
+          androidVersion = androidInfo.version.sdkInt;
+        } else if (isIOS) {
+          IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
+          name = iosInfo.utsname.machine;
+          id = iosInfo.identifierForVendor.hashCode.toString();
+        } else if (isLinux) {
+          LinuxDeviceInfo linuxInfo = await deviceInfo.linuxInfo;
+          name = linuxInfo.name;
+          id = linuxInfo.machineId ?? linuxInfo.id;
+        } else if (isWindows) {
+          try {
+            WindowsDeviceInfo winInfo = await deviceInfo.windowsInfo;
+            name = winInfo.computerName;
+            id = winInfo.computerName;
+          } catch (e) {
+            debugPrintStack(label: "get windows device info failed: $e");
+            name = "unknown";
+            id = "unknown";
+          }
+        } else if (isMacOS) {
+          MacOsDeviceInfo macOsInfo = await deviceInfo.macOsInfo;
+          name = macOsInfo.computerName;
+          id = macOsInfo.systemGUID ?? '';
         }
-      } else if (isMacOS) {
-        MacOsDeviceInfo macOsInfo = await deviceInfo.macOsInfo;
-        name = macOsInfo.computerName;
-        id = macOsInfo.systemGUID ?? '';
+      } catch (e) {
+        debugPrint('Non-fatal device-info detection failure: $e');
       }
+
       debugPrint('_appType:$_appType (device initialized)');
       if (desktopType == DesktopType.cm) {
         await _ffiBind.cmInit();
@@ -304,10 +402,22 @@ class PlatformFFI {
       await _ffiBind.mainDeviceName(name: name);
       await _ffiBind.mainSetHomeDir(home: _homeDir);
       await _ffiBind.mainInit(appDir: _dir, customClientConfig: '');
-    } catch (e) {
-      debugPrintStack(label: 'initialize failed: $e');
+      _startupStage = StartupStage.deviceConfigured;
+    } catch (e, st) {
+      debugPrintStack(label: 'Core mainInit or device configuration failed: $e');
+      _rollback(StartupStage.deviceConfigured);
+      return StartupResult.failure(StartupStage.eventListenerStarted, e, st);
     }
-    version = await getVersion();
+
+    try {
+      version = await getVersion();
+    } catch (e) {
+      debugPrint('Optional getVersion failure: $e');
+    }
+
+    _initialized = true;
+    _startupStage = StartupStage.fullyInitialized;
+    return const StartupResult.success();
   }
 
   Future<bool> tryHandle(Map<String, dynamic> evt) async {
