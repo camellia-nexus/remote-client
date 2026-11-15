@@ -46,5 +46,21 @@
             <sha256 value="9473e63ac67c4b43ee5db9c5d1fd8858b60a738d435a20245de0b1bfd5413a36"/>
          </artifact>
       </component>
+      <component group="org.gradle.kotlin" name="gradle-kotlin-dsl-plugins" version="6.5.2">
+         <artifact name="gradle-kotlin-dsl-plugins-6.5.2.jar">
+            <sha256 value="3bff4a0700e1c815d194489f07bba06cb190e8f29b773d37cfee37ac8d5c7644"/>
+         </artifact>
+         <artifact name="gradle-kotlin-dsl-plugins-6.5.2.module">
+            <sha256 value="3159c5417845a96993c789d42dec435707fbb848979cfd11d0b833059e5120a3"/>
+         </artifact>
+         <artifact name="gradle-kotlin-dsl-plugins-6.5.2.pom">
+            <sha256 value="72d54ed66ea33faf94282351c31019e12e7d7e920ea67a516cbe0e0d67410343"/>
+         </artifact>
+      </component>
+      <component group="org.gradle.kotlin.kotlin-dsl" name="org.gradle.kotlin.kotlin-dsl.gradle.plugin" version="6.5.2">
+         <artifact name="org.gradle.kotlin.kotlin-dsl.gradle.plugin-6.5.2.pom">
+            <sha256 value="e5a6af17b58560d746cab42c795fe3a42a1ebe4050e55a4f00d8cf54cf31f1ea"/>
+         </artifact>
+      </component>
    </components>
 </verification-metadata>

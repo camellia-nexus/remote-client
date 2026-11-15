@@ -114,6 +114,7 @@ pub fn reset_action_gate_for_test() {
     state.connections.clear();
     state.pending_actions.clear();
     state.last_global_remote_input = None;
+    #[cfg(not(any(target_os = "ios")))]
     crate::server::CLICK_TIME.store(0, Ordering::SeqCst);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
@@ -272,12 +273,14 @@ pub fn check_pointer_source_authoritative(_action_id: i64) -> bool {
         return true;
     }
 
-    let last_click = crate::server::CLICK_TIME.load(Ordering::SeqCst);
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let last_mouse = crate::server::MOUSE_MOVE_TIME.load(Ordering::SeqCst);
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let last_mouse = 0;
+    #[cfg(not(any(target_os = "ios")))]
     {
+        let last_click = crate::server::CLICK_TIME.load(Ordering::SeqCst);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let last_mouse = crate::server::MOUSE_MOVE_TIME.load(Ordering::SeqCst);
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let last_mouse = 0;
+
         // Also check legacy MOUSE_MOVE_TIME / CLICK_TIME for cross-service IPC synchronization
         let now_ms = get_time();
         let threshold_ms = REMOTE_INPUT_RECENCY_THRESHOLD.as_millis() as i64;
