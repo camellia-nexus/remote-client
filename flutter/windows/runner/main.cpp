@@ -20,6 +20,46 @@ const std::vector<std::string> parameters_white_list = {"--install", "--cm"};
 
 const wchar_t* getWindowClassName();
 
+class ScopedComInitializer {
+ public:
+  ScopedComInitializer() {
+    hr_ = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  }
+  ~ScopedComInitializer() {
+    if (hr_ == S_OK || hr_ == S_FALSE) {
+      ::CoUninitialize();
+    }
+  }
+  bool Succeeded() const {
+    return SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE;
+  }
+  HRESULT hr() const { return hr_; }
+ private:
+  HRESULT hr_;
+};
+
+static bool IsTrustedTargetWindow(HWND hwnd) {
+  if (!::IsWindow(hwnd) || ::IsHungAppWindow(hwnd)) {
+    return false;
+  }
+  DWORD target_pid = 0;
+  ::GetWindowThreadProcessId(hwnd, &target_pid);
+  if (target_pid == 0 || target_pid == ::GetCurrentProcessId()) {
+    return false;
+  }
+  HANDLE hProc = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, target_pid);
+  if (!hProc) return false;
+  wchar_t target_exe[MAX_PATH] = {0}, current_exe[MAX_PATH] = {0};
+  DWORD len = MAX_PATH;
+  bool match = false;
+  if (::QueryFullProcessImageNameW(hProc, 0, target_exe, &len) &&
+      ::GetModuleFileNameW(nullptr, current_exe, MAX_PATH)) {
+    match = (_wcsicmp(target_exe, current_exe) == 0);
+  }
+  ::CloseHandle(hProc);
+  return match;
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command)
 {
@@ -93,7 +133,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   // Uri links dispatch
   HWND hwnd = ::FindWindowW(getWindowClassName(), app_name.c_str());
-  if (hwnd != NULL) {
+  if (hwnd != NULL && IsTrustedTargetWindow(hwnd)) {
     // Allow multiple flutter instances when being executed by parameters
     // contained in whitelists.
     bool allow_multiple_instances = false;
@@ -106,15 +146,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
     if (!allow_multiple_instances) {
       if (!command_line_arguments.empty()) {
-        // Dispatch command line arguments
-        DispatchToUniLinksDesktop(hwnd);
-      } else {
-        // Not called with arguments, or just open the app shortcut on desktop.
-        // So we just show the main window instead.
+        bool dispatched = DispatchToUniLinksDesktop(hwnd);
         ::ShowWindow(hwnd, SW_NORMAL);
         ::SetForegroundWindow(hwnd);
+        return dispatched ? EXIT_SUCCESS : EXIT_FAILURE;
+      } else {
+        ::ShowWindow(hwnd, SW_NORMAL);
+        ::SetForegroundWindow(hwnd);
+        return EXIT_SUCCESS;
       }
-      return EXIT_FAILURE;
     }
   }
 
@@ -125,9 +165,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
-  // Initialize COM, so that it is available for use in the library and/or
-  // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  ScopedComInitializer com_initializer;
+  if (!com_initializer.Succeeded()) {
+    std::cerr << "Failed to initialize COM library: 0x" << std::hex
+              << com_initializer.hr() << std::endl;
+    return EXIT_FAILURE;
+  }
 
   flutter::DartProject project(L"data");
   // connection manager hide icon from taskbar
@@ -175,12 +218,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   window.SetQuitOnClose(true);
 
   ::MSG msg;
-  while (::GetMessage(&msg, nullptr, 0, 0))
+  BOOL bRet;
+  while ((bRet = ::GetMessage(&msg, nullptr, 0, 0)) != 0)
   {
+    if (bRet == -1) {
+      std::cerr << "GetMessage error: " << ::GetLastError() << std::endl;
+      return EXIT_FAILURE;
+    }
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
   }
 
-  ::CoUninitialize();
-  return EXIT_SUCCESS;
+  return static_cast<int>(msg.wParam);
 }

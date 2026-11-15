@@ -132,7 +132,13 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.hbrBackground = 0;
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
-    RegisterClass(&window_class);
+    ATOM atom = RegisterClass(&window_class);
+    if (atom == 0) {
+      DWORD err = GetLastError();
+      if (err != ERROR_CLASS_ALREADY_EXISTS) {
+        return nullptr;
+      }
+    }
     class_registered_ = true;
   }
   return kWindowClassName;
@@ -165,6 +171,9 @@ bool Win32Window::CreateAndShow(const std::wstring& title,
 
   const wchar_t* window_class =
       WindowClassRegistrar::GetInstance()->GetWindowClass();
+  if (window_class == nullptr) {
+    return false;
+  }
 
   const POINT target_point = {static_cast<LONG>(origin.x),
                               static_cast<LONG>(origin.y)};
@@ -184,18 +193,29 @@ bool Win32Window::CreateAndShow(const std::wstring& title,
 
   if (!showOnTaskBar) {
     // hide from taskbar
-    HRESULT hr;
-    ITaskbarList* pTaskbarList;
-    hr = CoCreateInstance(CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER,IID_ITaskbarList,(void**)&pTaskbarList);
-    if (FAILED(hr)) {
-        return false;
+    ITaskbarList* pTaskbarList = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_ITaskbarList, reinterpret_cast<void**>(&pTaskbarList));
+    if (FAILED(hr) || pTaskbarList == nullptr) {
+      Destroy();
+      return false;
     }
     hr = pTaskbarList->HrInit();
-    hr = pTaskbarList->DeleteTab(window);
-    hr = pTaskbarList->Release();
+    if (SUCCEEDED(hr)) {
+      hr = pTaskbarList->DeleteTab(window);
+    }
+    pTaskbarList->Release();
+    if (FAILED(hr)) {
+      Destroy();
+      return false;
+    }
   }
 
-  return OnCreate();
+  if (!OnCreate()) {
+    Destroy();
+    return false;
+  }
+  return true;
 }
 
 static void trySetWindowForeground(HWND window) {
@@ -283,12 +303,16 @@ Win32Window::MessageHandler(HWND hwnd,
 }
 
 void Win32Window::Destroy() {
+  HWND hwnd = window_handle_;
+  if (hwnd) {
+    window_handle_ = nullptr;
+    // Detach window instance pointer so subsequent messages fall back to DefWindowProc
+    SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+    DestroyWindow(hwnd);
+  }
+
   OnDestroy();
 
-  if (window_handle_) {
-    DestroyWindow(window_handle_);
-    window_handle_ = nullptr;
-  }
   if (g_active_window_count == 0) {
     WindowClassRegistrar::GetInstance()->UnregisterWindowClass();
   }
@@ -299,15 +323,23 @@ Win32Window* Win32Window::GetThisFromHandle(HWND const window) noexcept {
       GetWindowLongPtr(window, GWLP_USERDATA));
 }
 
-void Win32Window::SetChildContent(HWND content) {
+bool Win32Window::SetChildContent(HWND content) {
+  if (!content || !window_handle_) {
+    return false;
+  }
   child_content_ = content;
-  SetParent(content, window_handle_);
+  if (!SetParent(content, window_handle_)) {
+    return false;
+  }
   RECT frame = GetClientArea();
 
-  MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
-             frame.bottom - frame.top, true);
+  if (!MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
+                  frame.bottom - frame.top, TRUE)) {
+    return false;
+  }
 
   SetFocus(child_content_);
+  return true;
 }
 
 RECT Win32Window::GetClientArea() {

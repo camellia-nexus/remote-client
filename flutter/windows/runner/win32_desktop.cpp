@@ -69,14 +69,26 @@ namespace Win32Desktop
 
   bool BumpMouse(int dx, int dy)
   {
-    POINT pos;
-
-    if (GetCursorPos(&pos))
-    {
-      SetCursorPos(pos.x + dx, pos.y + dy);
-      return true;
+    constexpr int kMaxDelta = 100000;
+    if (dx < -kMaxDelta || dx > kMaxDelta || dy < -kMaxDelta || dy > kMaxDelta) {
+      return false;
     }
 
-    return false;
+    POINT pos;
+    if (!::GetCursorPos(&pos)) {
+      return false;
+    }
+
+    int64_t target_x = static_cast<int64_t>(pos.x) + dx;
+    int64_t target_y = static_cast<int64_t>(pos.y) + dy;
+    if (target_x < -kMaxDelta * 100 || target_x > kMaxDelta * 100 ||
+        target_y < -kMaxDelta * 100 || target_y > kMaxDelta * 100) {
+      return false;
+    }
+
+    if (!::SetCursorPos(static_cast<int>(target_x), static_cast<int>(target_y))) {
+      return false;
+    }
+    return true;
   }
 }

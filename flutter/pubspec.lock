@@ -1251,10 +1251,9 @@ packages:
   uni_links_desktop:
     dependency: "direct main"
     description:
-      name: uni_links_desktop
-      sha256: "081a5ca8d6a41c95a5ba559caadc8d3c7d60d7d23e4f5713c20ff4ac0c6517ad"
-      url: "https://pub.dev"
-    source: hosted
+      path: "plugins/uni_links_desktop"
+      relative: true
+    source: path
     version: "0.2.0"
   uni_links_platform_interface:
     dependency: transitive

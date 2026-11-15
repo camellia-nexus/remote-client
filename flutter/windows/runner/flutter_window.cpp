@@ -19,10 +19,100 @@
 
 #include "win32_desktop.h"
 
+namespace {
+
+void RegisterHostChannelForMessenger(flutter::BinaryMessenger* messenger) {
+  if (messenger == nullptr) {
+    return;
+  }
+  auto channel = std::make_unique<flutter::MethodChannel<>>(
+      messenger, "com.camellia.remote/host",
+      &flutter::StandardMethodCodec::GetInstance());
+
+  channel->SetMethodCallHandler(
+      [](const flutter::MethodCall<>& call,
+         std::unique_ptr<flutter::MethodResult<>> result) {
+        if (call.method_name() == "bumpMouse") {
+          const auto* arguments = call.arguments();
+          if (arguments == nullptr) {
+            result->Error("invalid_arguments", "bumpMouse requires non-null arguments");
+            return;
+          }
+
+          int64_t raw_dx = 0;
+          int64_t raw_dy = 0;
+          bool has_dx = false;
+          bool has_dy = false;
+
+          auto extract_int = [](const flutter::EncodableValue& val, int64_t& out) -> bool {
+            if (std::holds_alternative<int32_t>(val)) {
+              out = std::get<int32_t>(val);
+              return true;
+            }
+            if (std::holds_alternative<int64_t>(val)) {
+              out = std::get<int64_t>(val);
+              return true;
+            }
+            return false;
+          };
+
+          if (std::holds_alternative<flutter::EncodableMap>(*arguments)) {
+            const auto& argsMap = std::get<flutter::EncodableMap>(*arguments);
+            auto dxIt = argsMap.find(flutter::EncodableValue("dx"));
+            auto dyIt = argsMap.find(flutter::EncodableValue("dy"));
+            if (dxIt != argsMap.end() && extract_int(dxIt->second, raw_dx)) {
+              has_dx = true;
+            }
+            if (dyIt != argsMap.end() && extract_int(dyIt->second, raw_dy)) {
+              has_dy = true;
+            }
+          } else if (std::holds_alternative<flutter::EncodableList>(*arguments)) {
+            const auto& argsList = std::get<flutter::EncodableList>(*arguments);
+            if (argsList.size() >= 1 && extract_int(argsList[0], raw_dx)) {
+              has_dx = true;
+            }
+            if (argsList.size() >= 2 && extract_int(argsList[1], raw_dy)) {
+              has_dy = true;
+            }
+          } else {
+            result->Error("invalid_arguments", "bumpMouse requires Map or List arguments");
+            return;
+          }
+
+          if (!has_dx || !has_dy) {
+            result->Error("invalid_arguments", "bumpMouse requires dx and dy integer parameters");
+            return;
+          }
+
+          constexpr int64_t kMaxCoordDelta = 100000;
+          if (raw_dx < -kMaxCoordDelta || raw_dx > kMaxCoordDelta ||
+              raw_dy < -kMaxCoordDelta || raw_dy > kMaxCoordDelta) {
+            result->Error("out_of_bounds", "bumpMouse coordinates delta out of bounds");
+            return;
+          }
+
+          bool succeeded = Win32Desktop::BumpMouse(static_cast<int>(raw_dx), static_cast<int>(raw_dy));
+          result->Success(flutter::EncodableValue(succeeded));
+          return;
+        }
+
+        // Unknown method: always complete with NotImplemented so Dart Future never hangs
+        result->NotImplemented();
+      });
+}
+
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
 FlutterWindow::~FlutterWindow() {}
+
+void FlutterWindow::SetupHostChannel() {
+  if (flutter_controller_ && flutter_controller_->engine()) {
+    RegisterHostChannelForMessenger(flutter_controller_->engine()->messenger());
+  }
+}
 
 bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
@@ -41,46 +131,7 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
 
-  flutter::MethodChannel<> channel(
-    flutter_controller_->engine()->messenger(),
-    "com.camellia.remote/host",
-    &flutter::StandardMethodCodec::GetInstance());
-
-  channel.SetMethodCallHandler(
-    [](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
-      if (call.method_name() == "bumpMouse") {
-        auto arguments = call.arguments();
-
-        int dx = 0, dy = 0;
-
-        if (std::holds_alternative<flutter::EncodableMap>(*arguments)) {
-          auto argsMap = std::get<flutter::EncodableMap>(*arguments);
-
-          auto dxIt = argsMap.find(flutter::EncodableValue("dx"));
-          auto dyIt = argsMap.find(flutter::EncodableValue("dy"));
-
-          if ((dxIt != argsMap.end()) && std::holds_alternative<int>(dxIt->second)) {
-            dx = std::get<int>(dxIt->second);
-          }
-          if ((dyIt != argsMap.end()) && std::holds_alternative<int>(dyIt->second)) {
-            dy = std::get<int>(dyIt->second);
-          }
-        } else if (std::holds_alternative<flutter::EncodableList>(*arguments)) {
-          auto argsList = std::get<flutter::EncodableList>(*arguments);
-
-          if ((argsList.size() >= 1) && std::holds_alternative<int>(argsList[0])) {
-            dx = std::get<int>(argsList[0]);
-          }
-          if ((argsList.size() >= 2) && std::holds_alternative<int>(argsList[1])) {
-            dy = std::get<int>(argsList[1]);
-          }
-        }
-
-        bool succeeded = Win32Desktop::BumpMouse(dx, dy);
-
-        result->Success(succeeded);
-      }
-    });
+  SetupHostChannel();
 
   DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
     auto *flutter_view_controller =
@@ -90,9 +141,9 @@ bool FlutterWindow::OnCreate() {
         registry->GetRegistrarForPlugin("TextureRgbaRendererPlugin"));
     FlutterGpuTextureRendererPluginCApiRegisterWithRegistrar(
         registry->GetRegistrarForPlugin("FlutterGpuTextureRendererPluginCApi"));
+    RegisterHostChannelForMessenger(registry->messenger());
   });
-  SetChildContent(flutter_controller_->view()->GetNativeWindow());
-  return true;
+  return SetChildContent(flutter_controller_->view()->GetNativeWindow());
 }
 
 void FlutterWindow::OnDestroy() {
@@ -119,7 +170,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

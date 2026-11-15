@@ -72,7 +72,8 @@ dependencies:
       url: https://github.com/rustdesk-org/uni_links
       path: uni_links
       ref: f416118d843a7e9ed117c7bb7bdc2deda5a9e86f
-  uni_links_desktop: ^0.2.0
+  uni_links_desktop:
+    path: plugins/uni_links_desktop
   path: ^1.8.1
   auto_size_text: ^3.0.0
   bot_toast: ^4.0.3

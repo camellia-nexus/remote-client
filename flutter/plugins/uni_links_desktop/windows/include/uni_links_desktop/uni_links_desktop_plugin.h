@@ -1,0 +1,30 @@
+#include <windows.h>
+
+#ifndef FLUTTER_PLUGIN_UNI_LINKS_DESKTOP_PLUGIN_H_
+#define FLUTTER_PLUGIN_UNI_LINKS_DESKTOP_PLUGIN_H_
+
+#include <flutter_plugin_registrar.h>
+
+#ifdef FLUTTER_PLUGIN_IMPL
+#define FLUTTER_PLUGIN_EXPORT __declspec(dllexport)
+#else
+#define FLUTTER_PLUGIN_EXPORT __declspec(dllimport)
+#endif
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+FLUTTER_PLUGIN_EXPORT void UniLinksDesktopPluginRegisterWithRegistrar(
+    FlutterDesktopPluginRegistrarRef registrar);
+
+#define UNI_LINKS_DESKTOP_MSG_ID (WM_USER + 2)
+#define UNI_LINKS_DESKTOP_ACK 0x43524D4C // 'CRML'
+#define UNI_LINKS_MAX_URL_LENGTH 8192
+FLUTTER_PLUGIN_EXPORT bool DispatchToUniLinksDesktop(HWND hwnd);
+
+#if defined(__cplusplus)
+}  // extern "C"
+#endif
+
+#endif  // FLUTTER_PLUGIN_UNI_LINKS_DESKTOP_PLUGIN_H_

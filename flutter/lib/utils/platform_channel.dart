@@ -20,10 +20,14 @@ class RdPlatformChannel {
   Future<bool> bumpMouse({required int dx, required int dy}) async {
     // No debug output; this call is too chatty.
 
-    bool? result = await _hostMethodChannel
-      .invokeMethod("bumpMouse", {"dx": dx, "dy": dy});
-
-    return result ?? false;
+    try {
+      final bool? result = await _hostMethodChannel
+          .invokeMethod<bool>("bumpMouse", {"dx": dx, "dy": dy})
+          .timeout(const Duration(milliseconds: 1000));
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
   }
 
   /// Change the theme of the system window

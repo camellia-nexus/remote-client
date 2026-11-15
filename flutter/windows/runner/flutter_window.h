@@ -26,6 +26,9 @@ class FlutterWindow : public Win32Window {
   // The project to run.
   flutter::DartProject project_;
 
+  // Sets up the com.camellia.remote/host method channel.
+  void SetupHostChannel();
+
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
 };
