@@ -124,11 +124,17 @@ extern "C" float BackingScaleFactor(uint32_t display) {
 // https://github.com/jdoupe/screenres/blob/master/setgetscreen.m
 
 size_t bitDepth(CGDisplayModeRef mode) {
+    if (mode == NULL) {
+        return 0;
+    }
     size_t depth = 0;
     // Deprecated, same display same bpp?
     // https://stackoverflow.com/questions/8210824/how-to-avoid-cgdisplaymodecopypixelencoding-to-get-bpp
     // https://github.com/libsdl-org/SDL/pull/6628
 	CFStringRef pixelEncoding = CGDisplayModeCopyPixelEncoding(mode);
+    if (pixelEncoding == NULL) {
+        return 32;
+    }
     // my numerical representation for kIO16BitFloatPixels and kIO32bitFloatPixels
     // are made up and possibly non-sensical
     if (kCFCompareEqualTo == CFStringCompare(pixelEncoding, CFSTR(kIO32BitFloatPixels), kCFCompareCaseInsensitive)) {
@@ -163,6 +169,9 @@ CFArrayRef getAllModes(CGDirectDisplayID display) {
         0,
         &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
+    if (options == NULL) {
+        return CGDisplayCopyAllDisplayModes(display, NULL);
+    }
     // Include HiDPI modes
     CFDictionarySetValue(options, kCGDisplayShowDuplicateLowResolutionModes, kCFBooleanTrue);
     CFArrayRef allModes = CGDisplayCopyAllDisplayModes(display, options);
@@ -732,15 +741,24 @@ static bool SetupEventTapOnMainThread() {
 
         g_eventTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
                                       eventMask, MyEventTapCallback, NULL);
-        if (g_eventTap) {
-            g_runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, g_eventTap, 0);
-            CFRunLoopAddSource(CFRunLoopGetMain(), g_runLoopSource, kCFRunLoopCommonModes);
-            CGEventTapEnable(g_eventTap, true);
-            success = true;
-        } else {
+        if (!g_eventTap) {
             NSLog(@"MacSetPrivacyMode: Failed to create CGEventTap; input blocking not enabled.");
             success = false;
+            return;
         }
+
+        g_runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, g_eventTap, 0);
+        if (!g_runLoopSource) {
+            NSLog(@"MacSetPrivacyMode: Failed to create run loop source for CGEventTap; rolling back event tap.");
+            CFRelease(g_eventTap);
+            g_eventTap = NULL;
+            success = false;
+            return;
+        }
+
+        CFRunLoopAddSource(CFRunLoopGetMain(), g_runLoopSource, kCFRunLoopCommonModes);
+        CGEventTapEnable(g_eventTap, true);
+        success = true;
     };
 
     // Execute on main thread to ensure CFRunLoop operations are safe.
@@ -767,11 +785,13 @@ static void TeardownEventTapOnMainThread() {
     void (^teardownBlock)(void) = ^{
         if (g_eventTap) {
             CGEventTapEnable(g_eventTap, false);
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), g_runLoopSource, kCFRunLoopCommonModes);
-            CFRelease(g_runLoopSource);
+            if (g_runLoopSource) {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), g_runLoopSource, kCFRunLoopCommonModes);
+                CFRelease(g_runLoopSource);
+                g_runLoopSource = NULL;
+            }
             CFRelease(g_eventTap);
             g_eventTap = NULL;
-            g_runLoopSource = NULL;
         }
     };
 

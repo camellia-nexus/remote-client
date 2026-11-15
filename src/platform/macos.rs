@@ -439,7 +439,10 @@ pub fn uninstall_service(show_new_window: bool, sync: bool) -> bool {
 
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
     unsafe {
-        let e = CGEventCreate(0 as _);
+        let e = CGEventCreate(std::ptr::null_mut());
+        if e.is_null() {
+            return None;
+        }
         let point = CGEventGetLocation(e);
         CFRelease(e);
         Some((point.x as _, point.y as _))

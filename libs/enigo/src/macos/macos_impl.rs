@@ -362,8 +362,10 @@ impl MouseControllable for Enigo {
                         scroll_direction,
                     );
 
-                    CGEventPost(CGEventTapLocation::HID, mouse_ev);
-                    CFRelease(mouse_ev as *const std::ffi::c_void);
+                    if !mouse_ev.is_null() {
+                        CGEventPost(CGEventTapLocation::HID, mouse_ev);
+                        CFRelease(mouse_ev as *const std::ffi::c_void);
+                    }
                 }
             }
         }
@@ -383,8 +385,10 @@ impl MouseControllable for Enigo {
                         scroll_direction,
                     );
 
-                    CGEventPost(CGEventTapLocation::HID, mouse_ev);
-                    CFRelease(mouse_ev as *const std::ffi::c_void);
+                    if !mouse_ev.is_null() {
+                        CGEventPost(CGEventTapLocation::HID, mouse_ev);
+                        CFRelease(mouse_ev as *const std::ffi::c_void);
+                    }
                 }
             }
         }
@@ -727,8 +731,10 @@ impl Enigo {
                         )
                     };
 
-                    CGEventPost(CGEventTapLocation::HID, mouse_ev);
-                    CFRelease(mouse_ev as *const std::ffi::c_void);
+                    if !mouse_ev.is_null() {
+                        CGEventPost(CGEventTapLocation::HID, mouse_ev);
+                        CFRelease(mouse_ev as *const std::ffi::c_void);
+                    }
                 }
             }
         }

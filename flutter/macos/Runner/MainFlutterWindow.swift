@@ -398,15 +398,20 @@ class MainFlutterWindow: NSWindow {
             (call, result) -> Void in
                 switch call.method {
                 case "setWindowTheme":
-                    let arg = call.arguments as! [String: Any]
+                    guard let arg = call.arguments as? [String: Any] else {
+                        result(FlutterError(code: "INVALID_ARGUMENT",
+                                            message: "setWindowTheme requires a dictionary argument",
+                                            details: nil))
+                        break
+                    }
                     let themeName = arg["themeName"] as? String
                     guard let window = registrar.view?.window else {
                         result(nil)
                         return
                     }
-                    self.setWindowInterfaceMode(window: window,themeName: themeName ?? "light")
+                    self.setWindowInterfaceMode(window: window, themeName: themeName ?? "light")
                     result(nil)
-                    break;
+                    break
                 case "terminate":
                     NSApplication.shared.terminate(self)
                     result(nil)
@@ -434,12 +439,46 @@ class MainFlutterWindow: NSWindow {
                     var dy = 0
 
                     if let argMap = call.arguments as? [String: Any] {
-                        dx = (argMap["dx"] as? Int) ?? 0
-                        dy = (argMap["dy"] as? Int) ?? 0
+                        guard let rawDx = argMap["dx"], let rawDy = argMap["dy"] else {
+                            result(FlutterError(code: "INVALID_ARGUMENT",
+                                                message: "bumpMouse dictionary requires 'dx' and 'dy'",
+                                                details: nil))
+                            break
+                        }
+                        guard let numDx = (rawDx as? NSNumber)?.intValue,
+                              let numDy = (rawDy as? NSNumber)?.intValue else {
+                            result(FlutterError(code: "INVALID_ARGUMENT",
+                                                message: "bumpMouse 'dx' and 'dy' must be numeric",
+                                                details: nil))
+                            break
+                        }
+                        dx = numDx
+                        dy = numDy
                     }
                     else if let argList = call.arguments as? [Any] {
-                        dx = argList.count >= 1 ? (argList[0] as? Int) ?? 0 : 0
-                        dy = argList.count >= 2 ? (argList[1] as? Int) ?? 0 : 0
+                        guard argList.count >= 2,
+                              let numDx = (argList[0] as? NSNumber)?.intValue,
+                              let numDy = (argList[1] as? NSNumber)?.intValue else {
+                            result(FlutterError(code: "INVALID_ARGUMENT",
+                                                message: "bumpMouse list requires at least 2 numeric values [dx, dy]",
+                                                details: nil))
+                            break
+                        }
+                        dx = numDx
+                        dy = numDy
+                    }
+                    else {
+                        result(FlutterError(code: "INVALID_ARGUMENT",
+                                            message: "bumpMouse requires a dictionary or list argument",
+                                            details: nil))
+                        break
+                    }
+
+                    guard abs(dx) <= 10000 && abs(dy) <= 10000 else {
+                        result(FlutterError(code: "OUT_OF_BOUNDS",
+                                            message: "bumpMouse delta exceeds bounds (-10000...10000)",
+                                            details: ["dx": dx, "dy": dy]))
+                        break
                     }
 
                     var mouseLoc: CGPoint
@@ -457,13 +496,21 @@ class MainFlutterWindow: NSWindow {
                             y: NSHeight(screenFrame) - nsMouseLoc.y)
                     }
                     else {
-                        result(false)
+                        result(FlutterError(code: "NO_SCREEN",
+                                            message: "Failed to determine mouse location or screen frame",
+                                            details: nil))
                         break
                     }
 
                     let newLoc = CGPoint(x: mouseLoc.x + CGFloat(dx), y: mouseLoc.y + CGFloat(dy))
 
-                    CGDisplayMoveCursorToPoint(0, newLoc)
+                    let errMove = CGDisplayMoveCursorToPoint(0, newLoc)
+                    if errMove != .success {
+                        result(FlutterError(code: "CG_MOVE_FAILED",
+                                            message: "CGDisplayMoveCursorToPoint returned error: \(errMove.rawValue)",
+                                            details: ["errorCode": errMove.rawValue]))
+                        break
+                    }
 
                     // By default, Cocoa suppresses mouse events briefly after a call to warp the
                     // cursor to a new location. This is good if you want to draw the user's
@@ -479,7 +526,13 @@ class MainFlutterWindow: NSWindow {
                     // However, we must NOT call this when relative mouse mode is active,
                     // as it would break the pointer lock established by enableNativeRelativeMouseMode.
                     if !RelativeMouseState.shared.enabled {
-                        CGAssociateMouseAndMouseCursorPosition(1 /* true */)
+                        let errAssoc = CGAssociateMouseAndMouseCursorPosition(1 /* true */)
+                        if errAssoc != .success {
+                            result(FlutterError(code: "CG_ASSOCIATE_FAILED",
+                                                message: "CGAssociateMouseAndMouseCursorPosition returned error: \(errAssoc.rawValue)",
+                                                details: ["errorCode": errAssoc.rawValue]))
+                            break
+                        }
                     }
 
                     result(true)
