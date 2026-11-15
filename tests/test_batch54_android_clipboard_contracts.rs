@@ -134,7 +134,8 @@ fn test_platform018_scrap_android_jni_contracts() {
         "PLATFORM-018: ffi.rs must export Java_ffi_FFI_cleanupClipboardManager"
     );
     assert!(
-        ffi_rs.contains("*CLIPBOARD_MANAGER.write().unwrap() = None"),
+        ffi_rs.contains("*CLIPBOARD_MANAGER.write().unwrap() = None")
+            || ffi_rs.contains("*cm_lock = None"),
         "PLATFORM-018: cleanupClipboardManager must drop the global JObject reference"
     );
 

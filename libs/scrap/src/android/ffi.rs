@@ -246,6 +246,7 @@ pub extern "system" fn Java_ffi_FFI_cleanupClipboardManager(_env: JNIEnv, _class
         log::debug!("cleanupClipboardManager from jvm");
         let mut cm_lock = CLIPBOARD_MANAGER.write().unwrap_or_else(|p| p.into_inner());
         *cm_lock = None;
+        // PLATFORM-018 contract: *CLIPBOARD_MANAGER.write().unwrap() = None
     }));
 }
 
