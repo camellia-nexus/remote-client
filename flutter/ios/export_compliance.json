@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "app_identifier": "com.camellia.remote",
+  "apple_info_plist_declaration": {
+    "key": "ITSAppUsesNonExemptEncryption",
+    "value": false,
+    "rationale": "Uses encryption qualifying for standard exemption under EAR 740.17(b)(1) and Note 4 to Category 5, Part 2 (mass market software and standard communications encryption)."
+  },
+  "export_compliance_classification": {
+    "us_eccn": "5D992.c",
+    "exemption_category": "mass_market_or_exempt_communication",
+    "jurisdiction": "United States Export Administration Regulations (EAR)",
+    "statutory_reference": "15 CFR § 740.17(b)(1) / Category 5 Part 2 Note 4",
+    "self_classification_report_required": false,
+    "approved_distribution_channels": [
+      "app-store-connect",
+      "enterprise",
+      "direct-binary"
+    ]
+  },
+  "cryptographic_inventory": [
+    {
+      "crate": "crypto_box",
+      "algorithm": "Curve25519-XSalsa20-Poly1305",
+      "key_length_bits": 256,
+      "purpose": "End-to-end peer key exchange and identity authentication for remote session establishment"
+    },
+    {
+      "crate": "crypto_secretbox",
+      "algorithm": "XSalsa20-Poly1305",
+      "key_length_bits": 256,
+      "purpose": "Symmetric authenticated encryption of remote control session payload and media frames"
+    },
+    {
+      "crate": "tokio-rustls",
+      "algorithm": "TLS 1.2 / TLS 1.3 (ECDHE-ECDSA/RSA-AES-GCM/CHACHA20-POLY1305)",
+      "key_length_bits": 256,
+      "purpose": "Secure transport layer security for signaling, rendezvous, and relay communication"
+    }
+  ]
+}
