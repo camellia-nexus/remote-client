@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:camellia_remote_app/models/file_model.dart';
+import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/native_model.dart';
 
 void main() {
@@ -53,7 +54,16 @@ void main() {
     late FileController controller;
 
     setUp(() {
-      controller = FileController(isLocal: true);
+      final ffi = FFI(null);
+      controller = FileController(
+        isLocal: true,
+        getSessionID: () => ffi.sessionId,
+        rootState: WeakReference(ffi),
+        jobController: JobController(() => ffi.sessionId, () => null),
+        fileFetcher: FileFetcher(() => ffi.sessionId),
+        getOtherSideDirectoryData: () =>
+            DirectoryData(FileDirectory(), DirectoryOptions()),
+      );
     });
 
     test('canGoBack is false when history is empty, and goBack returns false', () {
