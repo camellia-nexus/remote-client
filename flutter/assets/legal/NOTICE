@@ -1,0 +1,100 @@
+Camellia Remote Client
+Copyright (c) Camellia Computing and contributors.
+
+This repository is derived from RustDesk and other upstream components. The normalized source
+baseline is recorded in SOURCE_PROVENANCE.json. Existing copyright notices and upstream authorship
+remain applicable. Third-party dependencies retain their respective licenses.
+
+Build automation includes a modified copy of subosito/flutter-action v2.23.0 under the MIT
+License; its source notice and license are retained in .github/actions/setup-flutter/.
+
+The client embeds Noto Sans SC and Noto Sans TC from the Noto CJK Sans 2.004 release.
+The unmodified font files are distributed under the SIL Open Font License 1.1; the complete
+license is retained in flutter/assets/fonts/OFL.txt.
+
+Third-party compression components
+
+zstd, zstd-safe and zstd-sys Rust bindings (https://github.com/gyscos/zstd-rs):
+
+BSD 3-Clause License
+
+Copyright (c) 2026, Alexandre Bury
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Included Zstandard C implementation (BSD license option):
+
+BSD License
+
+For Zstandard software
+
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+ * Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+ * Neither the name Facebook, nor Meta, nor the names of its contributors may
+   be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Workspace Components Licensing & Attribution
+
+The client repository includes the following workspace components:
+1. AGPL-3.0-only Core and Platform Integrations:
+   - camellia-remote (root crate)
+   - camellia-remote-protocol (libs/camellia_remote_protocol)
+   - camellia-platform-power (libs/platform_power)
+   - camellia-printing (libs/printing)
+   - camellia-windows-bootstrap (libs/windows-bootstrap)
+   - camellia-remote-portable-packer (libs/portable)
+   - clipboard (libs/clipboard)
+   - remote_printer (libs/remote_printer)
+   - virtual_display & dylib_virtual_display (libs/virtual_display)
+   - libxdo-sys stub (libs/libxdo-sys-stub)
+   - hwcodec (libs/hwcodec)
+
+2. Third-Party Permissive Components:
+   - scrap (libs/scrap): MIT License (Copyright (c) Ram <quadrupleslap@gmail.com>, retained in libs/scrap/LICENSE)
+   - enigo (libs/enigo): MIT License (Copyright (c) Dustin Bensing, retained in libs/enigo/LICENSE)
+   - magnum-opus (libs/magnum-opus): MIT / Apache-2.0 License

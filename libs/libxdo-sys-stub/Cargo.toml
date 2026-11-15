@@ -2,6 +2,9 @@
 name = "libxdo-sys"
 version = "0.11.0"
 edition = "2021"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+repository = "https://github.com/camellia-nexus/remote-client"
 publish = false
 description = "Dynamic loading wrapper for libxdo-sys that doesn't require libxdo at compile/link time"
 

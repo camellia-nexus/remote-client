@@ -2,6 +2,11 @@
 name = "remote_printer"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+repository = "https://github.com/camellia-nexus/remote-client"
+publish = false
+description = "Remote printer driver and spooler integration for Camellia Remote"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
