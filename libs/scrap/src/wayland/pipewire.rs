@@ -601,7 +601,7 @@ static GSTREAMER_INIT: std::sync::OnceLock<Result<(), String>> = std::sync::Once
 pub fn ensure_gstreamer_initialized() -> ResultType<()> {
     match GSTREAMER_INIT.get_or_init(|| gstreamer::init().map_err(|e| e.to_string())) {
         Ok(()) => Ok(()),
-        Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Other, err.clone()).into()),
+        Err(err) => Err(std::io::Error::other(err.clone()).into()),
     }
 }
 const RESTORE_TOKEN: &str = "restore_token";
