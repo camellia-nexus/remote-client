@@ -4,6 +4,10 @@
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
       <key-servers/>
+      <trusted-artifacts>
+         <trust group="^org\.jetbrains\.kotlin.*" regex="true" reason="Kotlin toolchain and Gradle plugins"/>
+         <trust group="^org\.gradle\.kotlin.*" regex="true" reason="Gradle Kotlin DSL plugins"/>
+      </trusted-artifacts>
    </configuration>
    <components>
       <component group="androidx.media" name="media" version="1.6.0">
@@ -60,6 +64,24 @@
       <component group="org.gradle.kotlin.kotlin-dsl" name="org.gradle.kotlin.kotlin-dsl.gradle.plugin" version="6.5.2">
          <artifact name="org.gradle.kotlin.kotlin-dsl.gradle.plugin-6.5.2.pom">
             <sha256 value="e5a6af17b58560d746cab42c795fe3a42a1ebe4050e55a4f00d8cf54cf31f1ea"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin" name="kotlin-gradle-plugin" version="2.2.20">
+         <artifact name="kotlin-gradle-plugin-2.2.20.jar">
+            <sha256 value="676a3a8681eae387452dae7a9070591c49eaf6ef41d6fb8468d84ffb672d57b6"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-2.2.20.module">
+            <sha256 value="dc24bfa47e0442283290e21f069a056141d1f088d6cb9ecaa2eaace1b47b6b8c"/>
+         </artifact>
+         <artifact name="kotlin-gradle-plugin-2.2.20.pom">
+            <sha256 value="b9c3fd2ebd5484d60c5fe0db7aa10878303eeddfc93f942f735c07ba998187cc"/>
+         </artifact>
+      </component>
+      <component group="org.jetbrains.kotlin.jvm" name="org.jetbrains.kotlin.jvm.gradle.plugin" version="2.2.20">
+         <artifact name="org.jetbrains.kotlin.jvm.gradle.plugin-2.2.20.pom">
+            <sha256 value="4eb87defec3e7c2fece0e1a1ecdf22a70cdd61898262555b1d92e7c7b3f3b95d" origin="Gradle Central Plugin Repository">
+               <also-trust value="ad436ee59c91259d6dc67dfde6a8bff00b26524d4123afa61053d1040a963a19"/>
+            </sha256>
          </artifact>
       </component>
    </components>
