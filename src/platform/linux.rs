@@ -230,29 +230,77 @@ const X11_BAD_WINDOW: u8 = 3;
 const XDO_SUCCESS: c_int = 0;
 const XDO_ERROR: c_int = 1;
 
-/// Atomic flag set by the custom X error handler when a BadWindow error occurs.
-static X_BAD_WINDOW_DETECTED: AtomicBool = AtomicBool::new(false);
-static X_UNEXPECTED_ERROR_DETECTED: AtomicBool = AtomicBool::new(false);
+/// Process-lifetime registration of the unified X11 error handler.
+/// Hot-path window focus queries (33ms) MUST NEVER swap or overwrite
+/// the process-global error handler repeatedly, as that creates data races
+/// with concurrent X11 threads and clobbers external/toolkit error handlers.
+static UNIFIED_X_HANDLER_INIT: std::sync::Once = std::sync::Once::new();
+static PREVIOUS_X_ERROR_HANDLER: std::sync::atomic::AtomicPtr<c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
-/// Custom X error handler that catches BadWindow errors (error_code == 3) instead of
-/// letting the default handler terminate the process.
-/// See issue: https://github.com/rustdesk/rustdesk/issues/9003
-unsafe extern "C" fn handle_x_error(_display: *mut c_void, event: *mut XErrorEvent) -> c_int {
-    if !event.is_null() && (*event).error_code == X11_BAD_WINDOW {
-        X_BAD_WINDOW_DETECTED.store(true, Ordering::SeqCst);
-        log::debug!("Caught X11 BadWindow error (suppressed), window was likely destroyed");
-        return 0;
+/// Scope tracking for in-flight geometry queries on a specific Display connection.
+static ACTIVE_GEOMETRY_DISPLAY: std::sync::atomic::AtomicPtr<c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static ACTIVE_GEOMETRY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static ACTIVE_GEOMETRY_BAD_WINDOW: AtomicBool = AtomicBool::new(false);
+static ACTIVE_GEOMETRY_UNEXPECTED_ERROR: AtomicBool = AtomicBool::new(false);
+
+/// Unified X error handler installed once for the lifetime of the process.
+/// Catches BadWindow errors during active window geometry queries, attributes errors
+/// strictly by Display pointer rather than process-wide mutation, and forwards
+/// non-query errors to the previously installed handler.
+unsafe extern "C" fn unified_x_error_handler(display: *mut c_void, event: *mut XErrorEvent) -> c_int {
+    if !event.is_null() {
+        let active_disp = ACTIVE_GEOMETRY_DISPLAY.load(Ordering::SeqCst);
+        let in_flight = ACTIVE_GEOMETRY_IN_FLIGHT.load(Ordering::SeqCst);
+
+        if in_flight
+            && !active_disp.is_null()
+            && (display == active_disp || (*event).display == active_disp)
+        {
+            if (*event).error_code == X11_BAD_WINDOW {
+                ACTIVE_GEOMETRY_BAD_WINDOW.store(true, Ordering::SeqCst);
+                log::debug!("Active geometry query: caught X11 BadWindow error (suppressed, window was destroyed)");
+                return 0;
+            } else {
+                ACTIVE_GEOMETRY_UNEXPECTED_ERROR.store(true, Ordering::SeqCst);
+                log::warn!(
+                    "Active geometry query: unexpected X11 error: code={}, request={}, minor={}",
+                    (*event).error_code,
+                    (*event).request_code,
+                    (*event).minor_code,
+                );
+                return 0;
+            }
+        }
     }
-    X_UNEXPECTED_ERROR_DETECTED.store(true, Ordering::SeqCst);
+
+    // Forward non-geometry-query errors to the previous handler if present
+    let prev = PREVIOUS_X_ERROR_HANDLER.load(Ordering::SeqCst);
+    if !prev.is_null() {
+        let prev_fn: XErrorHandler = std::mem::transmute(prev);
+        return prev_fn(display, event);
+    }
+
     if !event.is_null() {
         log::warn!(
-            "X11 error: error_code={}, request_code={}, minor_code={}",
+            "Unhandled X11 error: display={:?}, error_code={}, request_code={}, minor_code={}",
+            display,
             (*event).error_code,
             (*event).request_code,
             (*event).minor_code,
         );
     }
     0
+}
+
+fn ensure_unified_x_error_handler_installed() {
+    UNIFIED_X_HANDLER_INIT.call_once(|| unsafe {
+        let prev = XSetErrorHandler(Some(unified_x_error_handler));
+        if let Some(prev_fn) = prev {
+            PREVIOUS_X_ERROR_HANDLER.store(prev_fn as *mut c_void, Ordering::SeqCst);
+        }
+    });
 }
 
 #[link(name = "X11")]
@@ -397,13 +445,13 @@ pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
                         return;
                     }
 
-                    // XSetErrorHandler is process-global, not scoped to this Display/thread.
-                    // This path is currently called by the single window_focus service thread.
-                    // While installed, this handler can still observe unrelated X11 errors from
-                    // other threads; unexpected errors make this geometry query fail.
-                    X_BAD_WINDOW_DETECTED.store(false, Ordering::SeqCst);
-                    X_UNEXPECTED_ERROR_DETECTED.store(false, Ordering::SeqCst);
-                    let prev_handler = XSetErrorHandler(Some(handle_x_error));
+                    ensure_unified_x_error_handler_installed();
+
+                    let display_ptr = guard.raw() as *mut c_void;
+                    ACTIVE_GEOMETRY_DISPLAY.store(display_ptr, Ordering::SeqCst);
+                    ACTIVE_GEOMETRY_BAD_WINDOW.store(false, Ordering::SeqCst);
+                    ACTIVE_GEOMETRY_UNEXPECTED_ERROR.store(false, Ordering::SeqCst);
+                    ACTIVE_GEOMETRY_IN_FLIGHT.store(true, Ordering::SeqCst);
 
                     let loc_ret = libxdo_sys::xdo_get_window_location(
                         guard.raw() as *const _,
@@ -423,14 +471,13 @@ pub fn get_focused_display(displays: Vec<DisplayInfo>) -> Option<usize> {
                         XDO_ERROR
                     };
 
-                    // Do not call XSync(DISPLAY) here: DISPLAY is a separate
-                    // XOpenDisplay() connection, while libxdo owns the Display*
-                    // used by these geometry queries. These libxdo calls are
-                    // synchronous XGetWindowAttributes-based queries, so the target
-                    // BadWindow is expected to be delivered before the calls return.
-                    XSetErrorHandler(prev_handler);
-                    if X_BAD_WINDOW_DETECTED.load(Ordering::SeqCst)
-                        || X_UNEXPECTED_ERROR_DETECTED.load(Ordering::SeqCst)
+                    ACTIVE_GEOMETRY_IN_FLIGHT.store(false, Ordering::SeqCst);
+                    ACTIVE_GEOMETRY_DISPLAY.store(std::ptr::null_mut(), Ordering::SeqCst);
+
+                    let had_bad_window = ACTIVE_GEOMETRY_BAD_WINDOW.load(Ordering::SeqCst);
+                    let had_unexpected = ACTIVE_GEOMETRY_UNEXPECTED_ERROR.load(Ordering::SeqCst);
+                    if had_bad_window
+                        || had_unexpected
                         || loc_ret != XDO_SUCCESS
                         || size_ret != XDO_SUCCESS
                     {

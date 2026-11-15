@@ -596,7 +596,14 @@ fn streams_from_response(response: OrgFreedesktopPortalRequestResponse) -> Vec<P
     .unwrap_or_default()
 }
 
-static mut INIT: bool = false;
+static GSTREAMER_INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+
+pub fn ensure_gstreamer_initialized() -> ResultType<()> {
+    match GSTREAMER_INIT.get_or_init(|| gstreamer::init().map_err(|e| e.to_string())) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Other, err.clone()).into()),
+    }
+}
 const RESTORE_TOKEN: &str = "restore_token";
 const RESTORE_TOKEN_CONF_KEY: &str = "wayland-restore-token";
 const PIPEWIRE_DISPLAY_OFFSET_CONF_KEY: &str = "wayland-pipewire-display-offset";
@@ -617,12 +624,7 @@ pub fn request_remote_desktop(
     dbus::Path<'static>,
     bool,
 )> {
-    unsafe {
-        if !INIT {
-            gstreamer::init()?;
-            INIT = true;
-        }
-    }
+    ensure_gstreamer_initialized()?;
     let conn = SyncConnection::new_session()?;
     let portal = get_portal(&conn);
     let mut args: PropMap = HashMap::new();

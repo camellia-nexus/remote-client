@@ -70,23 +70,53 @@ pub fn get_clipboards(client: bool) -> Option<MultiClipboards> {
     }
 }
 
+pub const MAX_CLIPBOARD_PAYLOAD_BYTES: usize = 32 * 1024 * 1024; // 32 MiB
+
+/// Pure-Rust helper to safely process clipboard bytes without JNI dependencies,
+/// enforcing non-null, minimum length (at least 1 byte for target flag),
+/// maximum capacity bounds, and poison-safe mutex updates.
+pub fn process_clipboard_bytes(data: &[u8]) -> Result<bool, &'static str> {
+    if data.is_empty() {
+        return Err("empty_buffer");
+    }
+    if data.len() > MAX_CLIPBOARD_PAYLOAD_BYTES {
+        return Err("buffer_too_large");
+    }
+    let is_client = data[0] == 1;
+    let payload = &data[1..];
+    match MultiClipboards::parse_from_bytes(payload) {
+        Ok(clips) => {
+            if is_client {
+                let mut lock = CLIPBOARDS_CLIENT.lock().unwrap_or_else(|p| p.into_inner());
+                *lock = Some(clips);
+            } else {
+                let mut lock = CLIPBOARDS_HOST.lock().unwrap_or_else(|p| p.into_inner());
+                *lock = Some(clips);
+            }
+            Ok(is_client)
+        }
+        Err(_) => Err("invalid_protobuf"),
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_onVideoFrameUpdate(
     env: JNIEnv,
     _class: JClass,
     buffer: JObject,
 ) {
-    let jb = JByteBuffer::from(buffer);
-    if let Ok(data) = env.get_direct_buffer_address(&jb) {
-        if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
-            if !data.is_null() && len > 0 && len <= MAX_VIDEO_FRAME_BYTES {
-                let slice = unsafe { std::slice::from_raw_parts(data, len) };
-                if let Ok(mut raw) = VIDEO_RAW.lock() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let jb = JByteBuffer::from(buffer);
+        if let Ok(data) = env.get_direct_buffer_address(&jb) {
+            if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
+                if !data.is_null() && len > 0 && len <= MAX_VIDEO_FRAME_BYTES {
+                    let slice = unsafe { std::slice::from_raw_parts(data, len) };
+                    let mut raw = VIDEO_RAW.lock().unwrap_or_else(|p| p.into_inner());
                     raw.update(slice);
                 }
             }
         }
-    }
+    }));
 }
 
 #[no_mangle]
@@ -95,30 +125,32 @@ pub extern "system" fn Java_ffi_FFI_onAudioFrameUpdate(
     _class: JClass,
     buffer: JObject,
 ) {
-    let jb = JByteBuffer::from(buffer);
-    if let Ok(data) = env.get_direct_buffer_address(&jb) {
-        if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
-            if !data.is_null() && len > 0 && len <= MAX_AUDIO_FRAME_BYTES {
-                let slice = unsafe { std::slice::from_raw_parts(data, len) };
-                if let Ok(mut raw) = AUDIO_RAW.lock() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let jb = JByteBuffer::from(buffer);
+        if let Ok(data) = env.get_direct_buffer_address(&jb) {
+            if let Ok(len) = env.get_direct_buffer_capacity(&jb) {
+                if !data.is_null() && len > 0 && len <= MAX_AUDIO_FRAME_BYTES {
+                    let slice = unsafe { std::slice::from_raw_parts(data, len) };
+                    let mut raw = AUDIO_RAW.lock().unwrap_or_else(|p| p.into_inner());
                     raw.update(slice);
                 }
             }
         }
-    }
+    }));
 }
 
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_cleanupMainService(_env: JNIEnv, _class: JClass) {
-    log::debug!("cleanupMainService from jvm");
-    MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
-    *MAIN_SERVICE_CTX.write().unwrap() = None;
-    if let Ok(mut raw) = VIDEO_RAW.lock() {
-        raw.set_enable(false);
-    }
-    if let Ok(mut raw) = AUDIO_RAW.lock() {
-        raw.set_enable(false);
-    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        log::debug!("cleanupMainService from jvm");
+        MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
+        let mut ctx = MAIN_SERVICE_CTX.write().unwrap_or_else(|p| p.into_inner());
+        *ctx = None;
+        let mut v_raw = VIDEO_RAW.lock().unwrap_or_else(|p| p.into_inner());
+        v_raw.set_enable(false);
+        let mut a_raw = AUDIO_RAW.lock().unwrap_or_else(|p| p.into_inner());
+        a_raw.set_enable(false);
+    }));
 }
 
 #[no_mangle]
@@ -127,19 +159,16 @@ pub extern "system" fn Java_ffi_FFI_onClipboardUpdate(
     _class: JClass,
     buffer: JByteBuffer,
 ) {
-    if let Ok(data) = env.get_direct_buffer_address(&buffer) {
-        if let Ok(len) = env.get_direct_buffer_capacity(&buffer) {
-            let data = unsafe { std::slice::from_raw_parts(data, len) };
-            if let Ok(clips) = MultiClipboards::parse_from_bytes(&data[1..]) {
-                let is_client = data[0] == 1;
-                if is_client {
-                    *CLIPBOARDS_CLIENT.lock().unwrap() = Some(clips);
-                } else {
-                    *CLIPBOARDS_HOST.lock().unwrap() = Some(clips);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Ok(data) = env.get_direct_buffer_address(&buffer) {
+            if let Ok(len) = env.get_direct_buffer_capacity(&buffer) {
+                if !data.is_null() && len >= 1 && len <= MAX_CLIPBOARD_PAYLOAD_BYTES {
+                    let slice = unsafe { std::slice::from_raw_parts(data, len) };
+                    let _ = process_clipboard_bytes(slice);
                 }
             }
         }
-    }
+    }));
 }
 
 #[no_mangle]
@@ -149,35 +178,43 @@ pub extern "system" fn Java_ffi_FFI_setFrameRawEnable(
     name: JString,
     value: jboolean,
 ) {
-    let mut env = env;
-    if let Ok(name) = env.get_string(&name) {
-        let name: String = name.into();
-        let value = value.eq(&1);
-        if name.eq("video") {
-            VIDEO_RAW.lock().unwrap().set_enable(value);
-        } else if name.eq("audio") {
-            AUDIO_RAW.lock().unwrap().set_enable(value);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut env = env;
+        if let Ok(name) = env.get_string(&name) {
+            let name: String = name.into();
+            let value = value.eq(&1);
+            if name.eq("video") {
+                let mut raw = VIDEO_RAW.lock().unwrap_or_else(|p| p.into_inner());
+                raw.set_enable(value);
+            } else if name.eq("audio") {
+                let mut raw = AUDIO_RAW.lock().unwrap_or_else(|p| p.into_inner());
+                raw.set_enable(value);
+            }
         }
-    };
+    }));
 }
 
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_init(env: JNIEnv, _class: JClass, ctx: JObject) {
-    log::debug!("MainService init from java");
-    MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
-    if let Ok(jvm) = env.get_java_vm() {
-        let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
-        let mut jvm_lock = JVM.write().unwrap();
-        if jvm_lock.is_none() {
-            *jvm_lock = Some(jvm);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        log::debug!("MainService init from java");
+        MAIN_SERVICE_GENERATION.fetch_add(1, SeqCst);
+        if let Ok(jvm) = env.get_java_vm() {
+            let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
+            let mut jvm_lock = JVM.write().unwrap_or_else(|p| p.into_inner());
+            if jvm_lock.is_none() {
+                *jvm_lock = Some(jvm);
+            }
+            drop(jvm_lock);
+            if let Ok(context) = env.new_global_ref(ctx) {
+                let context_jobject = context.as_obj().as_raw() as *mut c_void;
+                let mut ctx_lock = MAIN_SERVICE_CTX.write().unwrap_or_else(|p| p.into_inner());
+                *ctx_lock = Some(context);
+                drop(ctx_lock);
+                init_ndk_context(java_vm, context_jobject);
+            }
         }
-        drop(jvm_lock);
-        if let Ok(context) = env.new_global_ref(ctx) {
-            let context_jobject = context.as_obj().as_raw() as *mut c_void;
-            *MAIN_SERVICE_CTX.write().unwrap() = Some(context);
-            init_ndk_context(java_vm, context_jobject);
-        }
-    }
+    }));
 }
 
 #[no_mangle]
@@ -186,24 +223,30 @@ pub extern "system" fn Java_ffi_FFI_setClipboardManager(
     _class: JClass,
     clipboard_manager: JObject,
 ) {
-    log::debug!("ClipboardManager init from java");
-    if let Ok(jvm) = env.get_java_vm() {
-        let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
-        let mut jvm_lock = JVM.write().unwrap();
-        if jvm_lock.is_none() {
-            *jvm_lock = Some(jvm);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        log::debug!("ClipboardManager init from java");
+        if let Ok(jvm) = env.get_java_vm() {
+            let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
+            let mut jvm_lock = JVM.write().unwrap_or_else(|p| p.into_inner());
+            if jvm_lock.is_none() {
+                *jvm_lock = Some(jvm);
+            }
+            drop(jvm_lock);
+            if let Ok(manager) = env.new_global_ref(clipboard_manager) {
+                let mut cm_lock = CLIPBOARD_MANAGER.write().unwrap_or_else(|p| p.into_inner());
+                *cm_lock = Some(manager);
+            }
         }
-        drop(jvm_lock);
-        if let Ok(manager) = env.new_global_ref(clipboard_manager) {
-            *CLIPBOARD_MANAGER.write().unwrap() = Some(manager);
-        }
-    }
+    }));
 }
 
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_cleanupClipboardManager(_env: JNIEnv, _class: JClass) {
-    log::debug!("cleanupClipboardManager from jvm");
-    *CLIPBOARD_MANAGER.write().unwrap() = None;
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        log::debug!("cleanupClipboardManager from jvm");
+        let mut cm_lock = CLIPBOARD_MANAGER.write().unwrap_or_else(|p| p.into_inner());
+        *cm_lock = None;
+    }));
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -235,21 +278,25 @@ pub struct MediaCodecInfos {
 
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_setCodecInfo(env: JNIEnv, _class: JClass, info: JString) {
-    let mut env = env;
-    if let Ok(info) = env.get_string(&info) {
-        let info: String = info.into();
-        if let Ok(infos) = serde_json::from_str::<MediaCodecInfos>(&info) {
-            *MEDIA_CODEC_INFOS.write().unwrap() = Some(infos);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut env = env;
+        if let Ok(info) = env.get_string(&info) {
+            let info: String = info.into();
+            if let Ok(infos) = serde_json::from_str::<MediaCodecInfos>(&info) {
+                let mut codec_lock = MEDIA_CODEC_INFOS.write().unwrap_or_else(|p| p.into_inner());
+                *codec_lock = Some(infos);
+            }
         }
-    }
+    }));
 }
 
 pub fn get_codec_info() -> Option<MediaCodecInfos> {
-    MEDIA_CODEC_INFOS.read().unwrap().as_ref().cloned()
+    MEDIA_CODEC_INFOS.read().ok()?.as_ref().cloned()
 }
 
 pub fn clear_codec_info() {
-    *MEDIA_CODEC_INFOS.write().unwrap() = None;
+    let mut codec_lock = MEDIA_CODEC_INFOS.write().unwrap_or_else(|p| p.into_inner());
+    *codec_lock = None;
 }
 
 // another way to fix "reference table overflow" error caused by new_string and call_main_service_pointer_input frequently calld
@@ -479,20 +526,28 @@ pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, res: *mut std::os::raw::c_void) ->
 
 #[no_mangle]
 pub extern "system" fn Java_ffi_FFI_onAppStart(mut env: JNIEnv, _class: JClass, ctx: JObject) {
-    if ctx.is_null() {
-        log::error!("application context is null");
-        return;
-    }
-    if APPLICATION_CONTEXT.read().unwrap().is_some() {
-        log::info!("application context already initialized");
-        return;
-    }
-    if let Ok(jvm) = env.get_java_vm() {
-        if let Ok(context) = env.new_global_ref(ctx) {
-            let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
-            let context_jobject = context.as_obj().as_raw() as *mut c_void;
-            *APPLICATION_CONTEXT.write().unwrap() = Some(context);
-            try_init_rustls_platform_verifier(&mut env, context_jobject);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if ctx.is_null() {
+            log::error!("application context is null");
+            return;
         }
-    }
+        if APPLICATION_CONTEXT
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+        {
+            log::info!("application context already initialized");
+            return;
+        }
+        if let Ok(jvm) = env.get_java_vm() {
+            if let Ok(context) = env.new_global_ref(ctx) {
+                let java_vm = jvm.get_java_vm_pointer() as *mut c_void;
+                let context_jobject = context.as_obj().as_raw() as *mut c_void;
+                *APPLICATION_CONTEXT
+                    .write()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(context);
+                try_init_rustls_platform_verifier(&mut env, context_jobject);
+            }
+        }
+    }));
 }
