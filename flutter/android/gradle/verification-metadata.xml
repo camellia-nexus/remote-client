@@ -32,6 +32,7 @@
          <trust group="^org\.slf4j(\..*)?" regex="true" reason="SLF4J logging API"/>
          <trust group="^org\.jvnet(\..*)?" regex="true" reason="JVNet libraries"/>
          <trust group="^org\.tensorflow(\..*)?" regex="true" reason="TensorFlow Lite metadata"/>
+         <trust group="^kr\.motd\.maven(\..*)?" regex="true" reason="kr.motd.maven os-maven-plugin for native toolchain resolution"/>
       </trusted-artifacts>
    </configuration>
    <components>
