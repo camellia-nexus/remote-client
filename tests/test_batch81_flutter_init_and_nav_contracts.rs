@@ -20,8 +20,7 @@ fn test_init001_native_model_staged_startup_contracts() {
         "flutter/lib/models/native_model.dart must exist"
     );
 
-    let content = fs::read_to_string(&native_model_path)
-        .expect("Failed to read native_model.dart");
+    let content = fs::read_to_string(&native_model_path).expect("Failed to read native_model.dart");
 
     // 1. Verify StartupStage enum definitions
     assert!(
@@ -117,10 +116,10 @@ fn test_nav001_file_model_and_page_back_contracts() {
     assert!(file_model_path.exists(), "file_model.dart must exist");
     assert!(file_page_path.exists(), "file_manager_page.dart must exist");
 
-    let model_content = fs::read_to_string(&file_model_path)
-        .expect("Failed to read file_model.dart");
-    let page_content = fs::read_to_string(&file_page_path)
-        .expect("Failed to read file_manager_page.dart");
+    let model_content =
+        fs::read_to_string(&file_model_path).expect("Failed to read file_model.dart");
+    let page_content =
+        fs::read_to_string(&file_page_path).expect("Failed to read file_manager_page.dart");
 
     // Verify FileController canGoBack and bool goBack()
     assert!(
