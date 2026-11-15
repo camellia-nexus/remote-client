@@ -45,6 +45,9 @@ fn get_client_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+static AUTH_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static STATE_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ============================================================================
 // AUTH-024: Monotonic Rate Limiting & OS Backoff Contract Tests
 // ============================================================================
@@ -141,6 +144,7 @@ fn test_auth024_login_rate_limiter_monotonic_window_and_backward_clock_shift() {
 
 #[test]
 fn test_auth024_os_credential_backoff_doubling_monotonic() {
+    let _guard = AUTH_TEST_MUTEX.lock().unwrap();
     reset_login_failure_state();
     let t0 = Instant::now();
 
@@ -228,10 +232,12 @@ fn test_auth024_os_credential_backoff_doubling_monotonic() {
         "Expected 120 seconds backoff, got: {:?}",
         d6.login_error
     );
+    reset_login_failure_state();
 }
 
 #[test]
 fn test_auth024_os_credential_idle_reset_monotonic() {
+    let _guard = AUTH_TEST_MUTEX.lock().unwrap();
     reset_os_credential_failure_state();
     let t0 = Instant::now();
 
@@ -257,10 +263,13 @@ fn test_auth024_os_credential_idle_reset_monotonic() {
         d_new.allowed,
         "Total failures reset, 1st failure after idle has 0 backoff"
     );
+    reset_os_credential_failure_state();
 }
 
 #[test]
 fn test_auth024_connection_monotonic_minute_and_reset() {
+    let _guard = AUTH_TEST_MUTEX.lock().unwrap();
+    reset_login_failures();
     let min = monotonic_minute();
     assert!(min >= 0, "Monotonic minute must be non-negative");
 
@@ -272,6 +281,7 @@ fn test_auth024_connection_monotonic_minute_and_reset() {
     reset_login_failures();
     let dec = evaluate_os_credential_policy(FailureScope::TerminalOsLogin);
     assert!(dec.allowed);
+    reset_login_failures();
 }
 
 // ============================================================================
@@ -280,8 +290,9 @@ fn test_auth024_connection_monotonic_minute_and_reset() {
 
 #[test]
 fn test_state001_resolution_transaction_requested_applied_and_failed() {
+    let _guard = STATE_TEST_MUTEX.lock().unwrap();
     clear_changed_resolutions_for_test();
-    let display = "Display-Test-1";
+    let display = "Display-Test-1001";
     let original = (1920, 1080);
     let target = (2560, 1440);
 
@@ -315,12 +326,15 @@ fn test_state001_resolution_transaction_requested_applied_and_failed() {
             current: target,
         })
     );
+
+    clear_changed_resolutions_for_test();
 }
 
 #[test]
 fn test_state001_resolution_restore_failure_retention() {
+    let _guard = STATE_TEST_MUTEX.lock().unwrap();
     clear_changed_resolutions_for_test();
-    let fake_display = "CamelliaDummyDisplayNonExistent9999";
+    let fake_display = "CamelliaDummyDisplayNonExistent1002";
     let original = (1920, 1080);
     let target = (1280, 720);
 
@@ -358,8 +372,9 @@ fn test_state001_resolution_restore_failure_retention() {
 
 #[test]
 fn test_state001_failed_resolution_change_discarded_on_restore() {
+    let _guard = STATE_TEST_MUTEX.lock().unwrap();
     clear_changed_resolutions_for_test();
-    let display = "Display-Failed-Test";
+    let display = "Display-Failed-Test-1003";
     let original = (1920, 1080);
     let attempted = (3840, 2160);
 
@@ -387,6 +402,7 @@ fn test_state001_failed_resolution_change_discarded_on_restore() {
         "Failed entries require no hardware restore and should be cleared"
     );
     assert_eq!(get_resolution_status(display), None);
+    clear_changed_resolutions_for_test();
 }
 
 // ============================================================================
@@ -555,14 +571,15 @@ fn test_state002_registry_data_structure_semantics() {
 #[cfg(windows)]
 #[test]
 fn test_state002_windows_virtual_display_owner_live_integration() {
+    let _guard = STATE_TEST_MUTEX.lock().unwrap();
     reset_owner_registry();
     let conn_a = 1001_u64;
     let conn_b = 1002_u64;
-    let display_idx = 3_usize;
+    let display_idx = 3003_usize;
 
     assert_eq!(get_display_owner(display_idx), None);
 
-    // Connection A plugs in and registers virtual display 3
+    // Connection A plugs in and registers virtual display 3003
     register_display_owner(display_idx, conn_a);
     assert_eq!(get_display_owner(display_idx), Some(conn_a));
 
@@ -593,20 +610,22 @@ fn test_state002_windows_virtual_display_owner_live_integration() {
     let session_a = 5001_u64;
     let session_b = 5002_u64;
 
-    register_display_owner(1, session_a);
-    register_display_owner(2, session_a);
-    register_display_owner(3, session_b);
+    register_display_owner(3001, session_a);
+    register_display_owner(3002, session_a);
+    register_display_owner(3003, session_b);
 
     let cleaned = plug_out_owned_displays(session_a);
     assert_eq!(cleaned.len(), 2);
-    assert!(cleaned.contains(&1));
-    assert!(cleaned.contains(&2));
+    assert!(cleaned.contains(&3001));
+    assert!(cleaned.contains(&3002));
 
-    assert_eq!(get_display_owner(1), None);
-    assert_eq!(get_display_owner(2), None);
-    assert_eq!(get_display_owner(3), Some(session_b));
+    assert_eq!(get_display_owner(3001), None);
+    assert_eq!(get_display_owner(3002), None);
+    assert_eq!(get_display_owner(3003), Some(session_b));
 
     let cleaned_b = plug_out_owned_displays(session_b);
-    assert_eq!(cleaned_b, vec![3]);
-    assert_eq!(get_display_owner(3), None);
+    assert_eq!(cleaned_b, vec![3003]);
+    assert_eq!(get_display_owner(3003), None);
+
+    reset_owner_registry();
 }
