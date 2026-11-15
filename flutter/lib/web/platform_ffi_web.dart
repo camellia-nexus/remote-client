@@ -40,6 +40,39 @@ const String _buildBuildDate = String.fromEnvironment(
 
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
+/// Staged startup states for the platform FFI subsystem (INIT-001).
+enum StartupStage {
+  uninitialized,
+  libraryLoaded,
+  bridgeInitialized,
+  eventListenerStarted,
+  deviceConfigured,
+  fullyInitialized,
+  failed,
+}
+
+/// Typed result of PlatformFFI initialization sequence (INIT-001).
+class StartupResult {
+  final bool isSuccess;
+  final StartupStage stage;
+  final Object? error;
+  final StackTrace? stackTrace;
+
+  const StartupResult.success()
+      : isSuccess = true,
+        stage = StartupStage.fullyInitialized,
+        error = null,
+        stackTrace = null;
+
+  const StartupResult.failure(this.stage, this.error, [this.stackTrace])
+      : isSuccess = false;
+
+  @override
+  String toString() => isSuccess
+      ? 'StartupResult.success(stage=$stage)'
+      : 'StartupResult.failure(stage=$stage, error=$error)';
+}
+
 class PlatformFFI {
   final _eventHandlers = <String, Map<String, HandleEvent>>{};
   final RustdeskImpl _ffiBind = RustdeskImpl();
@@ -405,7 +438,7 @@ class PlatformFFI {
         ptr: ptr,
       );
 
-  Future<void> init(String appType) async {
+  Future<StartupResult> init(String appType) async {
     final completer = Completer<void>();
     await _applyBuildBootstrapConfig();
     js.context["onInitFinished"] = (() {
@@ -446,7 +479,12 @@ class PlatformFFI {
         debugPrint('json.decode fail(): $e');
       }
     }).toJS;
-    return completer.future;
+    try {
+      await completer.future;
+      return const StartupResult.success();
+    } catch (e, st) {
+      return StartupResult.failure(StartupStage.failed, e, st);
+    }
   }
 
   Future<void> _applyBuildBootstrapConfig() async {
