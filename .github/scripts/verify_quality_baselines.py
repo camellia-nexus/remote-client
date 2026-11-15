@@ -303,8 +303,14 @@ def verify_flutter(baseline_path: Path, raw_input: str | None = None, verbose: b
     # 1. Zero tolerance for ERROR or WARNING
     if actual_severities.get("ERROR", 0) > 0:
         violations.append(f"Found {actual_severities['ERROR']} fatal ERROR diagnostics! Zero tolerance required.")
+        for d in actual_diags:
+            if d.get("severity") == "ERROR":
+                violations.append(f"  * ERROR [{d['code']}] {d['file']}:{d['line']}:{d['column']} - {d['problemMessage']}")
     if actual_severities.get("WARNING", 0) > 0:
         violations.append(f"Found {actual_severities['WARNING']} fatal WARNING diagnostics! Zero tolerance required.")
+        for d in actual_diags:
+            if d.get("severity") == "WARNING":
+                violations.append(f"  * WARNING [{d['code']}] {d['file']}:{d['line']}:{d['column']} - {d['problemMessage']}")
 
     # 2. Total count check
     if actual_total > allowed_total:
