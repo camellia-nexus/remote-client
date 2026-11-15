@@ -15,6 +15,23 @@
          <trust group="^com\.squareup(\..*)?" regex="true" reason="Square JavaWriter code generation"/>
          <trust group="^org\.sonatype(\..*)?" regex="true" reason="Sonatype OSS parent POMs"/>
          <trust group="^org\.apache(\..*)?" regex="true" reason="Apache commons and plugins"/>
+         <trust group="^com\.sun(\..*)?" regex="true" reason="Sun and Glassfish XML/JAXB dependencies"/>
+         <trust group="^org\.glassfish(\..*)?" regex="true" reason="Glassfish XML and JAXB libraries"/>
+         <trust group="^jakarta(\..*)?" regex="true" reason="Jakarta standard APIs"/>
+         <trust group="^javax(\..*)?" regex="true" reason="Java standard extensions"/>
+         <trust group="^org\.bouncycastle(\..*)?" regex="true" reason="BouncyCastle cryptography"/>
+         <trust group="^org\.checkerframework(\..*)?" regex="true" reason="Checker framework annotations"/>
+         <trust group="^commons-.*" regex="true" reason="Apache Commons libraries"/>
+         <trust group="^org\.jdom(\..*)?" regex="true" reason="JDOM XML library"/>
+         <trust group="^net\.java\.dev\.jna(\..*)?" regex="true" reason="JNA native access"/>
+         <trust group="^net\.sf(\..*)?" regex="true" reason="SourceForge libraries (jopt-simple, kxml)"/>
+         <trust group="^org\.bitbucket\.b_c(\..*)?" regex="true" reason="jose4j JSON security"/>
+         <trust group="^org\.junit(\..*)?" regex="true" reason="JUnit platform and BOM"/>
+         <trust group="^com\.googlecode(\..*)?" regex="true" reason="GoogleCode libraries"/>
+         <trust group="^org\.eclipse(\..*)?" regex="true" reason="Eclipse Foundation libraries"/>
+         <trust group="^org\.slf4j(\..*)?" regex="true" reason="SLF4J logging API"/>
+         <trust group="^org\.jvnet(\..*)?" regex="true" reason="JVNet libraries"/>
+         <trust group="^org\.tensorflow(\..*)?" regex="true" reason="TensorFlow Lite metadata"/>
       </trusted-artifacts>
    </configuration>
    <components>
