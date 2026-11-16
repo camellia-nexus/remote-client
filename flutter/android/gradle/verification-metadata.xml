@@ -37,6 +37,7 @@
          <trust group="^org\.codehaus(\..*)?" regex="true" reason="Codehaus Mojo dependencies"/>
          <trust group="^io\.netty(\..*)?" regex="true" reason="Netty network transport for gRPC"/>
          <trust group="^com\.google\.protobuf(\..*)?" regex="true" reason="Google Protobuf toolchain"/>
+         <trust group="^org\.json(\..*)?" regex="true" reason="org.json JSON parser for Android tooling"/>
       </trusted-artifacts>
    </configuration>
    <components>
