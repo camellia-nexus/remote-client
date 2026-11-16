@@ -42,6 +42,12 @@
          <trust group="^io\.perfmark(\..*)?" regex="true" reason="io.perfmark tracing library for Android gRPC/tooling"/>
          <trust group="^xerces(\..*)?" regex="true" reason="Xerces XML parser for Android tooling"/>
          <trust group="^xml-apis(\..*)?" regex="true" reason="XML APIs for Android tooling"/>
+         <trust group="^rustls(\..*)?" regex="true" reason="rustls-platform-verifier for Android TLS verification"/>
+         <trust group="^com\.getkeepsafe(\..*)?" regex="true" reason="Relinker library for Android native so loading"/>
+         <trust group="^org\.jspecify(\..*)?" regex="true" reason="JSpecify annotations for Android dependencies"/>
+         <trust group="^com\.journeyapps(\..*)?" regex="true" reason="ZXing Android embedded QR code scanner"/>
+         <trust group="^io\.flutter(\..*)?" regex="true" reason="Flutter engine runtime embedding and arm64 artifacts"/>
+         <trust group="^com\.github\.getActivity(\..*)?" regex="true" reason="XXPermissions runtime library for Android permissions"/>
       </trusted-artifacts>
    </configuration>
    <components>
