@@ -38,6 +38,10 @@
          <trust group="^io\.netty(\..*)?" regex="true" reason="Netty network transport for gRPC"/>
          <trust group="^com\.google\.protobuf(\..*)?" regex="true" reason="Google Protobuf toolchain"/>
          <trust group="^org\.json(\..*)?" regex="true" reason="org.json JSON parser for Android tooling"/>
+         <trust group="^net\.java(\..*)?" regex="true" reason="net.java JVNet parent POMs"/>
+         <trust group="^io\.perfmark(\..*)?" regex="true" reason="io.perfmark tracing library for Android gRPC/tooling"/>
+         <trust group="^xerces(\..*)?" regex="true" reason="Xerces XML parser for Android tooling"/>
+         <trust group="^xml-apis(\..*)?" regex="true" reason="XML APIs for Android tooling"/>
       </trusted-artifacts>
    </configuration>
    <components>
