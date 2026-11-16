@@ -1,4 +1,7 @@
 import 'native_model.dart' if (dart.library.html) '../web/platform_ffi_web.dart';
+export 'native_model.dart'
+    if (dart.library.html) '../web/platform_ffi_web.dart'
+    show StartupResult, StartupStage;
 import 'package:camellia_remote_app/generated_bridge.dart'
     if (dart.library.html) 'package:camellia_remote_app/web/bridge.dart';
 
