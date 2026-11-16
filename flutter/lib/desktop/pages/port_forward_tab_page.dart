@@ -51,6 +51,9 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
           forceRelay: params['forceRelay'],
           connToken: params['connToken'],
         )));
+    // CRED-006: Redact transient credentials immediately after consumption
+    params['password'] = null;
+    params['connToken'] = null;
   }
 
   @override
@@ -86,6 +89,8 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
               forceRelay: args['forceRelay'],
               connToken: args['connToken'],
             )));
+        args['password'] = null;
+        args['connToken'] = null;
       } else if (call.method == "onDestroy") {
         tabController.clear();
       } else if (call.method == kWindowActionRebuild) {

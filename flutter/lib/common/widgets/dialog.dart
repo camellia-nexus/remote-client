@@ -1459,10 +1459,14 @@ Future<void> showRequestElevationDialog(
             errPwd.value = translate('Empty Password');
             return;
           }
+          final username = userController.text.trim();
+          final password = pwdController.text;
+          pwdController.clear();
+          userController.clear();
           bind.sessionElevateWithLogon(
             sessionId: sessionId,
-            username: userController.text.trim(),
-            password: pwdController.text,
+            username: username,
+            password: password,
           );
         } else {
           bind.sessionElevateDirect(sessionId: sessionId);
@@ -1595,6 +1599,8 @@ Future<void> showRequestElevationDialog(
       );
     }, tag: '$sessionId-request-elevation');
   } finally {
+    pwdController.clear();
+    userController.clear();
     userController.dispose();
     pwdController.dispose();
     groupValue.close();

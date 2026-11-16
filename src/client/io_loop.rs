@@ -1169,11 +1169,11 @@ impl<T: InvokeUiSession> Remote<T> {
                 allow_err!(peer.send(&msg).await);
                 self.elevation_requested = true;
             }
-            Data::ElevateWithLogon(username, password) => {
+            Data::ElevateWithLogon(username, mut password) => {
                 let mut request = ElevationRequest::new();
                 request.set_logon(ElevationRequestWithLogon {
                     username,
-                    password,
+                    password: password.clone(),
                     ..Default::default()
                 });
                 let mut misc = Misc::new();
@@ -1181,6 +1181,13 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut msg = Message::new();
                 msg.set_misc(misc);
                 allow_err!(peer.send(&msg).await);
+                use zeroize::Zeroize;
+                password.zeroize();
+                if let Some(elevation_request::Union::Logon(mut l)) =
+                    msg.mut_misc().mut_elevation_request().union.take()
+                {
+                    l.password.zeroize();
+                }
                 self.elevation_requested = true;
             }
             Data::NewVoiceCall => {

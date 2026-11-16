@@ -941,12 +941,9 @@ class RustdeskImpl {
     required String password,
     dynamic hint,
   }) {
-    return Future(
-      () => js.context.callMethod('setByName', [
-        'elevate_with_logon',
-        jsonEncode({'username': username, 'password': password}),
-      ]),
-    );
+    // CRED-003: Windows Logon elevation is not supported in web browser runtime.
+    // Reject without retaining or serializing the administrator password.
+    throw UnsupportedError("Windows Logon elevation is not supported in Web Client");
   }
 
   Future<void> sessionSwitchSides({

@@ -79,6 +79,19 @@ jobs:
             .github/scripts/tests/*.sh \
             flutter/web/tools/build_web.sh
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          cache-dependency-glob: "uv.lock"
+
+      - name: Validate Admin CLI package and quality
+        run: |
+          uv sync --locked
+          uv run ruff check tools/admin-cli
+          uv run python -m unittest discover -s tools/admin-cli/tests
+          uv build
+
   generate_bridge:
     name: Generate Flutter Rust bridge
     needs: [metadata]

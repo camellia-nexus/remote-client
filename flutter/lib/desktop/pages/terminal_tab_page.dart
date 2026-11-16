@@ -62,6 +62,9 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         isTerminalRunAsAdmin: isTerminalRunAsAdmin,
       ),
     );
+    // CRED-006: Redact transient credentials immediately after consumption
+    params['password'] = null;
+    params['connToken'] = null;
   }
 
   TabInfo _createTerminalTab({

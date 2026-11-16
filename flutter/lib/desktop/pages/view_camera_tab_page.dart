@@ -106,6 +106,9 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         ),
       ));
       _update_remote_count();
+      // CRED-006: Redact transient credentials immediately after consumption
+      params['password'] = null;
+      params['connToken'] = null;
     }
     tabController.onRemoved = (_, id) => onRemoveId(id);
     rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
@@ -441,6 +444,8 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           isSharedPassword: args['isSharedPassword'],
         ),
       ));
+      args['password'] = null;
+      args['connToken'] = null;
     } else if (call.method == kWindowDisableGrabKeyboard) {
       // ???
     } else if (call.method == "onDestroy") {

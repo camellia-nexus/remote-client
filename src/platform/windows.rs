@@ -2831,7 +2831,7 @@ pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) ->
         };
         let wuser = wide_string(username);
         let wpc = wide_string(domain);
-        let wpwd = wide_string(pwd);
+        let wpwd = zeroize::Zeroizing::new(wide_string(pwd));
         let cmd = if arg.is_empty() {
             format!("\"{}\"", exe)
         } else {

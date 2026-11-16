@@ -67,6 +67,14 @@ class Peer {
     };
   }
 
+  /// CRED-006: Redacted snapshot excluding sensitive authentication material (hash/password).
+  Map<String, dynamic> toSafeJson() {
+    var res = toJson();
+    res.remove('hash');
+    res.remove('password');
+    return res;
+  }
+
   Map<String, dynamic> toCustomJson({required bool includingHash}) {
     var res = <String, dynamic>{
       "id": id,

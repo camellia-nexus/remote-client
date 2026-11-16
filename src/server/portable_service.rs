@@ -1222,7 +1222,7 @@ pub mod client {
                         }
                     }
                 }
-                StartPara::Logon(username, password) => {
+                StartPara::Logon(username, mut password) => {
                     let exe = std::env::current_exe()?.to_string_lossy().to_string();
                     if username.trim().is_empty() {
                         clear_runtime_shmem_state();
@@ -1252,12 +1252,15 @@ pub mod client {
                         }
                     };
 
-                    if let Err(e) = crate::platform::windows::create_process_with_logon(
+                    let logon_res = crate::platform::windows::create_process_with_logon(
                         username.as_str(),
                         password.as_str(),
                         &exe,
                         &portable_service_arg,
-                    ) {
+                    );
+                    use zeroize::Zeroize;
+                    password.zeroize();
+                    if let Err(e) = logon_res {
                         clear_runtime_shmem_state();
                         bail!("Failed to run portable service process: {}", e);
                     }

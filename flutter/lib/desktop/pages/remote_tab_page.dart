@@ -110,6 +110,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         ),
       );
       _update_remote_count();
+      // CRED-006: Redact transient credentials immediately after consumption
+      params['password'] = null;
     }
     tabController.onRemoved = (_, id) => onRemoveId(id);
     rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
@@ -549,6 +551,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           ),
         ),
       );
+      args['password'] = null;
     } else if (call.method == kWindowDisableGrabKeyboard) {
       // ???
     } else if (call.method == "onDestroy") {
