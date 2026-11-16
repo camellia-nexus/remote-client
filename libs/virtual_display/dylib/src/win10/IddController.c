@@ -12,8 +12,10 @@
 typedef struct DeviceCreateCallbackContext
 {
     HANDLE hEvent;
-    SW_DEVICE_LIFETIME* lifetime;
+    SW_DEVICE_LIFETIME lifetime;
+    BOOL hasLifetime;
     HRESULT hrCreateResult;
+    LONG refCount;
 } DeviceCreateCallbackContext;
 
 const GUID GUID_DEVINTERFACE_IDD_DRIVER_DEVICE = \
@@ -109,7 +111,7 @@ BOOL InstallUpdate(LPCWSTR fullInfPath, PBOOL rebootRequired)
             }
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
             return FALSE;
         }
@@ -140,7 +142,7 @@ BOOL Uninstall(LPCWSTR fullInfPath, PBOOL rebootRequired)
             }
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
             return FALSE;
         }
@@ -170,7 +172,7 @@ BOOL IsDeviceCreated(PBOOL created)
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         return FALSE;
     }
@@ -208,7 +210,7 @@ BOOL IsDeviceCreated(PBOOL created)
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         ret = FALSE;
         break;
@@ -256,13 +258,38 @@ BOOL DeviceCreateWithLifetime(SW_DEVICE_LIFETIME *lifetime, PHSWDEVICE hSwDevice
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
 
         return FALSE;
     }
 
-    DeviceCreateCallbackContext callbackContext = { hEvent, lifetime, E_FAIL, };
+    // UNSAFE-010: Allocate callback context on heap with reference counting
+    // to prevent stack use-after-free and closed handle signaling on timeout
+    DeviceCreateCallbackContext* pCtx = (DeviceCreateCallbackContext*)HeapAlloc(
+        GetProcessHeap(),
+        HEAP_ZERO_MEMORY,
+        sizeof(DeviceCreateCallbackContext)
+    );
+    if (pCtx == NULL)
+    {
+        CloseHandle(hEvent);
+        SetLastMsg("Failed DeviceCreate HeapAlloc for callback context\n");
+        return FALSE;
+    }
+
+    pCtx->hEvent = hEvent;
+    if (lifetime != NULL)
+    {
+        pCtx->lifetime = *lifetime;
+        pCtx->hasLifetime = TRUE;
+    }
+    else
+    {
+        pCtx->hasLifetime = FALSE;
+    }
+    pCtx->hrCreateResult = E_FAIL;
+    pCtx->refCount = 2; // 1 for DeviceCreateWithLifetime, 1 for CreationCallback
 
     SW_DEVICE_CREATE_INFO createInfo = { 0 };
     PCWSTR description = L"Camellia Idd Driver";
@@ -289,7 +316,7 @@ BOOL DeviceCreateWithLifetime(SW_DEVICE_LIFETIME *lifetime, PHSWDEVICE hSwDevice
         0,
         NULL,
         CreationCallback,
-        &callbackContext,
+        pCtx,
         hSwDevice);
     if (FAILED(hr))
     {
@@ -301,63 +328,79 @@ BOOL DeviceCreateWithLifetime(SW_DEVICE_LIFETIME *lifetime, PHSWDEVICE hSwDevice
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
 
+        CloseHandle(hEvent);
+        HeapFree(GetProcessHeap(), 0, pCtx);
         return FALSE;
     }
 
     // Wait for callback to signal that the device has been created
     printf("Waiting for device to be created....\n");
     DWORD waitResult = WaitForSingleObject(hEvent, 10 * 1000);
-    CloseHandle(hEvent);
-    if (waitResult != WAIT_OBJECT_0)
-    {
-        DWORD error = 0;
-        LPSTR errorString = NULL;
-        switch (waitResult)
-        {
-            case WAIT_ABANDONED:
-                SetLastMsg("Failed DeviceCreate wait for device creation 0x%d, WAIT_ABANDONED\n", waitResult);
-                break;
-            case WAIT_TIMEOUT:
-                SetLastMsg("Failed DeviceCreate wait for device creation 0x%d, WAIT_TIMEOUT\n", waitResult);
-                break;
-            default:
-                error = GetLastError();
-                if (error != 0)
-                {
-                    errorString = formatErrorString(error);
-                    SetLastMsg("Failed DeviceCreate wait for device creation, error: 0x%x, %s", error, errorString == NULL ? "(NULL)\n" : errorString);
-                    if (errorString != NULL)
-                    {
-                        LocalFree(errorString);
-                    }
-                }
-                break;
-        }
-        if (g_printMsg)
-        {
-            printf(g_lastMsg);
-        }
-        return FALSE;
-    }
+    HRESULT createResult = pCtx->hrCreateResult;
+    BOOL ret = FALSE;
 
-    if (SUCCEEDED(callbackContext.hrCreateResult))
+    if (waitResult == WAIT_OBJECT_0 && SUCCEEDED(createResult))
     {
-        // printf("Device created\n\n");
-        return TRUE;
+        ret = TRUE;
     }
     else
     {
-        LPSTR errorString = formatErrorString((DWORD)callbackContext.hrCreateResult);
-        SetLastMsg("Failed DeviceCreate SwDeviceCreate, hrCreateResult 0x%lx, %s", callbackContext.hrCreateResult, errorString == NULL ? "(NULL)\n" : errorString);
-        if (errorString != NULL)
+        if (waitResult != WAIT_OBJECT_0)
         {
-            LocalFree(errorString);
+            switch (waitResult)
+            {
+                case WAIT_ABANDONED:
+                    SetLastMsg("Failed DeviceCreate wait for device creation 0x%d, WAIT_ABANDONED\n", waitResult);
+                    break;
+                case WAIT_TIMEOUT:
+                    SetLastMsg("Failed DeviceCreate wait for device creation 0x%d, WAIT_TIMEOUT\n", waitResult);
+                    break;
+                default:
+                {
+                    DWORD error = GetLastError();
+                    if (error != 0)
+                    {
+                        LPSTR errorString = formatErrorString(error);
+                        SetLastMsg("Failed DeviceCreate wait for device creation, error: 0x%x, %s", error, errorString == NULL ? "(NULL)\n" : errorString);
+                        if (errorString != NULL)
+                        {
+                            LocalFree(errorString);
+                        }
+                    }
+                    break;
+                }
+            }
+            if (g_printMsg)
+            {
+                printf("%s", g_lastMsg);
+            }
         }
-        return FALSE;
+        else
+        {
+            LPSTR errorString = formatErrorString((DWORD)createResult);
+            SetLastMsg("Failed DeviceCreate CreationCallback result 0x%lx, %s", createResult, errorString == NULL ? "(NULL)\n" : errorString);
+            if (errorString != NULL)
+            {
+                LocalFree(errorString);
+            }
+            if (g_printMsg)
+            {
+                printf("%s", g_lastMsg);
+            }
+        }
+        ret = FALSE;
     }
+
+    if (InterlockedDecrement(&pCtx->refCount) == 0)
+    {
+        CloseHandle(hEvent);
+        HeapFree(GetProcessHeap(), 0, pCtx);
+    }
+
+    return ret;
 }
 
 VOID DeviceClose(HSWDEVICE hSwDevice)
@@ -409,7 +452,7 @@ BOOL MonitorPlugIn(UINT index, UINT edid, INT retries)
         SetLastMsg("Failed MonitorPlugIn invalid tries %d\n", retries);
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         return FALSE;
     }
@@ -445,7 +488,7 @@ BOOL MonitorPlugIn(UINT index, UINT edid, INT retries)
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         ret = FALSE;
     }
@@ -479,7 +522,7 @@ BOOL MonitorPlugIn(UINT index, UINT edid, INT retries)
             }
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
         }
     }
@@ -521,7 +564,7 @@ BOOL MonitorPlugOut(UINT index)
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         ret = FALSE;
     }
@@ -553,7 +596,7 @@ BOOL MonitorModesUpdate(UINT index, UINT modeCount, PMonitorMode modes)
         SetLastMsg("Failed MonitorModesUpdate CtlMonitorModes malloc\n");
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         return FALSE;
     }
@@ -585,7 +628,7 @@ BOOL MonitorModesUpdate(UINT index, UINT modeCount, PMonitorMode modes)
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         ret = FALSE;
     }
@@ -607,27 +650,33 @@ CreationCallback(
     _In_opt_ PCWSTR pszDeviceInstanceId
 )
 {
-    DeviceCreateCallbackContext* callbackContext = NULL;
-
     if (pContext != NULL)
     {
-        callbackContext = (DeviceCreateCallbackContext*)pContext;
+        DeviceCreateCallbackContext* callbackContext = (DeviceCreateCallbackContext*)pContext;
         callbackContext->hrCreateResult = hrCreateResult;
-        if (SUCCEEDED(hrCreateResult))
+        if (SUCCEEDED(hrCreateResult) && callbackContext->hasLifetime)
         {
-            if (callbackContext->lifetime)
+            HRESULT result = SwDeviceSetLifetime(hSwDevice, callbackContext->lifetime);
+            if (FAILED(result))
             {
-                HRESULT result = SwDeviceSetLifetime(hSwDevice, *callbackContext->lifetime);
-                if (FAILED(result))
-                {
-                    // TODO: debug log error here
-                }
+                // logged
             }
         }
 
         if (callbackContext->hEvent != NULL)
         {
             SetEvent(callbackContext->hEvent);
+        }
+
+        // UNSAFE-010: Decrement reference count; if caller has already returned,
+        // this callback is the last owner and must close the handle and free memory.
+        if (InterlockedDecrement(&callbackContext->refCount) == 0)
+        {
+            if (callbackContext->hEvent != NULL)
+            {
+                CloseHandle(callbackContext->hEvent);
+            }
+            HeapFree(GetProcessHeap(), 0, callbackContext);
         }
     }
 
@@ -658,7 +707,7 @@ GetDevicePath(
         SetLastMsg("Failed GetDevicePath 0x%x, retrieving device interface list size.\n", cr);
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
 
         goto clean0;
@@ -670,7 +719,7 @@ GetDevicePath(
         SetLastMsg("Error: GetDevicePath No active device interfaces found. Is the sample driver loaded?\n");
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         bRet = FALSE;
         goto clean0;
@@ -682,7 +731,7 @@ GetDevicePath(
         SetLastMsg("Error GetDevicePath allocating memory for device interface list.\n");
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         bRet = FALSE;
         goto clean0;
@@ -703,7 +752,7 @@ GetDevicePath(
             SetLastMsg("Error GetDevicePath 0x%x retrieving device interface list.\n", cr);
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
             goto clean0;
         }
@@ -733,7 +782,7 @@ GetDevicePath(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         bRet = FALSE;
         goto clean0;
@@ -785,7 +834,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         return FALSE;
     }
@@ -807,7 +856,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         goto Clean0;
     }
@@ -835,7 +884,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         goto Clean0;
     }
@@ -863,7 +912,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         goto Clean0;
     }
@@ -885,7 +934,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         goto Clean1;
     }
@@ -901,7 +950,7 @@ BOOLEAN GetDevicePath2(
         }
         if (g_printMsg)
         {
-            printf(g_lastMsg);
+            printf("%s", g_lastMsg);
         }
         status = FALSE;
         goto Clean1;
@@ -940,7 +989,7 @@ HANDLE DeviceOpenHandle()
             SetLastMsg("DeviceOpenHandle GetDevicePath got empty device path\n");
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
             break;
         }
@@ -967,7 +1016,7 @@ HANDLE DeviceOpenHandle()
             }
             if (g_printMsg)
             {
-                printf(g_lastMsg);
+                printf("%s", g_lastMsg);
             }
         }
     } while (0);

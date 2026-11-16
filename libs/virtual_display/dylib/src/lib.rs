@@ -1,13 +1,53 @@
 #[cfg(windows)]
 pub mod win10;
-use camellia_remote_protocol::ResultType;
 #[cfg(windows)]
-use camellia_remote_protocol::{bail, lazy_static};
+use camellia_remote_protocol::bail;
+use camellia_remote_protocol::{lazy_static, ResultType};
 #[cfg(windows)]
 use std::path::PathBuf;
-
-#[cfg(windows)]
 use std::sync::Mutex;
+
+// ABI-001: Versioned C-ABI constants and handshakes
+pub const VIRTUAL_DISPLAY_ABI_MAGIC: u32 = 0x56495254; // 'V', 'I', 'R', 'T'
+pub const VIRTUAL_DISPLAY_ABI_VERSION: u32 = 1;
+
+#[no_mangle]
+pub extern "C" fn virtual_display_abi_magic() -> u32 {
+    VIRTUAL_DISPLAY_ABI_MAGIC
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_abi_version() -> u32 {
+    VIRTUAL_DISPLAY_ABI_VERSION
+}
+
+lazy_static::lazy_static! {
+    static ref LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+}
+
+fn set_last_error(msg: impl Into<String>) {
+    if let Ok(mut lock) = LAST_ERROR.lock() {
+        *lock = msg.into();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_get_last_error(buf: *mut u8, buf_len: usize) -> i32 {
+    if buf.is_null() || buf_len == 0 {
+        return -1;
+    }
+    let msg = match LAST_ERROR.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    let bytes = msg.as_bytes();
+    let to_copy = bytes.len().min(buf_len.saturating_sub(1));
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, to_copy);
+        *buf.add(to_copy) = 0;
+    }
+    to_copy as i32
+}
 
 #[cfg(windows)]
 lazy_static::lazy_static! {
@@ -18,8 +58,32 @@ lazy_static::lazy_static! {
 
 #[no_mangle]
 #[cfg(windows)]
-pub fn get_driver_install_path() -> &'static str {
+pub extern "C" fn get_driver_install_path() -> &'static str {
     win10::DRIVER_INSTALL_PATH
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_get_driver_install_path(buf: *mut u8, buf_len: usize) -> i32 {
+    if buf.is_null() || buf_len == 0 {
+        return -1;
+    }
+    #[cfg(windows)]
+    let path = win10::DRIVER_INSTALL_PATH;
+    #[cfg(not(windows))]
+    let path = "";
+
+    let bytes = path.as_bytes();
+    let to_copy = bytes.len().min(buf_len.saturating_sub(1));
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, to_copy);
+        *buf.add(to_copy) = 0;
+    }
+    to_copy as i32
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_download_driver() -> i32 {
+    0
 }
 
 #[no_mangle]
@@ -49,6 +113,25 @@ fn get_driver_install_abs_path() -> ResultType<PathBuf> {
         bail!("{} not exists", install_path)
     }
     Ok(abs_path)
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_install_update_driver(reboot_required: *mut i32) -> i32 {
+    let mut reboot = false;
+    match install_update_driver(&mut reboot) {
+        Ok(()) => {
+            if !reboot_required.is_null() {
+                unsafe {
+                    *reboot_required = if reboot { 1 } else { 0 };
+                }
+            }
+            0
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
+    }
 }
 
 #[no_mangle]
@@ -84,6 +167,25 @@ pub fn install_update_driver(_reboot_required: &mut bool) -> ResultType<()> {
 }
 
 #[no_mangle]
+pub extern "C" fn virtual_display_uninstall_driver(reboot_required: *mut i32) -> i32 {
+    let mut reboot = false;
+    match uninstall_driver(&mut reboot) {
+        Ok(()) => {
+            if !reboot_required.is_null() {
+                unsafe {
+                    *reboot_required = if reboot { 1 } else { 0 };
+                }
+            }
+            0
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
+    }
+}
+
+#[no_mangle]
 pub fn uninstall_driver(_reboot_required: &mut bool) -> ResultType<()> {
     #[cfg(windows)]
     unsafe {
@@ -110,11 +212,31 @@ pub fn uninstall_driver(_reboot_required: &mut bool) -> ResultType<()> {
 }
 
 #[no_mangle]
+pub extern "C" fn virtual_display_is_device_created() -> i32 {
+    if is_device_created() {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
 pub fn is_device_created() -> bool {
     #[cfg(windows)]
     return *H_SW_DEVICE.lock().unwrap() != 0;
     #[cfg(not(windows))]
     return false;
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_create_device() -> i32 {
+    match create_device() {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
+    }
 }
 
 #[no_mangle]
@@ -136,11 +258,32 @@ pub fn create_device() -> ResultType<()> {
 }
 
 #[no_mangle]
+pub extern "C" fn virtual_display_close_device() -> i32 {
+    close_device();
+    0
+}
+
+#[no_mangle]
 pub fn close_device() {
     #[cfg(windows)]
     unsafe {
         win10::idd::DeviceClose(*H_SW_DEVICE.lock().unwrap() as win10::idd::HSWDEVICE);
         *H_SW_DEVICE.lock().unwrap() = 0;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn virtual_display_plug_in_monitor(
+    monitor_index: u32,
+    edid: u32,
+    retries: u32,
+) -> i32 {
+    match plug_in_monitor(monitor_index, edid, retries) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
     }
 }
 
@@ -158,6 +301,17 @@ pub fn plug_in_monitor(_monitor_index: u32, _edid: u32, _retries: u32) -> Result
 }
 
 #[no_mangle]
+pub extern "C" fn virtual_display_plug_out_monitor(monitor_index: u32) -> i32 {
+    match plug_out_monitor(monitor_index) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
+    }
+}
+
+#[no_mangle]
 pub fn plug_out_monitor(_monitor_index: u32) -> ResultType<()> {
     #[cfg(windows)]
     unsafe {
@@ -172,6 +326,21 @@ pub fn plug_out_monitor(_monitor_index: u32) -> ResultType<()> {
 type PMonitorMode = win10::idd::PMonitorMode;
 #[cfg(not(windows))]
 type PMonitorMode = *mut std::ffi::c_void;
+
+#[no_mangle]
+pub extern "C" fn virtual_display_update_monitor_modes(
+    monitor_index: u32,
+    mode_count: u32,
+    modes: PMonitorMode,
+) -> i32 {
+    match update_monitor_modes(monitor_index, mode_count, modes) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e.to_string());
+            -1
+        }
+    }
+}
 
 #[no_mangle]
 pub fn update_monitor_modes(

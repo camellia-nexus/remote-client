@@ -42,6 +42,7 @@ pub const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 4096;
 pub const LOAD_LIBRARY_SAFE_CURRENT_DIRS: u32 = 8192;
 pub const LOAD_LIBRARY_SEARCH_SYSTEM32_NO_FORWARDER: u32 = 16384;
 pub const LOAD_LIBRARY_OS_INTEGRITY_CONTINUITY: u32 = 32768;
+pub const MAX_MAG_BUFFER_SIZE: usize = 256 * 1024 * 1024; // 256 MiB upper bound (FFI-002)
 
 extern "C" {
     pub static GUID_WICPixelFormat32bppRGBA: GUID;
@@ -545,7 +546,10 @@ impl CapturerMag {
     }
 
     fn clear_data() {
-        let mut lock = MAG_BUFFER.lock().unwrap();
+        let mut lock = match MAG_BUFFER.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         lock.0 = false;
         lock.1.clear();
     }
@@ -624,8 +628,11 @@ impl CapturerMag {
             }
         }
 
-        let mut lock = MAG_BUFFER.lock().unwrap();
-        if !lock.0 {
+        let lock = match MAG_BUFFER.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if !lock.0 || lock.1.is_empty() {
             return Err(Error::new(
                 ErrorKind::Other,
                 "No data captured by magnifier",
@@ -633,9 +640,7 @@ impl CapturerMag {
         }
 
         data.resize(lock.1.len(), 0);
-        unsafe {
-            std::ptr::copy_nonoverlapping(&mut lock.1[0], &mut data[0], data.len());
-        }
+        data.copy_from_slice(&lock.1);
 
         Ok(())
     }
@@ -680,13 +685,47 @@ impl CapturerMag {
     ) -> BOOL {
         Self::clear_data();
 
-        if !IsEqualGUID(&srcheader.format, &GUID_WICPixelFormat32bppRGBA) {
-            // log warning?
+        // FFI-002: Harden boundary validation to prevent NULL deref, integer overflow, and OOB read
+        if srcdata.is_null() {
             return FALSE;
         }
-        let mut lock = MAG_BUFFER.lock().unwrap();
+
+        if srcheader.cbSize == 0 || srcheader.cbSize > MAX_MAG_BUFFER_SIZE {
+            return FALSE;
+        }
+
+        if srcheader.width == 0 || srcheader.height == 0 || srcheader.stride == 0 {
+            return FALSE;
+        }
+
+        let required_bytes = match (srcheader.stride as usize)
+            .checked_mul(srcheader.height as usize)
+            .and_then(|bytes| bytes.checked_add(srcheader.offset as usize))
+        {
+            Some(bytes) => bytes,
+            None => return FALSE,
+        };
+
+        if srcheader.cbSize < required_bytes {
+            return FALSE;
+        }
+
+        if !IsEqualGUID(&srcheader.format, &GUID_WICPixelFormat32bppRGBA) {
+            return FALSE;
+        }
+
+        let mut lock = match MAG_BUFFER.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         lock.1.resize(srcheader.cbSize, 0);
-        std::ptr::copy_nonoverlapping(srcdata as _, &mut lock.1[0], srcheader.cbSize);
+        if !lock.1.is_empty() {
+            std::ptr::copy_nonoverlapping(
+                srcdata as *const u8,
+                lock.1.as_mut_ptr(),
+                srcheader.cbSize,
+            );
+        }
         lock.0 = true;
         TRUE
     }
