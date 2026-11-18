@@ -48,6 +48,7 @@ use camellia_remote_protocol::{
         CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT, RENDEZVOUS_PORT, RENDEZVOUS_SERVERS,
     },
     crypto::sign,
+    error,
     fs::JobType,
     futures::future::{select_ok, FutureExt},
     get_version_number, log,
@@ -99,25 +100,6 @@ pub const SEC30: Duration = Duration::from_secs(30);
 const RESTART_REMOTE_DEVICE_GRACE: Duration = Duration::from_secs(5 * 60);
 const MAX_DECODE_FAIL_COUNTER: usize = 3;
 
-#[cfg(target_os = "linux")]
-pub const LOGIN_MSG_DESKTOP_NOT_INITED: &str = "Desktop env is not inited";
-pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY: &str = "Desktop session not ready";
-pub const LOGIN_MSG_DESKTOP_XSESSION_FAILED: &str = "Desktop xsession failed";
-pub const LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER: &str = "Desktop session another user login";
-pub const LOGIN_MSG_DESKTOP_XORG_NOT_FOUND: &str = "Desktop xorg not found";
-// ls /usr/share/xsessions/
-pub const LOGIN_MSG_DESKTOP_NO_DESKTOP: &str = "Desktop none";
-pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY: &str =
-    "Desktop session not ready, password empty";
-pub const LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG: &str =
-    "Desktop session not ready, password wrong";
-pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
-pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
-pub const LOGIN_MSG_2FA_WRONG: &str = "Wrong 2FA Code";
-pub const REQUIRE_2FA: &'static str = "2FA Required";
-pub const LOGIN_MSG_NO_PASSWORD_ACCESS: &str = "No Password Access";
-pub const LOGIN_MSG_OFFLINE: &str = "Offline";
-pub const LOGIN_SCREEN_WAYLAND: &str = "Wayland login screen is not supported";
 #[cfg(target_os = "linux")]
 pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "ubuntu-21-04-required";
 #[cfg(target_os = "linux")]
@@ -198,14 +180,7 @@ impl Client {
         interface.update_direct(None);
         interface.update_received(false);
         match Self::_start(peer, key, token, conn_type, interface.clone()).await {
-            Err(err) => {
-                let err_str = err.to_string();
-                if err_str.starts_with("Failed") {
-                    bail!(err_str + ": Please try later");
-                } else {
-                    return Err(err);
-                }
-            }
+            Err(err) => return Err(err),
             Ok(x) => {
                 // Set x.2 to true only in the connect() function to indicate that direct_failures needs to be updated; everywhere else it should be set to false.
                 if x.2 {
@@ -3846,55 +3821,55 @@ struct LoginErrorMsgBox {
 lazy_static::lazy_static! {
     static ref LOGIN_ERROR_MAP: Arc<HashMap<&'static str, LoginErrorMsgBox>> = {
         use config::LINK_HEADLESS_LINUX_SUPPORT;
-        let map = HashMap::from([(LOGIN_SCREEN_WAYLAND, LoginErrorMsgBox{
+        let map = HashMap::from([("wayland_unsupported", LoginErrorMsgBox{
             msgtype: "error",
             title: "Login Error",
             text: "Login screen using Wayland is not supported",
             link: LINK_HEADLESS_LINUX_SUPPORT,
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
+        }), ("desktop_session_not_ready", LoginErrorMsgBox{
             msgtype: "session-login",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_XSESSION_FAILED, LoginErrorMsgBox{
+        }), ("desktop_xsession_failed", LoginErrorMsgBox{
             msgtype: "session-re-login",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER, LoginErrorMsgBox{
+        }), ("desktop_session_another_user", LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "another_user_login_title_tip",
             text: "another_user_login_text_tip",
             link: "",
             try_again: false,
-        }), (LOGIN_MSG_DESKTOP_XORG_NOT_FOUND, LoginErrorMsgBox{
+        }), ("desktop_xorg_not_found", LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "xorg_not_found_title_tip",
             text: "xorg_not_found_text_tip",
             link: LINK_HEADLESS_LINUX_SUPPORT,
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_NO_DESKTOP, LoginErrorMsgBox{
+        }), ("desktop_no_desktop", LoginErrorMsgBox{
             msgtype: "info-nocancel",
             title: "no_desktop_title_tip",
             text: "no_desktop_text_tip",
             link: LINK_HEADLESS_LINUX_SUPPORT,
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY, LoginErrorMsgBox{
+        }), ("desktop_session_password_required", LoginErrorMsgBox{
             msgtype: "session-login-password",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG, LoginErrorMsgBox{
+        }), ("desktop_session_password_invalid", LoginErrorMsgBox{
             msgtype: "session-login-re-password",
             title: "",
             text: "",
             link: "",
             try_again: true,
-        }), (LOGIN_MSG_NO_PASSWORD_ACCESS, LoginErrorMsgBox{
+        }), ("no_password_access", LoginErrorMsgBox{
             msgtype: "wait-remote-accept-nook",
             title: "Prompt",
             text: "Please wait for the remote side to accept your session request...",
@@ -3909,28 +3884,39 @@ lazy_static::lazy_static! {
 /// Return true if the password is wrong, return false if there's an actual error.
 pub fn handle_login_error(
     lc: Arc<RwLock<LoginConfigHandler>>,
-    err: &str,
+    err: &ErrorEnvelope,
     interface: &impl Interface,
 ) -> bool {
-    if err == LOGIN_MSG_PASSWORD_EMPTY {
+    if !error::is_valid_for(err, error::ErrorContext::Login) {
+        log::warn!("rejected invalid remote error envelope");
+        interface.msgbox("error", "Login Error", "protocol_mismatch", "");
+        return false;
+    }
+    let code = err.code.enum_value_or_default();
+    if code == ErrorCode::PASSWORD_REQUIRED {
         lc.write().unwrap().password = Default::default();
         interface.msgbox("input-password", "Password Required", "", "");
         true
-    } else if err == LOGIN_MSG_PASSWORD_WRONG {
+    } else if code == ErrorCode::PASSWORD_INVALID {
         lc.write().unwrap().password = Default::default();
-        interface.msgbox("re-input-password", err, "Do you want to enter again?", "");
+        interface.msgbox(
+            "re-input-password",
+            "Wrong Password",
+            "Do you want to enter again?",
+            "",
+        );
         true
-    } else if err == LOGIN_MSG_2FA_WRONG || err == REQUIRE_2FA {
+    } else if code == ErrorCode::TWO_FACTOR_INVALID || code == ErrorCode::TWO_FACTOR_REQUIRED {
         let enabled = lc.read().unwrap().get_option("trust-this-device") == "Y";
         if enabled {
             lc.write()
                 .unwrap()
                 .set_option("trust-this-device".to_string(), "".to_string());
         }
-        interface.msgbox("input-2fa", err, "", "");
+        interface.msgbox("input-2fa", err.display_key.as_str(), "", "");
         true
-    } else if LOGIN_ERROR_MAP.contains_key(err) {
-        if let Some(msgbox_info) = LOGIN_ERROR_MAP.get(err) {
+    } else if LOGIN_ERROR_MAP.contains_key(err.display_key.as_str()) {
+        if let Some(msgbox_info) = LOGIN_ERROR_MAP.get(err.display_key.as_str()) {
             interface.msgbox(
                 msgbox_info.msgtype,
                 msgbox_info.title,
@@ -3943,12 +3929,17 @@ pub fn handle_login_error(
             false
         }
     } else {
-        if err.contains(SCRAP_X11_REQUIRED) {
-            interface.msgbox("error", "Login Error", err, SCRAP_X11_REF_URL);
+        if code == ErrorCode::DISPLAY_SERVER_UNSUPPORTED {
+            interface.msgbox(
+                "error",
+                "Login Error",
+                err.display_key.as_str(),
+                SCRAP_X11_REF_URL,
+            );
         } else {
-            interface.msgbox("error", "Login Error", err, "");
+            interface.msgbox("error", "Login Error", err.display_key.as_str(), "");
         }
-        false
+        err.retryable
     }
 }
 
@@ -4223,7 +4214,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
     /// Send message data to remote peer.
     fn send(&self, data: Data);
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str);
-    fn handle_login_error(&self, err: &str) -> bool;
+    fn handle_login_error(&self, err: &ErrorEnvelope) -> bool;
     fn handle_peer_info(&self, pi: PeerInfo);
     fn set_multiple_windows_session(&self, sessions: Vec<WindowsSession>);
     fn on_error(&self, err: &str) {
@@ -4264,18 +4255,19 @@ pub trait Interface: Send + Clone + 'static + Sized {
         self.get_lch().write().unwrap().received = received;
     }
 
-    fn on_establish_connection_error(&self, err: String) {
+    fn on_establish_connection_error(&self, code: ErrorCode) {
         let title = "Connection Error";
-        let text = err.to_string();
+        let display_key = error::for_code(code).display_key;
         let lch = self.get_lch();
         let (is_restarting, direct, received) = {
             let lc = lch.read().unwrap();
             (lc.is_restarting_remote_device(), lc.direct, lc.received)
         };
         if is_restarting {
-            log::info!("Restart remote device, suppress connection error: {err}");
-            // Flutter treats this as a reconnect control event. The text is kept
-            // for legacy UI and existing translation reuse.
+            log::info!(
+                "Restart remote device, suppress connection error: code={:?}",
+                code
+            );
             self.msgbox(
                 "restarting",
                 "Restarting remote device",
@@ -4287,14 +4279,12 @@ pub trait Interface: Send + Clone + 'static + Sized {
 
         let mut relay_hint = false;
         let mut relay_hint_type = "relay-hint";
-        // force relay
-        let errno = errno::errno().0;
-        log::error!("Connection closed: {err}({errno})");
+        log::error!("Connection closed: code={:?}", code);
         if direct == Some(true)
-            && ((cfg!(windows) && (errno == 10054 || err.contains("10054")))
-                || (!cfg!(windows) && (errno == 104 || err.contains("104")))
-                || (!err.contains("Failed") && err.contains("deadline")))
-        // deadline: https://github.com/rustdesk/rustdesk-server-pro/discussions/325, most likely comes from secure tcp timeout
+            && matches!(
+                code,
+                ErrorCode::CONNECTION_RESET | ErrorCode::CONNECTION_TIMEOUT
+            )
         {
             relay_hint = true;
             if !received {
@@ -4304,11 +4294,46 @@ pub trait Interface: Send + Clone + 'static + Sized {
 
         // relay-hint
         if cfg!(feature = "flutter") && relay_hint {
-            self.msgbox(relay_hint_type, title, &text, "");
+            self.msgbox(relay_hint_type, title, &display_key, "");
         } else {
-            self.msgbox("error", title, &text, "");
+            self.msgbox("error", title, &display_key, "");
         }
     }
+}
+
+/// Map transport errors to the stable wire/UI error registry without parsing
+/// their localized or dependency-provided display text.
+pub fn classify_io_error(err: &std::io::Error) -> ErrorCode {
+    match err.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            ErrorCode::CONNECTION_TIMEOUT
+        }
+        std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::BrokenPipe
+        | std::io::ErrorKind::UnexpectedEof
+        | std::io::ErrorKind::NotConnected => ErrorCode::CONNECTION_RESET,
+        std::io::ErrorKind::PermissionDenied => ErrorCode::PERMISSION_DENIED,
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::AddrNotAvailable => {
+            ErrorCode::CONNECTION_OFFLINE
+        }
+        _ => ErrorCode::CONNECTION_CLOSED,
+    }
+}
+
+/// Classify an anyhow connection failure by its typed source chain. Unknown
+/// failures fail closed as a non-retryable closed connection.
+pub fn classify_connection_error(err: &camellia_remote_protocol::anyhow::Error) -> ErrorCode {
+    if err
+        .downcast_ref::<camellia_remote_protocol::tokio::time::error::Elapsed>()
+        .is_some()
+    {
+        return ErrorCode::CONNECTION_TIMEOUT;
+    }
+    if let Some(io_error) = err.downcast_ref::<std::io::Error>() {
+        return classify_io_error(io_error);
+    }
+    ErrorCode::CONNECTION_CLOSED
 }
 
 /// Data used by the client interface.
@@ -4519,22 +4544,44 @@ lazy_static::lazy_static! {
 /// * `text` - The text of the message.
 #[inline]
 pub fn check_if_retry(msgtype: &str, title: &str, text: &str, retry_for_relay: bool) -> bool {
-    msgtype == "error"
-        && title == "Connection Error"
-        && ((text.contains("10054") || text.contains("104")) && retry_for_relay
-            || (!text.to_lowercase().contains("offline")
-                && !text.to_lowercase().contains("not exist")
-                && (!text.to_lowercase().contains("handshake")
-                    // https://github.com/snapview/tungstenite-rs/blob/e7e060a89a72cb08e31c25a6c7284dc1bd982e23/src/error.rs#L248
-                    || text
-                        .to_lowercase()
-                        .contains("connection reset without closing handshake") && use_ws())
-                && !text.to_lowercase().contains("failed")
-                && !text.to_lowercase().contains("resolve")
-                && !text.to_lowercase().contains("mismatch")
-                && !text.to_lowercase().contains("manually")
-                && !text.to_lowercase().contains("restricted")
-                && !text.to_lowercase().contains("not allowed")))
+    let _ = text;
+    msgtype == "error" && title == "Connection Error" && retry_for_relay
+}
+
+#[cfg(test)]
+mod error_contract_tests {
+    use super::{check_if_retry, classify_connection_error, classify_io_error};
+    use camellia_remote_protocol::rendezvous_proto::ErrorCode;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn relay_retry_is_not_driven_by_display_text() {
+        for text in [
+            "offline",
+            "failed",
+            "connection reset without closing handshake",
+            "completely localized text",
+        ] {
+            assert!(check_if_retry("error", "Connection Error", text, true));
+            assert!(!check_if_retry("error", "Connection Error", text, false));
+        }
+    }
+
+    #[test]
+    fn transport_classification_uses_typed_sources_not_error_text() {
+        let reset = Error::new(ErrorKind::ConnectionReset, "fully localized text");
+        assert_eq!(classify_io_error(&reset), ErrorCode::CONNECTION_RESET);
+
+        let misleading = Error::other("10054 deadline failed offline");
+        assert_eq!(classify_io_error(&misleading), ErrorCode::CONNECTION_CLOSED);
+
+        let timeout: camellia_remote_protocol::anyhow::Error =
+            Error::new(ErrorKind::TimedOut, "arbitrary").into();
+        assert_eq!(
+            classify_connection_error(&timeout),
+            ErrorCode::CONNECTION_TIMEOUT
+        );
+    }
 }
 
 pub async fn hc_connection(

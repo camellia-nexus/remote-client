@@ -19,8 +19,12 @@ const KCP_CLOSE_REASON_FLUSH_DELAY: Duration = Duration::from_millis(30);
 fn remove_local_empty_dir_result(id: i32, path: String) -> Data {
     let err = fs::remove_all_empty_dir(&fs::get_path(&path))
         .err()
-        .map(|err| err.to_string());
+        .map(|_| file_operation_error_key());
     Data::RemoveDirResult((id, err))
+}
+
+fn file_operation_error_key() -> String {
+    camellia_remote_protocol::error::for_code(ErrorCode::FILE_OPERATION_FAILED).display_key
 }
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::try_empty_clipboard_files, clipboard_file::unix_file_clip};
@@ -34,7 +38,7 @@ use camellia_remote_protocol::{
     get_time, log,
     message_proto::{permission_info::Permission, *},
     protobuf::Message as _,
-    rendezvous_proto::ConnType,
+    rendezvous_proto::{ConnType, ErrorCode},
     timeout,
     tokio::{
         self,
@@ -288,7 +292,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     && !crate::common::is_direct_ip_access(&self.handler.get_id())
                     && !client::confirm_insecure_connection(&self.handler, &mut self.receiver).await
                 {
-                    self.send_close_reason(&mut peer, "").await;
+                    self.send_close_reason(&mut peer, ErrorCode::CANCELLED)
+                        .await;
                     if kcp.is_some() {
                         tokio::time::sleep(KCP_CLOSE_REASON_FLUSH_DELAY).await;
                     }
@@ -348,7 +353,10 @@ impl<T: InvokeUiSession> Remote<T> {
                             if let Some(res) = res {
                                 match res {
                                     Err(err) => {
-                                        self.handler.on_establish_connection_error(err.to_string());
+                                        self.handler
+                                            .on_establish_connection_error(client::classify_io_error(
+                                                &err,
+                                            ));
                                         break;
                                     }
                                     Ok(ref bytes) => {
@@ -391,12 +399,25 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         _ = self.timer.tick() => {
                             if last_recv_time.elapsed() >= SEC30 {
-                                self.handler.msgbox("error", "Connection Error", "Timeout", "");
+                                self.handler.msgbox(
+                                    "error",
+                                    "Connection Error",
+                                    "connection_timeout",
+                                    "",
+                                );
                                 break;
                             }
                             if !self.read_jobs.is_empty() {
-                                if let Err(err) = fs::handle_read_jobs(&mut self.read_jobs, &mut peer).await {
-                                    self.handler.msgbox("error", "Connection Error", &err.to_string(), "");
+                                if fs::handle_read_jobs(&mut self.read_jobs, &mut peer)
+                                    .await
+                                    .is_err()
+                                {
+                                    self.handler.msgbox(
+                                        "error",
+                                        "Connection Error",
+                                        "file_operation_failed",
+                                        "",
+                                    );
                                     break;
                                 }
                                 self.update_jobs_status();
@@ -458,14 +479,16 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.teardown_video_threads();
                 if kcp.is_some() {
                     // Send the close reason if it hasn't been sent yet, as KCP cannot detect the socket close event.
-                    self.send_close_reason(&mut peer, "kcp").await;
+                    self.send_close_reason(&mut peer, ErrorCode::CONNECTION_RESET)
+                        .await;
                     // KCP does not send messages immediately, so wait to ensure the last message is sent.
                     // 1ms works in my test, but 30ms is more reliable.
                     tokio::time::sleep(KCP_CLOSE_REASON_FLUSH_DELAY).await;
                 }
             }
             Err(err) => {
-                self.handler.on_establish_connection_error(err.to_string());
+                self.handler
+                    .on_establish_connection_error(client::classify_connection_error(&err));
             }
         }
         self.handle_disconnected(round);
@@ -582,7 +605,7 @@ impl<T: InvokeUiSession> Remote<T> {
             .file_transfer_protocol_version;
         fs::validate_file_transfer_protocol_version(version)
             .err()
-            .map(|err| err.to_string())
+            .map(|_| file_operation_error_key())
     }
 
     fn stop_voice_call(&mut self) {
@@ -710,12 +733,12 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
-    async fn send_close_reason(&mut self, peer: &mut Stream, reason: &str) {
+    async fn send_close_reason(&mut self, peer: &mut Stream, code: ErrorCode) {
         if self.sent_close_reason {
             return;
         }
         let mut misc = Misc::new();
-        misc.set_close_reason(reason.to_owned());
+        misc.set_close_error(camellia_remote_protocol::error::for_code(code));
         let mut msg = Message::new();
         msg.set_misc(misc);
         allow_err!(peer.send(&msg).await);
@@ -725,7 +748,7 @@ impl<T: InvokeUiSession> Remote<T> {
     async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
         match data {
             Data::Close => {
-                self.send_close_reason(peer, "").await;
+                self.send_close_reason(peer, ErrorCode::CANCELLED).await;
                 return false;
             }
             Data::Login((os_username, os_password, password, remember)) => {
@@ -804,7 +827,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         od,
                     ) {
                         Err(err) => {
-                            self.handle_job_status(id, -1, Some(err.to_string()));
+                            let _ = err;
+                            self.handle_job_status(id, -1, Some(file_operation_error_key()));
                         }
                         Ok(job) => {
                             log::debug!(
@@ -878,7 +902,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         od,
                     ) {
                         Err(err) => {
-                            self.handle_job_status(id, -1, Some(err.to_string()));
+                            let _ = err;
+                            self.handle_job_status(id, -1, Some(file_operation_error_key()));
                         }
                         Ok(mut job) => {
                             log::debug!(
@@ -1058,7 +1083,8 @@ impl<T: InvokeUiSession> Remote<T> {
                                 .insert(id, RemoveJob::new(entries, path, sep, is_remote));
                         }
                         Err(err) => {
-                            self.handle_job_status(id, -1, Some(err.to_string()));
+                            let _ = err;
+                            self.handle_job_status(id, -1, Some(file_operation_error_key()));
                         }
                     }
                 }
@@ -1101,7 +1127,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 } else {
                     match fs::remove_file(&path) {
                         Err(err) => {
-                            self.handle_job_status(id, file_num, Some(err.to_string()));
+                            let _ = err;
+                            self.handle_job_status(id, file_num, Some(file_operation_error_key()));
                         }
                         Ok(()) => {
                             self.handle_job_status(id, file_num, None);
@@ -1123,7 +1150,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 } else {
                     match fs::create_dir(&path) {
                         Err(err) => {
-                            self.handle_job_status(id, -1, Some(err.to_string()));
+                            let _ = err;
+                            self.handle_job_status(id, -1, Some(file_operation_error_key()));
                         }
                         Ok(()) => {
                             self.handle_job_status(id, -1, None);
@@ -1301,7 +1329,7 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Some(mut job) = fs::remove_job(id, &mut self.write_jobs) {
             if let Err(err) = job.remove_download_file().await {
                 log::error!("Failed to clean up cancelled transfer {}: {}", id, err);
-                self.handle_job_status(id, job.file_num(), Some(err.to_string()));
+                self.handle_job_status(id, job.file_num(), Some(file_operation_error_key()));
             }
         }
         let _ = fs::remove_job(id, &mut self.read_jobs);
@@ -1609,14 +1637,22 @@ impl<T: InvokeUiSession> Remote<T> {
                         .await;
                 }
                 Some(message::Union::LoginResponse(lr)) => match lr.union {
-                    Some(login_response::Union::Error(err)) => {
-                        if err == client::REQUIRE_2FA {
+                    Some(login_response::Union::TypedError(err)) => {
+                        if camellia_remote_protocol::error::is_valid_for(
+                            &err,
+                            camellia_remote_protocol::error::ErrorContext::Login,
+                        ) && err.code.enum_value_or_default() == ErrorCode::TWO_FACTOR_REQUIRED
+                        {
                             self.handler.lc.write().unwrap().enable_trusted_devices =
                                 lr.enable_trusted_devices;
                         }
                         if !self.handler.handle_login_error(&err) {
                             return false;
                         }
+                    }
+                    Some(login_response::Union::Error(_)) => {
+                        log::warn!("peer sent deprecated text login error");
+                        return false;
                     }
                     Some(login_response::Union::PeerInfo(pi)) => {
                         let peer_version = pi.version.clone();
@@ -1786,8 +1822,8 @@ impl<T: InvokeUiSession> Remote<T> {
                             let mut set_files_err = None;
                             if let Some(job) = fs::get_job(fd.id, &mut self.write_jobs) {
                                 log::info!("job set_files: {:?}", entries);
-                                if let Err(err) = job.set_files(entries) {
-                                    set_files_err = Some(err.to_string());
+                                if let Err(_err) = job.set_files(entries) {
+                                    set_files_err = Some(file_operation_error_key());
                                 } else {
                                     job.set_finished_size_on_resume();
                                     self.handler.update_folder_files(
@@ -1917,12 +1953,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                                             let msg = new_send_confirm(req);
                                                             allow_err!(peer.send(&msg).await);
                                                         } else {
-                                                            let err = job.job_error().unwrap_or_else(
-                                                                || {
-                                                                    "file transfer confirmation failed"
-                                                                        .to_owned()
-                                                                },
-                                                            );
+                                                            let err = file_operation_error_key();
                                                             let _ = job;
                                                             let _ = fs::remove_job(
                                                                 digest.id,
@@ -2045,7 +2076,8 @@ impl<T: InvokeUiSession> Remote<T> {
                                                     }
                                                 },
                                                 Err(err) => {
-                                                    let err = err.to_string();
+                                                    let _ = err;
+                                                    let err = file_operation_error_key();
                                                     let _ = job;
                                                     let _ = fs::remove_job(
                                                         digest.id,
@@ -2079,7 +2111,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                     .write(block)
                                     .await
                                     .map(|_| (job.r#type, job.transferred()))
-                                    .map_err(|err| err.to_string()),
+                                    .map_err(|_| file_operation_error_key()),
                                 None => return true,
                             };
                             match write_result {
@@ -2154,36 +2186,54 @@ impl<T: InvokeUiSession> Remote<T> {
                                 }
                             }
                         }
-                        Some(file_response::Union::Error(e)) => match e.operation.enum_value() {
-                            Ok(FileErrorOperation::ReadDir) => {
-                                self.handler.file_listing_error(e.path, e.error, false);
-                            }
-                            Ok(FileErrorOperation::ReadEmptyDirs) => {
-                                self.handler.file_listing_error(e.path, e.error, true);
-                            }
-                            _ => {
-                                let job_type = fs::remove_job(e.id, &mut self.write_jobs)
-                                    .or_else(|| fs::remove_job(e.id, &mut self.read_jobs))
-                                    .map(|j| j.r#type)
-                                    .unwrap_or(fs::JobType::Generic);
-                                match job_type {
-                                    fs::JobType::Generic => {
-                                        self.handle_job_status(e.id, e.file_num, Some(e.error));
-                                    }
-                                    fs::JobType::Printer => {
-                                        log::error!("Printer job error: {}", e.error);
-                                        let _ = self
-                                            .handler
-                                            .printer_names
-                                            .write()
-                                            .unwrap()
-                                            .remove(&e.id);
-                                        crate::client::print_dispatcher::PrintDispatcher::global()
-                                            .cancel_job(e.id);
+                        Some(file_response::Union::Error(e)) => {
+                            let wire_error = e
+                                .typed_error
+                                .as_ref()
+                                .filter(|typed| {
+                                    e.error.is_empty()
+                                        && camellia_remote_protocol::error::is_valid_for(
+                                            typed,
+                                            camellia_remote_protocol::error::ErrorContext::FileTransfer,
+                                        )
+                                 })
+                                .map(|typed| typed.display_key.clone())
+                                .unwrap_or_else(|| "protocol_mismatch".to_owned());
+                            match e.operation.enum_value() {
+                                Ok(FileErrorOperation::ReadDir) => {
+                                    self.handler.file_listing_error(e.path, wire_error, false);
+                                }
+                                Ok(FileErrorOperation::ReadEmptyDirs) => {
+                                    self.handler.file_listing_error(e.path, wire_error, true);
+                                }
+                                _ => {
+                                    let job_type = fs::remove_job(e.id, &mut self.write_jobs)
+                                        .or_else(|| fs::remove_job(e.id, &mut self.read_jobs))
+                                        .map(|j| j.r#type)
+                                        .unwrap_or(fs::JobType::Generic);
+                                    match job_type {
+                                        fs::JobType::Generic => {
+                                            self.handle_job_status(
+                                                e.id,
+                                                e.file_num,
+                                                Some(wire_error),
+                                            );
+                                        }
+                                        fs::JobType::Printer => {
+                                            log::error!("Printer job error: {}", wire_error);
+                                            let _ = self
+                                                .handler
+                                                .printer_names
+                                                .write()
+                                                .unwrap()
+                                                .remove(&e.id);
+                                            crate::client::print_dispatcher::PrintDispatcher::global()
+                                                .cancel_job(e.id);
+                                        }
                                     }
                                 }
                             }
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -2285,10 +2335,27 @@ impl<T: InvokeUiSession> Remote<T> {
                             );
                         }
                     }
-                    Some(misc::Union::CloseReason(c)) => {
+                    Some(misc::Union::CloseError(c)) => {
                         self.sent_close_reason = true; // The controlled end will close, no need to send close reason
+                        let display_key = if camellia_remote_protocol::error::is_valid_for(
+                            &c,
+                            camellia_remote_protocol::error::ErrorContext::Close,
+                        ) {
+                            c.display_key
+                        } else {
+                            "protocol_mismatch".to_owned()
+                        };
                         self.handler.clear_restarting_remote_device();
-                        self.handler.msgbox("error", "Connection Error", &c, "");
+                        self.handler
+                            .msgbox("error", "Connection Error", &display_key, "");
+                        return false;
+                    }
+                    Some(misc::Union::CloseReason(_)) => {
+                        self.sent_close_reason = true;
+                        log::warn!("peer sent deprecated text close reason");
+                        self.handler.clear_restarting_remote_device();
+                        self.handler
+                            .msgbox("error", "Connection Error", "protocol_mismatch", "");
                         return false;
                     }
                     Some(misc::Union::BackNotification(notification)) => {

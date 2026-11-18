@@ -391,7 +391,9 @@ pub async fn listen(
                                 break;
                             }
                             Err(err) => {
-                                interface.on_establish_connection_error(err.to_string());
+                                interface.on_establish_connection_error(
+                                    crate::client::classify_connection_error(&err),
+                                );
                             }
                             _ => {}
                         }
@@ -485,11 +487,12 @@ async fn connect_and_login(
                             interface.handle_hash(password, hash, &mut stream).await;
                         }
                         Some(message::Union::LoginResponse(lr)) => match lr.union {
-                            Some(login_response::Union::Error(err)) => {
+                            Some(login_response::Union::TypedError(err)) => {
                                 if !interface.handle_login_error(&err) {
                                     return Ok(None);
                                 }
                             }
+                            Some(login_response::Union::Error(_)) => return Ok(None),
                             Some(login_response::Union::PeerInfo(pi)) => {
                                 interface.handle_peer_info(pi);
                                 break;

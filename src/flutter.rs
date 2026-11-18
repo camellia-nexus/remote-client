@@ -1389,10 +1389,22 @@ impl InvokeUiSession for FlutterHandler {
                     .write()
                     .unwrap()
                     .remove(&error.terminal_id);
+                let code = error
+                    .typed_error
+                    .as_ref()
+                    .filter(|typed| {
+                        error.message.is_empty()
+                            && camellia_remote_protocol::error::is_valid_for(
+                                typed,
+                                camellia_remote_protocol::error::ErrorContext::Terminal,
+                            )
+                    })
+                    .map(|typed| typed.display_key.clone())
+                    .unwrap_or_else(|| "protocol_mismatch".to_owned());
                 let event_data: Vec<(&str, serde_json::Value)> = vec![
                     ("type", json!("error")),
                     ("terminal_id", json!(error.terminal_id)),
-                    ("message", json!(&error.message)),
+                    ("code", json!(code)),
                 ];
                 self.push_event_("terminal_response", &event_data, &[], &[]);
             }

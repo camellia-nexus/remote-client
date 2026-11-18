@@ -166,15 +166,23 @@ impl RendezvousMediator {
                     let timeout = timeout.clone();
                     futs.push(tokio::spawn(async move {
                         if let Err(err) = Self::start(server, host).await {
-                            let err = format!("rendezvous mediator error: {err}");
-                            // When user reboot, there might be below error, waiting too long
-                            // (CONNECT_TIMEOUT 18s) will make user think there is bug
-                            if err.contains("10054") || err.contains("11001") {
-                                // No such host is known. (os error 11001)
-                                // An existing connection was forcibly closed by the remote host. (os error 10054): also happens for UDP
+                            let fast_failure = err
+                                .downcast_ref::<std::io::Error>()
+                                .map(|io| {
+                                    matches!(
+                                        io.kind(),
+                                        std::io::ErrorKind::ConnectionReset
+                                            | std::io::ErrorKind::ConnectionAborted
+                                            | std::io::ErrorKind::NotFound
+                                            | std::io::ErrorKind::AddrNotAvailable
+                                    )
+                                })
+                                .unwrap_or(false);
+                            // A typed transport failure avoids parsing OS-localized text.
+                            if fast_failure {
                                 *timeout.write().unwrap() = 3000;
                             }
-                            log::error!("{err}");
+                            log::error!("rendezvous mediator failed: {:?}", err);
                         }
                         // SHOULD_EXIT here is to ensure once one exits, the others also exit.
                         SHOULD_EXIT.store(true, Ordering::SeqCst);

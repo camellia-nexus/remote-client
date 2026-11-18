@@ -36,11 +36,13 @@ use camellia_remote_protocol::{
         keys, local_permanent_password_storage_is_usable_for_auth,
         preset_permanent_password_storage_is_usable_for_auth, Config,
     },
+    error,
     fs::{self, can_enable_overwrite_detection, JobType},
     futures::{SinkExt, StreamExt},
     get_time, get_version_number,
     message_proto::{option_message::BoolOption, permission_info::Permission},
     password_security::{self as password, ApproveMode},
+    rendezvous_proto::ErrorCode,
     sha2::{Digest, Sha256},
     sleep, timeout,
     tokio::{
@@ -248,11 +250,11 @@ fn should_check_linux_headless_os_auth_before_desktop_start(
 fn should_record_linux_headless_os_auth_failure(
     is_headless_allowed: bool,
     username: &str,
-    err_msg: &str,
+    error_code: Option<ErrorCode>,
 ) -> bool {
     is_headless_allowed
         && !username.trim().is_empty()
-        && err_msg == crate::client::LOGIN_MSG_PASSWORD_WRONG
+        && error_code == Some(ErrorCode::PASSWORD_INVALID)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -863,7 +865,7 @@ impl Connection {
                         ipc::Data::Close => {
                             conn.chat_unanswered = false; // seen
                             conn.file_transferred = false; //seen
-                            conn.send_close_reason_no_retry("").await;
+                            conn.send_close_reason_no_retry(ErrorCode::CANCELLED).await;
                             conn.on_close("connection manager", true).await;
                             break;
                         }
@@ -1198,7 +1200,7 @@ impl Connection {
                 }
                 Ok(conns) = hbbs_rx.recv() => {
                     if conns.contains(&id) {
-                        conn.send_close_reason_no_retry("Closed by management policy").await;
+                        conn.send_close_reason_no_retry(ErrorCode::PERMISSION_DENIED).await;
                         conn.on_close("management policy", true).await;
                         break;
                     }
@@ -1232,7 +1234,7 @@ impl Connection {
                         Some(message::Union::Misc(m)) => {
                             match &m.union {
                                 Some(misc::Union::StopService(_)) => {
-                                    conn.send_close_reason_no_retry("").await;
+                                    conn.send_close_reason_no_retry(ErrorCode::CANCELLED).await;
                                     conn.on_close("stop service", false).await;
                                     break;
                                 }
@@ -1290,7 +1292,7 @@ impl Connection {
                 }
                 _ = second_timer.tick() => {
                     if !conn.authorized && conn.connection_start_time.elapsed() >= Duration::from_secs(15) {
-                        conn.send_close_reason_no_retry("Pre-auth deadline exceeded").await;
+                        conn.send_close_reason_no_retry(ErrorCode::CONNECTION_TIMEOUT).await;
                         conn.on_close("pre-auth deadline", false).await;
                         break;
                     }
@@ -1301,7 +1303,7 @@ impl Connection {
                     raii::AuthedConnID::check_wake_lock_on_setting_changed();
                     if let Some((instant, minute)) = conn.auto_disconnect_timer.as_ref() {
                         if instant.elapsed().as_secs() > minute * 60 {
-                            conn.send_close_reason_no_retry("Connection failed due to inactivity").await;
+                            conn.send_close_reason_no_retry(ErrorCode::CONNECTION_TIMEOUT).await;
                             conn.on_close("auto disconnect", true).await;
                             break;
                         }
@@ -2178,8 +2180,7 @@ impl Connection {
 
     async fn check_privacy_mode_on(&mut self) -> bool {
         if privacy_mode::is_in_privacy_mode() {
-            self.send_login_error("Someone turns on privacy mode, exit")
-                .await;
+            self.send_login_error(ErrorCode::CONFLICT).await;
             false
         } else {
             true
@@ -2189,8 +2190,7 @@ impl Connection {
     async fn check_whitelist(&mut self, addr: &SocketAddr) -> bool {
         let whitelist_opt = Config::get_option("whitelist");
         if !is_ip_allowed_by_whitelist(&whitelist_opt, addr.ip()) {
-            self.send_login_error("Your ip is blocked by the peer")
-                .await;
+            self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
             self.post_alarm_audit(
                 AlarmAuditType::IpWhitelist, //"ip whitelist",
                 json!({ "ip":addr.ip() }),
@@ -2203,8 +2203,7 @@ impl Connection {
     async fn on_open(&mut self, addr: SocketAddr) -> bool {
         log::debug!("#{} Connection opened from {}.", self.inner.id, addr);
         if !crate::hbbs_http::sync::incoming_connections_allowed() {
-            self.send_login_error("Device is disabled by management")
-                .await;
+            self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
             return false;
         }
         if !self.check_whitelist(&addr).await {
@@ -2213,7 +2212,7 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if crate::is_server() && Config::get_option("allow-only-conn-window-open") == "Y" {
             if !crate::check_process("", !crate::platform::is_root()) {
-                self.send_login_error("The main window is not open").await;
+                self.send_login_error(ErrorCode::CONFLICT).await;
                 return false;
             }
         }
@@ -2775,7 +2774,7 @@ impl Connection {
             return true;
         };
         let mut pf = pf.clone();
-        let (mut addr, is_rdp) = Self::normalize_port_forward_target(&mut pf);
+        let (addr, _) = Self::normalize_port_forward_target(&mut pf);
         self.port_forward_address = addr.clone();
         match timeout(3000, TcpStream::connect(&addr)).await {
             Ok(Ok(sock)) => {
@@ -2784,33 +2783,19 @@ impl Connection {
             }
             Ok(Err(e)) => {
                 log::warn!("Port forward connect failed for {}: {}", addr, e);
-                if is_rdp {
-                    addr = "RDP".to_owned();
-                }
-                self.send_login_error(format!(
-                    "Failed to access remote {}. Please make sure it is reachable/open.",
-                    addr
-                ))
-                .await;
+                self.send_login_error(ErrorCode::CONNECTION_CLOSED).await;
                 false
             }
             Err(e) => {
                 log::warn!("Port forward connect timed out for {}: {}", addr, e);
-                if is_rdp {
-                    addr = "RDP".to_owned();
-                }
-                self.send_login_error(format!(
-                    "Failed to access remote {}. Please make sure it is reachable/open.",
-                    addr
-                ))
-                .await;
+                self.send_login_error(ErrorCode::CONNECTION_TIMEOUT).await;
                 false
             }
         }
     }
 
     // Returns whether this connection should be kept alive.
-    // `true` does not necessarily mean authorization succeeded (e.g. REQUIRE_2FA case).
+    // `true` does not necessarily mean authorization succeeded (for example, 2FA pending).
     async fn send_logon_response_and_keep_alive(&mut self) -> bool {
         if self.authorized {
             return true;
@@ -2843,7 +2828,7 @@ impl Connection {
                     });
                 }
             });
-            self.send_login_error(crate::client::REQUIRE_2FA).await;
+            self.send_login_error(ErrorCode::TWO_FACTOR_REQUIRED).await;
             // Keep the connection alive so the client can continue with 2FA.
             return true;
         }
@@ -2991,22 +2976,19 @@ impl Connection {
         }
         #[cfg(target_os = "linux")]
         if self.is_remote() {
-            let mut msg = "".to_string();
+            let mut login_error = None;
             if crate::platform::linux::is_login_screen_wayland() {
-                msg = crate::client::LOGIN_SCREEN_WAYLAND.to_owned()
+                login_error = Some(error::for_code(ErrorCode::WAYLAND_UNSUPPORTED));
             } else {
                 let dtype = crate::platform::linux::get_display_server();
                 if dtype != crate::platform::linux::DISPLAY_SERVER_X11
                     && dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND
                 {
-                    msg = format!(
-                        "Unsupported display server type \"{}\", x11 or wayland expected",
-                        dtype
-                    );
+                    login_error = Some(error::for_code(ErrorCode::DISPLAY_SERVER_UNSUPPORTED));
                 }
             }
-            if !msg.is_empty() {
-                res.set_error(msg);
+            if let Some(login_error) = login_error {
+                res.set_typed_error(login_error);
                 let mut msg_out = Message::new();
                 msg_out.set_login_response(res);
                 self.send(msg_out).await;
@@ -3088,7 +3070,8 @@ impl Connection {
 
             match super::display_service::update_get_sync_displays_on_login().await {
                 Err(err) => {
-                    res.set_error(format!("{}", err));
+                    log::error!("Display service initialization failed: {}", err);
+                    res.set_typed_error(error::for_code(ErrorCode::INTERNAL_FAILURE));
                 }
                 Ok((displays, primary_display_idx)) => {
                     // For compatibility with old versions, we need to send the displays to the peer.
@@ -3351,12 +3334,11 @@ impl Connection {
         self.send_to_cm(ipc::Data::FS(data));
     }
 
-    async fn send_login_error<T: std::string::ToString>(&mut self, err: T) {
+    async fn send_login_error(&mut self, code: ErrorCode) {
         let mut msg_out = Message::new();
         let mut res = LoginResponse::new();
-        let err_str = err.to_string();
-        res.set_error(err_str.clone());
-        if err_str == crate::client::REQUIRE_2FA {
+        let typed = error::for_code(code);
+        if typed.code.enum_value_or_default() == ErrorCode::TWO_FACTOR_REQUIRED {
             res.enable_trusted_devices = Self::enable_trusted_devices();
             let challenge = camellia_remote_protocol::rand::random::<[u8; 32]>();
             let expires_at = camellia_remote_protocol::get_time() + 60_000;
@@ -3372,6 +3354,7 @@ impl Connection {
         } else {
             self.auth_state = ConnectionAuthState::Unauthenticated;
         }
+        res.set_typed_error(typed);
         msg_out.set_login_response(res);
         self.send(msg_out).await;
     }
@@ -3735,9 +3718,11 @@ impl Connection {
 
     async fn on_message(&mut self, msg: Message) -> bool {
         if let Some(message::Union::Misc(misc)) = &msg.union {
-            // Move the CloseReason forward, as this message needs to be received when unauthorized, especially for kcp.
-            if let Some(misc::Union::CloseReason(s)) = &misc.union {
-                log::info!("receive close reason: {}", s);
+            // Move close signals forward; they must be received even when unauthorized.
+            if matches!(
+                &misc.union,
+                Some(misc::Union::CloseError(_)) | Some(misc::Union::CloseReason(_))
+            ) {
                 self.on_close("Peer close", true).await;
                 raii::AuthedConnID::check_remove_session(self.inner.id(), self.session_key());
                 return false;
@@ -3768,7 +3753,8 @@ impl Connection {
                     if let Err(err) =
                         fs::validate_file_transfer_protocol_version(file_transfer_protocol_version)
                     {
-                        self.send_login_error(&err.to_string()).await;
+                        log::warn!("Rejected incompatible file-transfer protocol: {err}");
+                        self.send_login_error(ErrorCode::PROTOCOL_MISMATCH).await;
                         sleep(1.).await;
                         return false;
                     }
@@ -3776,8 +3762,7 @@ impl Connection {
                         keys::OPTION_ENABLE_FILE_TRANSFER,
                         &self.control_permissions,
                     ) {
-                        self.send_login_error("No permission of file transfer")
-                            .await;
+                        self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                         sleep(1.).await;
                         return false;
                     }
@@ -3785,8 +3770,7 @@ impl Connection {
                 }
                 Some(login_request::Union::ViewCamera(_vc)) => {
                     if !Self::permission(keys::OPTION_ENABLE_CAMERA, &self.control_permissions) {
-                        self.send_login_error("No permission of viewing camera")
-                            .await;
+                        self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                         sleep(1.).await;
                         return false;
                     }
@@ -3794,14 +3778,13 @@ impl Connection {
                 }
                 Some(login_request::Union::Terminal(terminal)) => {
                     if !Self::permission(keys::OPTION_ENABLE_TERMINAL, &self.control_permissions) {
-                        self.send_login_error("No permission of terminal").await;
+                        self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                         sleep(1.).await;
                         return false;
                     }
                     #[cfg(target_os = "windows")]
                     if !lr.os_login.username.is_empty() && !crate::platform::is_installed() {
-                        self.send_login_error("Supported only in the installed version.")
-                            .await;
+                        self.send_login_error(ErrorCode::PROTOCOL_MISMATCH).await;
                         sleep(1.).await;
                         return false;
                     }
@@ -3815,7 +3798,7 @@ impl Connection {
                 }
                 Some(login_request::Union::PortForward(mut pf)) => {
                     if !Self::permission(keys::OPTION_ENABLE_TUNNEL, &self.control_permissions) {
-                        self.send_login_error("No permission of IP tunneling").await;
+                        self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                         sleep(1.).await;
                         return false;
                     }
@@ -3831,8 +3814,7 @@ impl Connection {
 
             if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id()
             {
-                self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
-                    .await;
+                self.send_login_error(ErrorCode::CONNECTION_OFFLINE).await;
                 return false;
             }
 
@@ -3841,10 +3823,7 @@ impl Connection {
                 && lr.os_login.username.trim().is_empty()
                 && crate::platform::is_prelogin()
             {
-                self.send_login_error(
-                    "No active console user logged on, please connect and logon first.",
-                )
-                .await;
+                self.send_login_error(ErrorCode::NOT_FOUND).await;
                 sleep(1.).await;
                 return false;
             }
@@ -3866,20 +3845,20 @@ impl Connection {
             }
 
             #[cfg(not(target_os = "linux"))]
-            let err_msg = "".to_owned();
+            let desktop_error = None;
             #[cfg(target_os = "linux")]
-            let err_msg = self
+            let desktop_error = self
                 .linux_headless_handle
                 .try_start_desktop(lr.os_login.as_ref());
 
-            // If err is LOGIN_MSG_DESKTOP_SESSION_NOT_READY, just keep this msg and go on checking password.
-            if !err_msg.is_empty() && err_msg != crate::client::LOGIN_MSG_DESKTOP_SESSION_NOT_READY
-            {
+            // A desktop that is still starting is carried through password
+            // validation; all other platform outcomes fail through typed code.
+            if desktop_error != Some(ErrorCode::DESKTOP_SESSION_NOT_READY) {
                 #[cfg(target_os = "linux")]
                 if should_record_linux_headless_os_auth_failure(
                     self.linux_headless_handle.is_headless_allowed,
                     &lr.os_login.username,
-                    &err_msg,
+                    desktop_error,
                 ) {
                     let (failure, res) = self.check_failure(0).await;
                     if !res {
@@ -3887,8 +3866,10 @@ impl Connection {
                     }
                     self.update_failure(failure, false, 0);
                 }
-                self.send_login_error(err_msg).await;
-                return true;
+                if let Some(code) = desktop_error {
+                    self.send_login_error(code).await;
+                    return true;
+                }
             }
 
             // https://github.com/rustdesk/rustdesk-server-pro/discussions/646
@@ -3929,12 +3910,11 @@ impl Connection {
                 if camellia_remote_protocol::get_version_number(&lr.version)
                     >= camellia_remote_protocol::get_version_number("1.2.0")
                 {
-                    self.send_login_error(crate::client::LOGIN_MSG_NO_PASSWORD_ACCESS)
-                        .await;
+                    self.send_login_error(ErrorCode::NO_PASSWORD_ACCESS).await;
                 }
                 return true;
             } else if self.is_recent_session(false) {
-                if err_msg.is_empty() {
+                if desktop_error.is_none() {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
                     if !self.send_logon_response_and_keep_alive().await {
@@ -3942,10 +3922,11 @@ impl Connection {
                     }
                     self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
                 } else {
-                    self.send_login_error(err_msg).await;
+                    self.send_login_error(desktop_error.expect("desktop error"))
+                        .await;
                 }
             } else if lr.password.is_empty() {
-                if err_msg.is_empty() {
+                if desktop_error.is_none() {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
                         if let Some(keep_alive) =
@@ -3956,10 +3937,8 @@ impl Connection {
                     }
                     self.try_start_cm(lr.my_id, lr.my_name, false);
                 } else {
-                    self.send_login_error(
-                        crate::client::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_EMPTY,
-                    )
-                    .await;
+                    self.send_login_error(ErrorCode::DESKTOP_SESSION_PASSWORD_REQUIRED)
+                        .await;
                 }
             } else {
                 let (failure, res) = self.check_failure(0).await;
@@ -3969,19 +3948,16 @@ impl Connection {
                 if !self.validate_password(allow_logon_screen_password) {
                     self.update_failure_with_scope(failure, false, 0, FailureScope::Default);
                     self.check_update_temporary_password(false);
-                    if err_msg.is_empty() {
-                        self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
-                            .await;
+                    if desktop_error.is_none() {
+                        self.send_login_error(ErrorCode::PASSWORD_INVALID).await;
                         self.try_start_cm(lr.my_id, lr.my_name, false);
                     } else {
-                        self.send_login_error(
-                            crate::client::LOGIN_MSG_DESKTOP_SESSION_NOT_READY_PASSWORD_WRONG,
-                        )
-                        .await;
+                        self.send_login_error(ErrorCode::DESKTOP_SESSION_PASSWORD_INVALID)
+                            .await;
                     }
                 } else {
                     self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
-                    if err_msg.is_empty() {
+                    if desktop_error.is_none() {
                         #[cfg(target_os = "linux")]
                         self.linux_headless_handle.wait_desktop_cm_ready().await;
                         if !self.send_logon_response_and_keep_alive().await {
@@ -3989,7 +3965,8 @@ impl Connection {
                         }
                         self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
                     } else {
-                        self.send_login_error(err_msg).await;
+                        self.send_login_error(desktop_error.expect("desktop error"))
+                            .await;
                     }
                 }
             }
@@ -4012,8 +3989,7 @@ impl Connection {
                         self.inner.id()
                     );
                     self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
-                    self.send_login_error("Authentication state violation")
-                        .await;
+                    self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                     return true;
                 }
             };
@@ -4022,7 +3998,7 @@ impl Connection {
             if now > expires_at {
                 log::warn!("Auth2fa challenge expired (conn_id={})", self.inner.id());
                 self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
-                self.send_login_error("2FA challenge expired").await;
+                self.send_login_error(ErrorCode::TWO_FACTOR_INVALID).await;
                 self.auth_state = ConnectionAuthState::Unauthenticated;
                 return true;
             }
@@ -4111,8 +4087,7 @@ impl Connection {
                 );
             } else {
                 self.update_failure_with_scope(failure, false, 1, FailureScope::Default);
-                self.send_login_error(crate::client::LOGIN_MSG_2FA_WRONG)
-                    .await;
+                self.send_login_error(ErrorCode::TWO_FACTOR_INVALID).await;
             }
         } else if let Some(message::Union::TestDelay(t)) = msg.union {
             if t.from_client {
@@ -4146,7 +4121,7 @@ impl Connection {
                                 log::warn!(
                                     "Rejected switch sides response for non-remote-desktop session; closing connection"
                                 );
-                                self.send_login_error("Connection not allowed").await;
+                                self.send_login_error(ErrorCode::PERMISSION_DENIED).await;
                                 return false;
                             }
                             self.reset_session_scope_for_login();
@@ -4909,10 +4884,22 @@ impl Connection {
                         }
                         Some(file_response::Union::Error(e)) => {
                             self.inflight_write_blocks.remove(&e.id);
+                            let wire_error = e
+                                .typed_error
+                                .as_ref()
+                                .filter(|typed| {
+                                    e.error.is_empty()
+                                        && camellia_remote_protocol::error::is_valid_for(
+                                            typed,
+                                            camellia_remote_protocol::error::ErrorContext::FileTransfer,
+                                        )
+                                })
+                                .map(|typed| typed.display_key.clone())
+                                .unwrap_or_else(|| "protocol_mismatch".to_owned());
                             self.send_fs(ipc::FS::WriteError {
                                 id: e.id,
                                 file_num: e.file_num,
-                                err: e.error,
+                                err: wire_error,
                             });
                         }
                         _ => {}
@@ -5381,7 +5368,7 @@ impl Connection {
                             self.inner.id(),
                             failure_scope
                         );
-                        self.send_login_error("Please try 1 minute later").await;
+                        self.send_login_error(ErrorCode::RATE_LIMITED).await;
                         sleep(1.).await;
                         self.post_alarm_audit(
                             AlarmAuditType::TerminalOsLoginConcurrency,
@@ -5421,7 +5408,7 @@ impl Connection {
                 failure_scope,
                 msg
             );
-            self.send_login_error(msg).await;
+            self.send_login_error(ErrorCode::PASSWORD_INVALID).await;
             sleep(1.).await;
             return Some(false);
         }
@@ -5443,8 +5430,7 @@ impl Connection {
                         has_service_token
                     );
                     // No need to translate the following message, because it is in an abnormal case.
-                    self.send_login_error("Terminal service user mismatch detected.")
-                        .await;
+                    self.send_login_error(ErrorCode::CONFLICT).await;
                     sleep(1.).await;
                     return Some(false);
                 }
@@ -5569,11 +5555,8 @@ impl Connection {
             .unwrap_or((0, 0, 0));
 
         if failure_prefix.2 > thresh {
-            self.send_login_error(format!(
-                "Too many wrong attempts for IPv6 prefix /{}",
-                prefix_num
-            ))
-            .await;
+            log::warn!("Rejected login attempts above IPv6 /{prefix_num} budget");
+            self.send_login_error(ErrorCode::RATE_LIMITED).await;
             self.post_alarm_audit(
                 AlarmAuditType::ExceedIPv6PrefixAttempts,
                 json!({
@@ -5612,9 +5595,8 @@ impl Connection {
                     i,
                     decision.login_error.as_deref().unwrap_or("")
                 );
-                if let Some(login_error) = decision.login_error {
-                    // Rare branch and currently temporary response copy; translation can be added later if needed.
-                    self.send_login_error(login_error).await;
+                if decision.login_error.is_some() {
+                    self.send_login_error(ErrorCode::RATE_LIMITED).await;
                 }
                 if let Some(audit) = decision.audit {
                     // For OS blocked/backoff events, we currently emit one alarm report per blocked attempt.
@@ -5648,8 +5630,8 @@ impl Connection {
                 self.login_permit = Some(p);
                 return (((0, 0, 0), time), true);
             } else {
-                if let Some(msg) = decision.login_error {
-                    self.send_login_error(msg).await;
+                if decision.login_error.is_some() {
+                    self.send_login_error(ErrorCode::RATE_LIMITED).await;
                 }
                 if let Some(audit_type) = decision.audit {
                     self.post_alarm_audit(
@@ -5688,7 +5670,7 @@ impl Connection {
             .unwrap_or((0, 0, 0));
 
         let res = if failure.2 > 30 {
-            self.send_login_error("Too many wrong attempts").await;
+            self.send_login_error(ErrorCode::RATE_LIMITED).await;
             self.post_alarm_audit(
                 AlarmAuditType::ExceedThirtyAttempts,
                 json!({
@@ -5699,7 +5681,7 @@ impl Connection {
             );
             false
         } else if time == failure.0 && failure.1 > 6 {
-            self.send_login_error("Please try 1 minute later").await;
+            self.send_login_error(ErrorCode::RATE_LIMITED).await;
             self.post_alarm_audit(
                 AlarmAuditType::SixAttemptsWithinOneMinute,
                 json!({
@@ -6585,14 +6567,9 @@ impl Connection {
         self.inflight_write_blocks.clear();
     }
 
-    // The `reason` should be consistent with `check_if_retry` if not empty
-    async fn send_close_reason_no_retry(&mut self, reason: &str) {
+    async fn send_close_reason_no_retry(&mut self, code: ErrorCode) {
         let mut misc = Misc::new();
-        if reason.is_empty() {
-            misc.set_close_reason("Closed manually by the peer".to_string());
-        } else {
-            misc.set_close_reason(reason.to_string());
-        }
+        misc.set_close_error(error::for_code(code));
         let mut msg_out = Message::new();
         msg_out.set_misc(misc);
         self.send(msg_out).await;
@@ -7117,7 +7094,7 @@ impl Connection {
             self.post_session_scope_violation_alarm(message);
         }
         if Config::get_bool_option(keys::OPTION_ALLOW_SCOPE_VIOLATION_CLOSE) {
-            self.send_close_reason_no_retry("Connection not allowed")
+            self.send_close_reason_no_retry(ErrorCode::PERMISSION_DENIED)
                 .await;
             self.on_close("Session scope violation", true).await;
             return false;
@@ -7414,7 +7391,10 @@ impl Connection {
             Some(message::Union::LoginRequest(_)) => true,
             Some(message::Union::TestDelay(_)) => true,
             Some(message::Union::Misc(misc)) => {
-                matches!(misc.union.as_ref(), Some(misc::Union::CloseReason(_)))
+                matches!(
+                    misc.union.as_ref(),
+                    Some(misc::Union::CloseError(_)) | Some(misc::Union::CloseReason(_))
+                )
             }
             _ => false,
         }
@@ -7728,7 +7708,10 @@ impl Connection {
             Err(err) => {
                 let mut response = TerminalResponse::new();
                 let mut error = TerminalError::new();
-                error.message = format!("Failed to handle action: {}", err);
+                log::error!("Failed to handle terminal action: {}", err);
+                error.typed_error = camellia_remote_protocol::protobuf::MessageField::some(
+                    error::for_code(ErrorCode::INTERNAL_FAILURE),
+                );
                 response.set_error(error);
                 let mut msg_out = Message::new();
                 msg_out.set_terminal_response(response);
@@ -8318,7 +8301,7 @@ impl LinuxHeadlessHandle {
         }
     }
 
-    pub fn try_start_desktop(&mut self, os_login: Option<&OSLogin>) -> String {
+    pub fn try_start_desktop(&mut self, os_login: Option<&OSLogin>) -> Option<ErrorCode> {
         if self.is_headless_allowed {
             match os_login {
                 Some(os_login) => {
@@ -8327,7 +8310,7 @@ impl LinuxHeadlessHandle {
                 None => linux_desktop_manager::try_start_desktop("", ""),
             }
         } else {
-            "".to_string()
+            None
         }
     }
 
