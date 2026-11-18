@@ -602,7 +602,7 @@ jobs:
       - name: Install bounded software-codec prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake gcc g++ libclang-dev libvpx-dev libyuv-dev pkg-config
+          sudo apt-get install -y clang cmake gcc g++ libclang-dev libvpx-dev libyuv-dev libaom-dev pkg-config
 
       - name: Validate shared performance contract
         run: python3 -m unittest -v tools.test_performance_contract
