@@ -94,6 +94,7 @@ jobs:
           python3 .github/scripts/test_dynamic_boundary_policy.py
           python3 .github/scripts/verify_windows_crt.py source
           python3 .github/scripts/tests/test_windows_crt.py
+          python3 .github/scripts/tests/test_apple_runner_plist_contract.py
 
   generate_bridge:
     name: Generate Flutter Rust bridge
