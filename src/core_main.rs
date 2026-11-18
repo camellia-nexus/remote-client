@@ -1,11 +1,5 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::client::translate;
-#[cfg(not(debug_assertions))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::platform::breakdown_callback;
-#[cfg(not(debug_assertions))]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use camellia_remote_protocol::platform::register_breakdown_handler;
 use camellia_remote_protocol::{config, log};
 #[cfg(windows)]
 use tauri_winrt_notification::{Duration, Sound, Toast};
@@ -182,9 +176,6 @@ pub fn core_main() -> Option<Vec<String>> {
             camellia_remote_protocol::allow_err!(crate::run_me(vec!["--tray"]));
         }
     }
-    #[cfg(not(debug_assertions))]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    register_breakdown_handler(breakdown_callback);
     #[cfg(target_os = "linux")]
     #[cfg(feature = "flutter")]
     {

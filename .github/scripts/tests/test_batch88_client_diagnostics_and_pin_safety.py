@@ -147,7 +147,7 @@ class ProvenanceContractTests(unittest.TestCase):
         data = json.loads(provenance_path.read_text(encoding="utf-8"))
         self.assertEqual(
             data["protocol_source_commit"],
-            "2d2e51ffbaee7d989d15acf637a71086f8d83891",
+            "59ba1b42c9441e9760f5657c28e29aa888e29737",
         )
 
 
