@@ -626,7 +626,7 @@ jobs:
             local output="$2"
             local manifest="$RUNNER_TEMP/${repository}-scrap-artifacts.jsonl"
             CARGO_TARGET_DIR="$RUNNER_TEMP/client-performance-target" \
-              cargo test --locked --release --no-run --message-format=json \
+              cargo test --locked --release --no-run --lib --tests --message-format=json \
               --manifest-path "$repository/Cargo.toml" \
               --package scrap --features linux-pkg-config > "$manifest"
             python3 - "$manifest" "$output" <<'PY'
