@@ -8,6 +8,7 @@ use camellia_remote::port_forward::{
 use camellia_remote_protocol::message_proto::{
     Hash, PeerInfo, Resolution, TestDelay, WindowsSession,
 };
+use camellia_remote_protocol::rendezvous_proto::ErrorEnvelope;
 use camellia_remote_protocol::tokio;
 use camellia_remote_protocol::Stream;
 use std::sync::{Arc, RwLock};
@@ -22,7 +23,7 @@ struct MockInterface {
 impl Interface for MockInterface {
     fn send(&self, _data: Data) {}
     fn msgbox(&self, _msgtype: &str, _title: &str, _text: &str, _link: &str) {}
-    fn handle_login_error(&self, _err: &str) -> bool {
+    fn handle_login_error(&self, _err: &ErrorEnvelope) -> bool {
         false
     }
     fn handle_peer_info(&self, _pi: PeerInfo) {}
