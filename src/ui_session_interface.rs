@@ -2327,7 +2327,12 @@ fn validate_audit_note_response(
     expected_event_id: &str,
 ) -> ResultType<()> {
     let response: serde_json::Value = serde_json::from_str(body)?;
-    if response.get("version").and_then(serde_json::Value::as_u64) != Some(AUDIT_PROTOCOL_VERSION)
+    if response
+        .get("response_schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(crate::hbbs_http::MANAGEMENT_RESPONSE_SCHEMA_VERSION)
+        || response.get("version").and_then(serde_json::Value::as_u64)
+            != Some(AUDIT_PROTOCOL_VERSION)
         || response
             .get("acknowledged_event_id")
             .and_then(serde_json::Value::as_str)

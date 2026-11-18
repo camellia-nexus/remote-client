@@ -21,6 +21,8 @@ use serde_json::{json, Value};
 #[cfg(not(any(target_os = "ios")))]
 use std::sync::atomic::AtomicBool;
 
+use super::HbbHttpResponse;
+
 const TIME_HEARTBEAT: Duration = Duration::from_secs(15);
 const UPLOAD_SYSINFO_TIMEOUT: Duration = Duration::from_secs(120);
 const TIME_CONN: Duration = Duration::from_secs(3);
@@ -35,6 +37,17 @@ const MANAGED_INCOMING_REVOKED: u8 = 2;
 static MANAGED_INCOMING_STATE: AtomicU8 = AtomicU8::new(MANAGED_INCOMING_PENDING);
 #[cfg(not(any(target_os = "ios")))]
 static MANAGED_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Deserialize)]
+struct SysinfoVersionResponse {
+    sysinfo_schema_version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SysinfoUpdatedResponse {
+    sysinfo_schema_version: u64,
+    updated: bool,
+}
 
 #[cfg(not(any(target_os = "ios")))]
 lazy_static::lazy_static! {
@@ -127,6 +140,11 @@ impl ManagedLeaseTracker {
             return None;
         }
         let body = serde_json::from_str::<Value>(response).ok()?;
+        if body.get("response_schema_version").and_then(Value::as_u64)
+            != Some(super::MANAGEMENT_RESPONSE_SCHEMA_VERSION)
+        {
+            return None;
+        }
         let lease =
             serde_json::from_value::<DeviceLease>(body.get("device_lease")?.clone()).ok()?;
         if lease.version != 1 || lease.id != expected_id || lease.uuid != expected_uuid {
@@ -505,16 +523,17 @@ async fn start_hbbs_sync_async() {
                         let old_hash = config::Status::get("sysinfo_hash");
                         let ver = config::Status::get("sysinfo_ver"); // sysinfo_ver is the version of sysinfo on server's side
                         if hash == old_hash {
-                            // When the api doesn't exist, Ok("") will be returned in test.
                             let samever = match crate::post_request(url.replace("heartbeat", "sysinfo_ver"), "".to_owned(), &auth_header).await {
-                                Ok(x)  => {
-                                    sysinfo_ver = x.clone();
-                                    *PRO.lock().unwrap() = true;
-                                    x == ver
+                                Ok(x) => match HbbHttpResponse::<SysinfoVersionResponse>::parse(&x) {
+                                    Ok(HbbHttpResponse::Data(version)) if version.sysinfo_schema_version == 1 => {
+                                        sysinfo_ver = version.sysinfo_schema_version.to_string();
+                                        *PRO.lock().unwrap() = true;
+                                        sysinfo_ver == ver
+                                    }
+                                    _ => false,
                                 }
                                 _ => {
-                                    false // to make sure Pro can be assigned in below post for old
-                                            // hbbs pro not supporting sysinfo_ver, use false for ensuring
+                                    false
                                 }
                             };
                             if samever {
@@ -526,7 +545,9 @@ async fn start_hbbs_sync_async() {
                     }
                     match crate::post_request(url.replace("heartbeat", "sysinfo"), v, &auth_header).await {
                         Ok(x)  => {
-                            if x == "SYSINFO_UPDATED" {
+                            match HbbHttpResponse::<SysinfoUpdatedResponse>::parse(&x) {
+                                Ok(HbbHttpResponse::Data(updated))
+                                    if updated.updated && updated.sysinfo_schema_version == 1 => {
                                 info_uploaded = InfoUploaded::uploaded(url.clone(), id.clone(), sys_username);
                                 log::info!("sysinfo updated");
                                 if !hash.is_empty() {
@@ -534,10 +555,13 @@ async fn start_hbbs_sync_async() {
                                     config::Status::set("sysinfo_ver", sysinfo_ver.clone());
                                 }
                                 *PRO.lock().unwrap() = true;
-                            } else if x == "ID_NOT_FOUND" {
+                                }
+                                Ok(HbbHttpResponse::Error(error)) if error.code == "device_identity_invalid" => {
                                 info_uploaded.last_uploaded = None; // next heartbeat will upload sysinfo again
-                            } else {
+                                }
+                                _ => {
                                 info_uploaded.last_uploaded = Some(Instant::now());
+                                }
                             }
                         }
                         _ => {

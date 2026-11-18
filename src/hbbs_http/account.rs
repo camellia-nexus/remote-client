@@ -288,6 +288,9 @@ impl OidcSession {
             Ok(HbbHttpResponse::Data(_)) => {
                 log::info!("Request oidc auth succeeded");
             }
+            Ok(HbbHttpResponse::Pending(pending)) => {
+                log::warn!("Request oidc auth returned Pending: {}", pending);
+            }
             Ok(HbbHttpResponse::Error(err)) => {
                 log::warn!("Request oidc auth returned error: {}", err);
             }
@@ -311,7 +314,7 @@ impl OidcSession {
             Ok(HbbHttpResponse::<_>::Error(err)) => {
                 let mut session = OIDC_SESSION.write().unwrap();
                 if session.generation == generation && !cancel_token.is_cancelled() {
-                    session.set_state(REQUESTING_ACCOUNT_AUTH, err);
+                    session.set_state(REQUESTING_ACCOUNT_AUTH, err.message);
                 }
                 return;
             }
@@ -378,19 +381,30 @@ impl OidcSession {
                     session.auth_body = Some(auth_body);
                     return;
                 }
-                Ok(HbbHttpResponse::<_>::Error(err)) => {
-                    if err.contains("No authed oidc is found") {
-                        // ignore, keep querying
-                    } else {
-                        let mut session = OIDC_SESSION.write().unwrap();
-                        if session.generation == generation && !cancel_token.is_cancelled() {
-                            session.set_state(WAITING_ACCOUNT_AUTH, err);
-                        }
-                        return;
+                Ok(HbbHttpResponse::<_>::Pending(pending)) if pending.code == "oidc_pending" => {
+                    // Explicit machine state: keep querying independently of localized text.
+                }
+                Ok(HbbHttpResponse::<_>::Pending(_)) => {
+                    let mut session = OIDC_SESSION.write().unwrap();
+                    if session.generation == generation && !cancel_token.is_cancelled() {
+                        session
+                            .set_state(WAITING_ACCOUNT_AUTH, "Invalid pending response".to_owned());
                     }
+                    return;
+                }
+                Ok(HbbHttpResponse::<_>::Error(err)) => {
+                    let mut session = OIDC_SESSION.write().unwrap();
+                    if session.generation == generation && !cancel_token.is_cancelled() {
+                        session.set_state(WAITING_ACCOUNT_AUTH, err.message);
+                    }
+                    return;
                 }
                 Ok(_) => {
-                    // ignore
+                    let mut session = OIDC_SESSION.write().unwrap();
+                    if session.generation == generation && !cancel_token.is_cancelled() {
+                        session.set_state(WAITING_ACCOUNT_AUTH, "Invalid auth response".to_owned());
+                    }
+                    return;
                 }
                 Err(err) => {
                     log::trace!("Failed query oidc {}", err);

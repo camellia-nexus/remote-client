@@ -1181,7 +1181,13 @@ pub fn deploy_device(token: String, new_id: Option<String>) -> DeployResult {
         Ok(text) => text,
         Err(err) => return DeployResult::Error(format!("Request failed: {}", err)),
     };
-    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    let parsed = match crate::hbbs_http::HbbHttpResponse::<serde_json::Value>::parse(&text) {
+        Ok(crate::hbbs_http::HbbHttpResponse::Data(parsed)) => parsed,
+        Ok(crate::hbbs_http::HbbHttpResponse::Error(error)) => {
+            return DeployResult::Error(error.message);
+        }
+        _ => return DeployResult::Error("Invalid Management response.".to_owned()),
+    };
     match parsed["result"].as_str().unwrap_or("") {
         "OK" => {
             if let Some(new_id) = new_id {
@@ -1216,13 +1222,7 @@ pub fn deploy_device(token: String, new_id: Option<String>) -> DeployResult {
         "NOT_ENABLED" => DeployResult::NotEnabled,
         "INVALID_INPUT" => DeployResult::InvalidInput,
         "ID_TAKEN" => DeployResult::IdTaken(id_to_deploy),
-        _ => {
-            if text.is_empty() {
-                DeployResult::Error("Unknown response.".to_owned())
-            } else {
-                DeployResult::Error(text)
-            }
-        }
+        _ => DeployResult::Error("Unknown Management deployment result.".to_owned()),
     }
 }
 

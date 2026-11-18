@@ -6,13 +6,22 @@ void main() {
     'shared profile credential parser accepts only a non-empty 200 password',
     () {
       expect(
-        parseSharedCredentialResponse('{"password":"target-secret"}', 200),
+        parseSharedCredentialResponse(
+          '{"response_schema_version":1,"password":"target-secret"}',
+          200,
+        ),
         'target-secret',
       );
-      expect(parseSharedCredentialResponse('{"password":""}', 200), isNull);
       expect(
         parseSharedCredentialResponse(
-          '{"password":"${List.filled(61, 'x').join()}"}',
+          '{"response_schema_version":1,"password":""}',
+          200,
+        ),
+        isNull,
+      );
+      expect(
+        parseSharedCredentialResponse(
+          '{"response_schema_version":1,"password":"${List.filled(61, 'x').join()}"}',
           200,
         ),
         isNull,

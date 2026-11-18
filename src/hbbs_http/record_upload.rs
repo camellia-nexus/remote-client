@@ -262,6 +262,7 @@ struct StoredUpload {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RemoteUploadState {
+    response_schema_version: u8,
     protocol: u8,
     upload_id: String,
     state: String,
@@ -749,8 +750,35 @@ impl RecordUploader {
 
 fn parse_response(mut response: Response) -> ResultType<RemoteUploadState> {
     let status = response.status();
-    if !status.is_success() {
-        bail!("recording upload failed with HTTP {}", status.as_u16());
+    if response
+        .headers()
+        .get("X-Camellia-Response-Schema")
+        .and_then(|value| value.to_str().ok())
+        != Some("1")
+    {
+        bail!("recording upload received an unsupported Management response schema");
+    }
+    if response
+        .headers()
+        .get("X-Camellia-Response-Kind")
+        .and_then(|value| value.to_str().ok())
+        != Some(if status.is_success() {
+            "success"
+        } else {
+            "error"
+        })
+    {
+        bail!("recording upload received an invalid Management response kind");
+    }
+    if response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        != Some("application/json")
+    {
+        bail!("recording upload received an invalid Management response content type");
     }
     let mut body = Vec::new();
     response
@@ -760,7 +788,17 @@ fn parse_response(mut response: Response) -> ResultType<RemoteUploadState> {
     if body.len() as u64 > MAX_RESPONSE_BYTES {
         bail!("recording upload response is too large");
     }
-    let state: RemoteUploadState = serde_json::from_slice(&body)?;
+    let body = std::str::from_utf8(&body)?;
+    let state = match super::HbbHttpResponse::<RemoteUploadState>::parse(body)? {
+        super::HbbHttpResponse::Data(state) if status.is_success() => state,
+        super::HbbHttpResponse::Error(error) => {
+            bail!("recording upload failed: {}: {}", error.code, error.message)
+        }
+        _ => bail!("recording upload received an invalid Management response"),
+    };
+    if state.response_schema_version != 1 {
+        bail!("recording upload received an incompatible Management response");
+    }
     validate_remote_state(&state)?;
     Ok(state)
 }
@@ -1150,6 +1188,7 @@ mod tests {
     #[test]
     fn remote_state_rejects_protocol_and_finalization_mismatches() {
         let mut state = RemoteUploadState {
+            response_schema_version: 1,
             protocol: PROTOCOL_VERSION,
             upload_id: "22222222-2222-4222-8222-222222222222".to_owned(),
             state: "active".to_owned(),
@@ -1204,6 +1243,7 @@ mod tests {
             digest: sha256_hex(b"pending"),
         };
         let mut remote = RemoteUploadState {
+            response_schema_version: 1,
             protocol: PROTOCOL_VERSION,
             upload_id: upload_id.to_owned(),
             state: "active".to_owned(),

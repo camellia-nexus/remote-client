@@ -3,6 +3,7 @@ import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
 import 'package:camellia_remote_app/common/widgets/peers_view.dart';
 import 'package:camellia_remote_app/models/model.dart';
+import 'package:camellia_remote_app/models/management_api_contract.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
@@ -195,13 +196,7 @@ class GroupModel {
         final resp = await http.get(uri, headers: getHttpHeaders());
         if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
-        Map<String, dynamic> json = _jsonDecodeResp(
-          decode_http_response(resp),
-          resp.statusCode,
-        );
-        if (json.containsKey('error')) {
-          throw json['error'];
-        }
+        Map<String, dynamic> json = _jsonDecodeResp(resp);
         if (resp.statusCode != 200) {
           throw 'HTTP ${resp.statusCode}';
         }
@@ -259,20 +254,7 @@ class GroupModel {
         final resp = await http.get(uri, headers: getHttpHeaders());
         if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
-        Map<String, dynamic> json = _jsonDecodeResp(
-          decode_http_response(resp),
-          resp.statusCode,
-        );
-        if (json.containsKey('error')) {
-          if (json['error'] == 'Admin required!' ||
-              json['error'].toString().contains(
-                'ambiguous column name: status',
-              )) {
-            throw translate('upgrade_rustdesk_server_pro_to_{1.1.10}_tip');
-          } else {
-            throw json['error'];
-          }
-        }
+        Map<String, dynamic> json = _jsonDecodeResp(resp);
         if (resp.statusCode != 200) {
           throw 'HTTP ${resp.statusCode}';
         }
@@ -328,13 +310,7 @@ class GroupModel {
         if (requestGen != UserModel.currentAccountGen) return false;
         _statusCode = resp.statusCode;
 
-        Map<String, dynamic> json = _jsonDecodeResp(
-          decode_http_response(resp),
-          resp.statusCode,
-        );
-        if (json.containsKey('error')) {
-          throw json['error'];
-        }
+        Map<String, dynamic> json = _jsonDecodeResp(resp);
         if (resp.statusCode != 200) {
           throw 'HTTP ${resp.statusCode}';
         }
@@ -364,17 +340,8 @@ class GroupModel {
     return false;
   }
 
-  Map<String, dynamic> _jsonDecodeResp(String body, int statusCode) {
-    try {
-      Map<String, dynamic> json = jsonDecode(body);
-      return json;
-    } catch (e) {
-      final err = body.isNotEmpty && body.length < 128 ? body : e.toString();
-      if (statusCode != 200) {
-        throw 'HTTP $statusCode, $err';
-      }
-      throw err;
-    }
+  Map<String, dynamic> _jsonDecodeResp(http.Response response) {
+    return decodeManagementObject(response, decode_http_response(response));
   }
 
   void _saveCache([String? expectedToken]) {

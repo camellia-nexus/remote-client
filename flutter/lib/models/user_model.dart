@@ -9,6 +9,7 @@ import 'package:get/get.dart';
 
 import '../common.dart';
 import '../utils/http_service.dart' as http;
+import 'management_api_contract.dart';
 import 'model.dart';
 import 'platform_model.dart';
 
@@ -122,15 +123,11 @@ class UserModel {
             : UserAccountState.error;
         return;
       }
-      final decoded = json.decode(decode_http_response(response));
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException('Invalid current user response');
-      }
+      final decoded = decodeManagementObject(
+        response,
+        decode_http_response(response),
+      );
       final data = _mergeWithCachedUser(decoded, getLocalUserInfo());
-      final error = data['error'];
-      if (error != null) {
-        throw error;
-      }
 
       if (requestGen != currentAccountGen) return;
       final user = UserPayload.fromJson(data);
@@ -285,7 +282,12 @@ class UserModel {
       );
       final proof = jsonDecode(proofBody);
       if (proof is! Map<String, dynamic> || proof['error'] != null) {
-        throw RequestException(0, proof is Map ? '${proof['error'] ?? 'Device proof failed'}' : 'Device proof failed');
+        throw RequestException(
+          0,
+          proof is Map
+              ? '${proof['error'] ?? 'Device proof failed'}'
+              : 'Device proof failed',
+        );
       }
       payload['device_proof'] = proof;
     }
@@ -296,7 +298,7 @@ class UserModel {
 
     final Map<String, dynamic> body;
     try {
-      body = jsonDecode(decode_http_response(resp));
+      body = decodeManagementObject(resp, decode_http_response(resp));
     } catch (e) {
       debugPrint("login: jsonDecode resp body failed: ${e.toString()}");
       if (resp.statusCode != 200) {
@@ -307,13 +309,6 @@ class UserModel {
       }
       rethrow;
     }
-    if (resp.statusCode != 200) {
-      throw RequestException(resp.statusCode, body['error'] ?? '');
-    }
-    if (body['error'] != null) {
-      throw RequestException(0, body['error']);
-    }
-
     return getLoginResponseFromAuthBody(body);
   }
 
@@ -341,8 +336,13 @@ class UserModel {
       final url = await bind.mainGetApiServer();
       if (url.trim().isEmpty) return [];
       final resp = await http.get(Uri.parse('$url/api/login-options'));
+      final payload = decodeManagementObject(resp, decode_http_response(resp));
+      final rawOptions = payload['options'];
+      if (rawOptions is! List<dynamic>) {
+        throw const FormatException('Invalid login options response');
+      }
       final List<String> ops = [];
-      for (final item in jsonDecode(resp.body)) {
+      for (final item in rawOptions) {
         ops.add(item as String);
       }
       for (final item in ops) {

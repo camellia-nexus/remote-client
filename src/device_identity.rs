@@ -2,7 +2,7 @@ use camellia_remote_protocol::{
     anyhow::Context,
     config::Config,
     crypto::sign,
-    serde_json::{self, json, Value},
+    serde_json::{json, Value},
     sha2::{Digest, Sha256},
     ResultType,
 };
@@ -19,8 +19,6 @@ struct ProofChallenge {
     message: String,
     #[serde(default)]
     expires_at: i64,
-    #[serde(default)]
-    error: String,
 }
 
 fn proof_from_challenge(
@@ -32,9 +30,6 @@ fn proof_from_challenge(
     public_key: &[u8],
     now: i64,
 ) -> ResultType<Value> {
-    if !challenge.error.is_empty() {
-        camellia_remote_protocol::bail!(challenge.error);
-    }
     if challenge.challenge.is_empty()
         || challenge.challenge.len() > 128
         || challenge.message.len() > 1_024
@@ -114,7 +109,15 @@ pub fn request_device_proof(
         body.to_string(),
         &header,
     )?;
-    let challenge: ProofChallenge = serde_json::from_str(&response)?;
+    let challenge = match crate::hbbs_http::HbbHttpResponse::<ProofChallenge>::parse(&response)? {
+        crate::hbbs_http::HbbHttpResponse::Data(challenge) => challenge,
+        crate::hbbs_http::HbbHttpResponse::Error(error) => {
+            camellia_remote_protocol::bail!("{}: {}", error.code, error.message)
+        }
+        _ => {
+            camellia_remote_protocol::bail!("Management returned an invalid device proof response")
+        }
+    };
     let now = i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -144,7 +147,6 @@ mod tests {
                 challenge: "challenge".to_owned(),
                 message: message.clone(),
                 expires_at: 1_800_000_030,
-                error: String::new(),
             },
             "login",
             "123456789",
@@ -171,7 +173,6 @@ mod tests {
                 challenge: "challenge".to_owned(),
                 message: "attacker-controlled-message".to_owned(),
                 expires_at: 1_800_000_030,
-                error: String::new(),
             },
             "login",
             "123456789",

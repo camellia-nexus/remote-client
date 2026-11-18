@@ -46,19 +46,32 @@ type AccountAuthResult = {
   url_launched?: boolean;
   auth_body?: unknown;
 };
-type OidcAuthUrlResponse = { code?: string; url?: string; error?: string };
+type ManagementApiResponse = {
+  response_schema_version?: number;
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  pending?: boolean;
+};
+type OidcAuthUrlResponse = ManagementApiResponse & { code?: string; url?: string };
 type OidcAuthQueryResponse = {
-  error?: string;
+  response_schema_version?: number;
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+  pending?: boolean;
   access_token?: string;
   type?: string;
   user?: { name?: string; status?: unknown };
   [key: string]: unknown;
 };
 type DeviceProofChallengeResponse = {
+  response_schema_version?: number;
+  code?: string;
   challenge?: string;
   message?: string;
   expires_at?: number;
-  error?: string;
+  retryable?: boolean;
 };
 type BootstrapConfigPayload = {
   appName?: string;
@@ -1273,12 +1286,13 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
         }
       )) as DeviceProofChallengeResponse;
       if (
-        response.error ||
+        response.response_schema_version !== 1 ||
+        response.code ||
         !response.challenge ||
         !response.message ||
         !Number.isSafeInteger(response.expires_at)
       ) {
-        throw new Error(response.error || 'Invalid device proof challenge');
+        throw new Error(response.message || 'Invalid device proof challenge');
       }
       const message = await validateDeviceProofChallenge(
         response.challenge,
@@ -3281,11 +3295,14 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
       if (!this.isAccountAuthActive(nonce)) {
         return;
       }
-      if (authResponse.error) {
+      if (authResponse.response_schema_version !== 1) {
+        throw new Error('Unsupported Management response schema');
+      }
+      if (authResponse.message && authResponse.retryable !== undefined) {
         this.closeAccountAuthPopup();
         this.updateAccountAuthResult({
           state_msg: 'Requesting account auth',
-          failed_msg: authResponse.error,
+          failed_msg: authResponse.message,
           url: '',
           url_launched: false
         });
@@ -3334,12 +3351,20 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
           return;
         }
 
-        if (queryResponse?.error) {
-          const errText = String(queryResponse.error);
-          if (!errText.includes('No authed oidc is found')) {
+        if (queryResponse?.response_schema_version !== 1) {
+          this.updateAccountAuthResult({
+            state_msg: 'Waiting account auth',
+            failed_msg: 'Unsupported Management response schema',
+            url: authUrl,
+            url_launched: urlLaunched
+          });
+          return;
+        }
+        if (queryResponse.code) {
+          if (!(queryResponse.code === 'oidc_pending' && queryResponse.pending === true && queryResponse.retryable === true)) {
             this.updateAccountAuthResult({
               state_msg: 'Waiting account auth',
-              failed_msg: errText,
+              failed_msg: String(queryResponse.message || 'OIDC authorization failed'),
               url: authUrl,
               url_launched: urlLaunched
             });
@@ -4175,24 +4200,47 @@ export class WebRuntime implements SecurityPolicyOptionsReader {
     init: RequestInit
   ): Promise<Record<string, unknown>> {
     const response = await fetch(url, init);
+    if (response.headers.get('X-Camellia-Response-Schema') !== '1') {
+      throw new Error('Unsupported Management response schema');
+    }
+    const responseKind = response.headers.get('X-Camellia-Response-Kind');
+    if (!responseKind) {
+      throw new Error('Missing Management response kind');
+    }
+    const contentType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase();
+    if (contentType !== 'application/json') {
+      throw new Error('Invalid Management response content type');
+    }
     const text = await response.text();
     if (!text) {
-      if (!response.ok) {
-        return { error: `HTTP ${response.status}` };
-      }
-      return {};
+      throw new Error(`Invalid empty Management response (${response.status})`);
     }
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(text) as Record<string, unknown>;
     } catch {
-      if (!response.ok) {
-        return { error: `HTTP ${response.status}` };
-      }
       throw new Error('Invalid JSON response');
     }
-    if (!response.ok && !('error' in parsed)) {
-      parsed.error = `HTTP ${response.status}`;
+    if (parsed.response_schema_version !== 1) {
+      throw new Error('Unsupported Management response schema');
+    }
+    const expectedKind = !response.ok
+      ? 'error'
+      : response.status === 202
+          ? (parsed.pending === true ? 'pending' : 'accepted')
+          : 'success';
+    if (responseKind !== expectedKind) {
+      throw new Error('Invalid Management response kind');
+    }
+    if (!response.ok &&
+        (typeof parsed.code !== 'string' ||
+          !/^[a-z][a-z0-9_]{0,63}$/.test(parsed.code) ||
+          typeof parsed.message !== 'string' ||
+          parsed.message.length < 1 ||
+          parsed.message.length > 256 ||
+          typeof parsed.retryable !== 'boolean' ||
+          (parsed.pending === true && parsed.retryable !== true))) {
+      throw new Error(`Invalid Management error response (${response.status})`);
     }
     return parsed;
   }
