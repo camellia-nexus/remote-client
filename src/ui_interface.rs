@@ -1752,11 +1752,27 @@ pub fn check_hwcodec() {
 }
 
 #[cfg(feature = "flutter")]
-pub fn get_unlock_pin() -> String {
+pub fn has_unlock_pin() -> bool {
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    return String::default();
+    return false;
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    return ipc::get_unlock_pin();
+    return ipc::has_unlock_pin();
+}
+
+#[cfg(feature = "flutter")]
+pub fn verify_unlock_pin(candidate: String) -> bool {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return false;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    return ipc::verify_unlock_pin(&candidate);
+}
+
+#[cfg(feature = "flutter")]
+#[deprecated(
+    note = "CRED-005: Plaintext unlock PIN is not retrievable; use has_unlock_pin or verify_unlock_pin"
+)]
+pub fn get_unlock_pin() -> String {
+    String::default()
 }
 
 #[cfg(feature = "flutter")]

@@ -2343,7 +2343,14 @@ pub fn main_check_super_user_permission() -> bool {
 
 #[frb(sync)]
 pub fn main_get_unlock_pin() -> String {
-    get_unlock_pin()
+    // CRED-005: Never return plaintext unlock PIN.
+    // Return "*" if a PIN is configured so boolean checks like `unlockPin.isNotEmpty`
+    // work correctly while preventing plaintext PIN leakage to the UI / heap.
+    if has_unlock_pin() {
+        "*".to_string()
+    } else {
+        "".to_string()
+    }
 }
 
 #[frb(sync)]
@@ -2977,6 +2984,10 @@ pub fn main_get_common(key: String) -> String {
         return ui_interface::is_permanent_password_set().to_string();
     } else if key == "local-permanent-password-set" {
         return ui_interface::is_local_permanent_password_set().to_string();
+    } else if let Some(candidate) = key.strip_prefix("verify-unlock-pin:") {
+        return ui_interface::verify_unlock_pin(candidate.to_string()).to_string();
+    } else if key == "has-unlock-pin" {
+        return ui_interface::has_unlock_pin().to_string();
     } else {
         "".to_owned()
     }

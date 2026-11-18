@@ -1021,7 +1021,14 @@ async fn handle(data: Data, stream: &mut Connection) {
                 } else if name == "voice-call-input" {
                     value = crate::audio_service::get_voice_call_input_device();
                 } else if name == "unlock-pin" {
-                    value = Some(Config::get_unlock_pin());
+                    // CRED-005: Never expose plaintext unlock PIN over IPC.
+                    value = None;
+                } else if name == "has-unlock-pin" {
+                    value = Some(if Config::has_unlock_pin() {
+                        "true".to_string()
+                    } else {
+                        "false".to_string()
+                    });
                 } else if name == "trusted-devices" {
                     value = Some(Config::get_trusted_devices_json());
                 } else {
@@ -1819,13 +1826,23 @@ pub fn set_unlock_pin(v: String, translate: bool) -> ResultType<()> {
 
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn has_unlock_pin() -> bool {
+    Config::has_unlock_pin()
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn verify_unlock_pin(candidate: &str) -> bool {
+    Config::verify_unlock_pin(candidate)
+}
+
+#[cfg(feature = "flutter")]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[deprecated(
+    note = "CRED-005: Plaintext unlock PIN is not retrievable; use has_unlock_pin or verify_unlock_pin"
+)]
 pub fn get_unlock_pin() -> String {
-    if let Ok(Some(v)) = get_config("unlock-pin") {
-        Config::set_unlock_pin(&v);
-        v
-    } else {
-        Config::get_unlock_pin()
-    }
+    String::new()
 }
 
 #[cfg(feature = "flutter")]

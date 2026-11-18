@@ -70,6 +70,7 @@ pub mod clipboard_file;
 pub mod action_gate;
 pub mod capability;
 pub mod child_process;
+pub mod diagnostics;
 pub mod privacy_mode;
 pub mod url_dispatcher;
 

@@ -189,7 +189,7 @@ void main() {
       ));
 
       bool callbackInvoked = false;
-      changeUnlockPinDialog('1234', () {
+      changeUnlockPinDialog(() {
         callbackInvoked = true;
       });
       await tester.pumpAndSettle();
@@ -211,7 +211,7 @@ void main() {
       ));
 
       bool callbackInvoked = false;
-      checkUnlockPinDialog('9999', () {
+      checkUnlockPinDialog(() {
         callbackInvoked = true;
       });
       await tester.pumpAndSettle();

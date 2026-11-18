@@ -1973,7 +1973,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
     }
 
     onChanged(bool? checked) async {
-      changeUnlockPinDialog(unlockPin.value, update);
+      changeUnlockPinDialog(update);
     }
 
     final isOptFixed = isOptionFixed(kOptionWhitelist);
@@ -3455,7 +3455,7 @@ Widget _lock(bool locked, String label, Function() onUnlock) {
                       onUnlock();
                     }
                   } else {
-                    checkUnlockPinDialog(unlockPin, onUnlock);
+                    checkUnlockPinDialog(onUnlock);
                   }
                 },
               ).marginSymmetric(horizontal: 2, vertical: 4),

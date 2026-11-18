@@ -3255,9 +3255,10 @@ void CommonConfirmDialog(
   });
 }
 
-void changeUnlockPinDialog(String oldPin, Function() callback) {
-  final pinController = TextEditingController(text: oldPin);
-  final confirmController = TextEditingController(text: oldPin);
+void changeUnlockPinDialog(Function() callback) {
+  // CRED-005: Never pre-fill existing unlock PIN; start with clean, empty controllers.
+  final pinController = TextEditingController();
+  final confirmController = TextEditingController();
   String? pinErrorText;
   String? confirmationErrorText;
   final maxLength = bind.mainMaxEncryptLen();
@@ -3331,7 +3332,7 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
   });
 }
 
-void checkUnlockPinDialog(String correctPin, Function() passCallback) {
+void checkUnlockPinDialog(Function() passCallback) {
   final controller = TextEditingController();
   String? errorText;
   gFFI.dialogManager.show((setState, close, context) {
@@ -3346,7 +3347,10 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
 
     submit() async {
       final pin = controller.text.trim();
-      if (correctPin != pin) {
+      // CRED-005: Authoritative verification against Rust core; Dart never holds or receives plaintext PIN.
+      final verified =
+          bind.mainGetCommonSync(key: 'verify-unlock-pin:$pin') == 'true';
+      if (!verified) {
         setState(() {
           errorText = translate('Wrong PIN');
         });

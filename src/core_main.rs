@@ -141,6 +141,31 @@ pub fn core_main() -> Option<Vec<String>> {
         }
         i += 1;
     }
+    if let Some(pos) =
+        std::env::args().position(|a| a == "--support-bundle" || a == "support-bundle")
+    {
+        let output_arg = std::env::args()
+            .nth(pos + 1)
+            .filter(|a| !a.starts_with("--"));
+        let mut opts = crate::diagnostics::ClientSupportBundleOptions::default();
+        if let Some(out) = output_arg {
+            opts.output_path = Some(std::path::PathBuf::from(out));
+        }
+        let target_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        match crate::diagnostics::export_client_support_bundle(&target_dir, &opts) {
+            Ok(bundle_path) => {
+                println!(
+                    "Successfully exported support bundle: {}",
+                    bundle_path.display()
+                );
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Failed to export support bundle: {:#}", e);
+                std::process::exit(1);
+            }
+        }
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     if args.is_empty() {
         #[cfg(target_os = "linux")]
