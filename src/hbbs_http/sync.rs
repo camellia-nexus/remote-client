@@ -637,6 +637,7 @@ pub fn is_pro() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hbbs_http::MANAGEMENT_RESPONSE_SCHEMA_VERSION;
     use std::cell::Cell;
 
     fn active_lease(id: &str, uuid: &str, generation: u64, seconds: u64) -> String {
@@ -653,6 +654,7 @@ mod tests {
     ) -> String {
         let digest = ManagedPolicy::canonical_digest(&config_options).unwrap();
         serde_json::json!({
+            "response_schema_version": MANAGEMENT_RESPONSE_SCHEMA_VERSION,
             "device_lease": {
                 "version": 1,
                 "state": "active",
@@ -739,6 +741,7 @@ mod tests {
             apply_success,
         ));
         let malformed_revocation = serde_json::json!({
+            "response_schema_version": MANAGEMENT_RESPONSE_SCHEMA_VERSION,
             "device_lease": {
                 "version": 1,
                 "state": "revoked",
@@ -758,6 +761,7 @@ mod tests {
         assert!(!tracker.is_active(now));
         assert!(!tracker.is_active(now + Duration::from_secs(2)));
         let revoked = serde_json::json!({
+            "response_schema_version": MANAGEMENT_RESPONSE_SCHEMA_VERSION,
             "device_lease": {
                 "version": 1,
                 "state": "revoked",

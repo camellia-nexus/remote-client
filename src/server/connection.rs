@@ -8791,6 +8791,7 @@ mod test {
         };
         let response = Connection::parse_file_audit_post_response(
             &json!({
+                "response_schema_version": 1,
                 "version": FILE_AUDIT_PROTOCOL_VERSION,
                 "audit_session_id": capability,
                 "acknowledged_event_id": event_id,
@@ -9022,6 +9023,7 @@ mod test {
         };
         let response = Connection::parse_audit_post_response(
             &json!({
+                "response_schema_version": 1,
                 "version": AUDIT_PROTOCOL_VERSION,
                 "audit_session_id": capability,
                 "acknowledged_event_id": event_id,
@@ -9102,6 +9104,7 @@ mod test {
         };
         let heartbeat_response = Connection::parse_audit_post_response(
             &json!({
+                "response_schema_version": 1,
                 "version": AUDIT_PROTOCOL_VERSION,
                 "audit_session_id": capability,
                 "acknowledged_event_id": heartbeat_event_id,
@@ -9147,6 +9150,7 @@ mod test {
             };
             let close_response = Connection::parse_audit_post_response(
                 &json!({
+                    "response_schema_version": 1,
                     "version": AUDIT_PROTOCOL_VERSION,
                     "audit_session_id": capability,
                     "acknowledged_event_id": close_event_id,
@@ -9182,6 +9186,7 @@ mod test {
             };
             let invalid_close = Connection::parse_audit_post_response(
                 &json!({
+                    "response_schema_version": 1,
                     "version": AUDIT_PROTOCOL_VERSION,
                     "audit_session_id": capability,
                     "acknowledged_event_id": close_event_id,
@@ -9215,6 +9220,7 @@ mod test {
         for terminal_state in ["closed", "expired"] {
             let terminal_evidence = Connection::parse_audit_post_response(
                 &json!({
+                    "response_schema_version": 1,
                     "version": AUDIT_PROTOCOL_VERSION,
                     "audit_session_id": capability,
                     "acknowledged_event_id": evidence_event_id,
