@@ -47,6 +47,7 @@ Both `atty 0.2.14` (`RUSTSEC-2021-0145` / `RUSTSEC-2024-0375`) and `glib 0.18.5`
 have been remediated in Batch 64 (`DEP-001`): `atty` and obsolete `bindgen 0.59.2` were purged by modernizing
 `bindgen` to `0.71` across `magnum-opus` and `hwcodec`, and `glib` was patched with the upstream `VariantStrIter`
 mutability fix in `libs/glib`. All unsound advisory exceptions have been eliminated from the cargo audit policy.
+Under `DEP-002`, the unmaintained warning budget was reduced from 24 to 20: `target_build_utils` was removed from `libs/scrap`, purging `rand_os 0.1.3` (`RUSTSEC-2025-0124`) and its legacy `phf`/`rand 0.6` transitive graph from `Cargo.lock`. In addition, eliminated exceptions for `instant 0.1.13` (`RUSTSEC-2024-0384`), `derivative 2.2.0` (`RUSTSEC-2024-0388`), and `adler 1.0.2` (`RUSTSEC-2025-0056`) were pruned from `cargo-audit-policy.json`.
 A formal release after an exception expiry is a no-go until the dependency is removed or a newly reviewed exception
 with current evidence is approved.
 

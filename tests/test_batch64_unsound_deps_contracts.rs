@@ -120,6 +120,22 @@ fn test_dep001_cargo_audit_policy_has_zero_unsound_exceptions() {
                 package, "ansi_term",
                 "Policy must not contain exceptions for package 'ansi_term'"
             );
+            assert_ne!(
+                package, "rand_os",
+                "Policy must not contain exceptions for package 'rand_os'"
+            );
+            assert_ne!(
+                package, "instant",
+                "Policy must not contain exceptions for package 'instant'"
+            );
+            assert_ne!(
+                package, "derivative",
+                "Policy must not contain exceptions for package 'derivative'"
+            );
+            assert_ne!(
+                package, "adler",
+                "Policy must not contain exceptions for package 'adler'"
+            );
 
             let advisory_id = warn["advisory_id"].as_str().unwrap_or("");
             assert_ne!(
@@ -134,17 +150,21 @@ fn test_dep001_cargo_audit_policy_has_zero_unsound_exceptions() {
                 advisory_id, "RUSTSEC-2024-0375",
                 "Policy must not contain exception for atty unmaintained RUSTSEC-2024-0375"
             );
+            assert_ne!(
+                advisory_id, "RUSTSEC-2025-0124",
+                "Policy must not contain exception for rand_os unmaintained RUSTSEC-2025-0124"
+            );
         }
     }
 
-    // Total warning budget must be exactly 24 (9 in gtk3, 15 in inherited)
+    // Total warning budget must be exactly 20 (9 in gtk3, 11 in inherited under DEP-002)
     let total_warnings: usize = exception_groups
         .iter()
         .map(|g| g["warnings"].as_array().map(|w| w.len()).unwrap_or(0))
         .sum();
     assert_eq!(
-        total_warnings, 24,
-        "Total policy warnings budget must be exactly 24 after purging atty, ansi_term, and unsound glib (got {})",
+        total_warnings, 20,
+        "Total policy warnings budget must be exactly 20 after purging rand_os, instant, derivative, and adler (got {})",
         total_warnings
     );
 }

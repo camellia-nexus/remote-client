@@ -117,12 +117,17 @@ void main() {
           final pkg = w['package'] as String?;
           expect(pkg, isNot(equals('atty')), reason: 'atty must not be in policy');
           expect(pkg, isNot(equals('ansi_term')), reason: 'ansi_term must not be in policy');
+          expect(pkg, isNot(equals('rand_os')), reason: 'rand_os must not be in policy');
+          expect(pkg, isNot(equals('instant')), reason: 'instant must not be in policy');
+          expect(pkg, isNot(equals('derivative')), reason: 'derivative must not be in policy');
+          expect(pkg, isNot(equals('adler')), reason: 'adler must not be in policy');
 
           final advisoryId = w['advisory_id'] as String?;
           expect(advisoryId, isNot(equals('RUSTSEC-2024-0429')));
           expect(advisoryId, isNot(equals('RUSTSEC-2021-0145')));
           expect(advisoryId, isNot(equals('RUSTSEC-2024-0375')));
           expect(advisoryId, isNot(equals('RUSTSEC-2021-0139')));
+          expect(advisoryId, isNot(equals('RUSTSEC-2025-0124')));
         }
       }
 
@@ -131,7 +136,7 @@ void main() {
         final g = group as Map<String, dynamic>;
         totalWarnings += (g['warnings'] as List<dynamic>).length;
       }
-      expect(totalWarnings, equals(24), reason: 'Total approved warnings must be exactly 24 after atty/ansi_term removal');
+      expect(totalWarnings, equals(20), reason: 'Total approved warnings must be exactly 20 after DEP-002 pruning');
     });
 
     test('docs/dependency-risk-register.md documents DEP-001 remediation', () {

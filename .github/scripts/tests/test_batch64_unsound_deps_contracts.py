@@ -165,7 +165,14 @@ class Batch64UnsoundDepsContractsTest(unittest.TestCase):
         )
 
         # Check for atty or glib specifically
-        forbidden_packages = {"atty", "ansi_term"}
+        forbidden_packages = {
+            "atty",
+            "ansi_term",
+            "instant",
+            "derivative",
+            "adler",
+            "rand_os",
+        }
         found_forbidden = [
             (gid, w) for gid, w in all_warnings if w.get("package") in forbidden_packages
         ]
@@ -180,6 +187,10 @@ class Batch64UnsoundDepsContractsTest(unittest.TestCase):
             "RUSTSEC-2021-0145",  # atty unsound
             "RUSTSEC-2024-0375",  # atty unmaintained
             "RUSTSEC-2021-0139",  # ansi_term unmaintained
+            "RUSTSEC-2024-0384",  # instant unmaintained
+            "RUSTSEC-2024-0388",  # derivative unmaintained
+            "RUSTSEC-2025-0056",  # adler unmaintained
+            "RUSTSEC-2025-0124",  # rand_os unmaintained
         }
         found_advisories = [
             (gid, w) for gid, w in all_warnings if w.get("advisory_id") in forbidden_advisories
@@ -190,11 +201,11 @@ class Batch64UnsoundDepsContractsTest(unittest.TestCase):
             f"Forbidden advisories found in audit policy: {found_advisories}",
         )
 
-        # Check total remaining unmaintained warning budget: exactly 24 (down from 28)
+        # Check total remaining unmaintained warning budget: exactly 20 (down from 24 in DEP-001)
         self.assertEqual(
             len(all_warnings),
-            24,
-            f"Expected exactly 24 approved warnings after eliminating 2 unsound and 2 unmaintained warnings, got {len(all_warnings)}",
+            20,
+            f"Expected exactly 20 approved warnings after eliminating 4 unmaintained warnings under DEP-002, got {len(all_warnings)}",
         )
         group_counts = {
             group["id"]: len(group.get("warnings", []))
@@ -207,7 +218,7 @@ class Batch64UnsoundDepsContractsTest(unittest.TestCase):
         )
         self.assertEqual(
             group_counts.get("inherited-transitive-modernization"),
-            15,
+            11,
             "inherited-transitive-modernization must have exactly 15 warnings",
         )
 
