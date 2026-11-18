@@ -15,7 +15,7 @@ use camellia_remote_protocol::{
     config::{Config, LocalConfig, PeerConfig},
     get_version_number, log,
     message_proto::*,
-    rendezvous_proto::ConnType,
+    rendezvous_proto::{ConnType, ErrorEnvelope},
     tokio::{
         self,
         sync::mpsc,
@@ -2013,7 +2013,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         self.ui_handler.msgbox(msgtype, title, text, link, retry);
     }
 
-    fn handle_login_error(&self, err: &str) -> bool {
+    fn handle_login_error(&self, err: &ErrorEnvelope) -> bool {
         handle_login_error(self.lc.clone(), err, self)
     }
 

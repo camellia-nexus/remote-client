@@ -1,12 +1,8 @@
 use super::{linux::*, ResultType};
-use crate::client::{
-    LOGIN_MSG_DESKTOP_NO_DESKTOP, LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER,
-    LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LOGIN_MSG_DESKTOP_XORG_NOT_FOUND,
-    LOGIN_MSG_DESKTOP_XSESSION_FAILED, LOGIN_MSG_PASSWORD_WRONG,
-};
 use camellia_remote_protocol::{
     allow_err, bail, log,
     rand::random,
+    rendezvous_proto::ErrorCode,
     tokio::time,
     users::{get_user_by_name, os::unix::UserExt, User},
 };
@@ -72,26 +68,26 @@ pub fn stop_xdesktop() {
     *DESKTOP_MANAGER.lock().unwrap() = None;
 }
 
-fn detect_headless() -> Option<&'static str> {
+fn detect_headless() -> Option<ErrorCode> {
     match run_cmds(&format!("which {}", DesktopManager::get_xorg())) {
         Ok(output) => {
             if output.trim().is_empty() {
-                return Some(LOGIN_MSG_DESKTOP_XORG_NOT_FOUND);
+                return Some(ErrorCode::DESKTOP_XORG_NOT_FOUND);
             }
         }
         _ => {
-            return Some(LOGIN_MSG_DESKTOP_XORG_NOT_FOUND);
+            return Some(ErrorCode::DESKTOP_XORG_NOT_FOUND);
         }
     }
 
     match run_cmds("ls /usr/share/xsessions/") {
         Ok(output) => {
             if output.trim().is_empty() {
-                return Some(LOGIN_MSG_DESKTOP_NO_DESKTOP);
+                return Some(ErrorCode::DESKTOP_NOT_FOUND);
             }
         }
         _ => {
-            return Some(LOGIN_MSG_DESKTOP_NO_DESKTOP);
+            return Some(ErrorCode::DESKTOP_NOT_FOUND);
         }
     }
 
@@ -134,52 +130,49 @@ impl std::fmt::Display for XSessionStartError {
     }
 }
 
-fn map_xsession_start_error_to_login_msg(kind: XSessionStartErrorKind) -> &'static str {
+fn map_xsession_start_error_to_code(kind: XSessionStartErrorKind) -> ErrorCode {
     match kind {
-        XSessionStartErrorKind::Auth => LOGIN_MSG_PASSWORD_WRONG,
-        XSessionStartErrorKind::Env => LOGIN_MSG_DESKTOP_XSESSION_FAILED,
+        XSessionStartErrorKind::Auth => ErrorCode::PASSWORD_INVALID,
+        XSessionStartErrorKind::Env => ErrorCode::DESKTOP_XSESSION_FAILED,
     }
 }
 
-pub fn try_start_desktop(_username: &str, _passsword: &str) -> String {
+/// Start or inspect the headless desktop and return only a stable error code.
+/// `None` means the desktop is ready (or no headless session is required).
+pub fn try_start_desktop(_username: &str, _passsword: &str) -> Option<ErrorCode> {
     debug_assert!(crate::is_server());
     if _username.is_empty() {
         let username = get_username();
         if username.is_empty() {
-            if let Some(msg) = detect_headless() {
-                msg
-            } else {
-                LOGIN_MSG_DESKTOP_SESSION_NOT_READY
-            }
+            detect_headless().or(Some(ErrorCode::DESKTOP_SESSION_NOT_READY))
         } else {
-            ""
+            None
         }
-        .to_owned()
     } else {
         let username = get_username();
         if username == _username {
             // No need to verify password here.
-            return "".to_owned();
+            return None;
         }
         if !username.is_empty() {
             // Another user is logged in. No need to start a new xsession.
-            return "".to_owned();
+            return None;
         }
 
-        if let Some(msg) = detect_headless() {
-            return msg.to_owned();
+        if let Some(code) = detect_headless() {
+            return Some(code);
         }
 
         match try_start_x_session(_username, _passsword) {
             Ok((username, x11_ready)) => {
                 if x11_ready {
                     if _username != username {
-                        LOGIN_MSG_DESKTOP_SESSION_ANOTHER_USER.to_owned()
+                        Some(ErrorCode::DESKTOP_SESSION_ANOTHER_USER)
                     } else {
-                        "".to_owned()
+                        None
                     }
                 } else {
-                    LOGIN_MSG_DESKTOP_SESSION_NOT_READY.to_owned()
+                    Some(ErrorCode::DESKTOP_SESSION_NOT_READY)
                 }
             }
             Err(e) => {
@@ -191,7 +184,7 @@ pub fn try_start_desktop(_username: &str, _passsword: &str) -> String {
                         log::error!("Failed to start xsession {}", e);
                     }
                 }
-                map_xsession_start_error_to_login_msg(e.kind).to_owned()
+                Some(map_xsession_start_error_to_code(e.kind))
             }
         }
     }
@@ -219,7 +212,7 @@ fn try_start_x_session(
         ))
     } else {
         Err(XSessionStartError::env(
-            crate::client::LOGIN_MSG_DESKTOP_NOT_INITED.to_owned(),
+            "desktop environment is not initialized".to_owned(),
         ))
     }
 }

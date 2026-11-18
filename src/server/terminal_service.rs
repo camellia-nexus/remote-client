@@ -1076,7 +1076,11 @@ impl TerminalServiceProxy {
             None => {
                 let mut response = TerminalResponse::new();
                 let mut error = TerminalError::new();
-                error.message = format!("Terminal service {} not found", self.service_id);
+                error.typed_error = camellia_remote_protocol::protobuf::MessageField::some(
+                    camellia_remote_protocol::error::for_code(
+                        camellia_remote_protocol::rendezvous_proto::ErrorCode::NOT_FOUND,
+                    ),
+                );
                 response.set_error(error);
                 return Ok(Some(response));
             }
@@ -2217,10 +2221,33 @@ impl TerminalServiceProxy {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_utf8_split_point, OutputBuffer, Utf8ChunkAccumulator, MAX_BUFFER_LINES,
-        MAX_LINE_CHUNK_SIZE, MAX_OUTPUT_BUFFER_SIZE, MAX_SESSIONS_PER_SERVICE,
+        find_utf8_split_point, OutputBuffer, TerminalServiceProxy, Utf8ChunkAccumulator,
+        MAX_BUFFER_LINES, MAX_LINE_CHUNK_SIZE, MAX_OUTPUT_BUFFER_SIZE, MAX_SESSIONS_PER_SERVICE,
         MAX_TERMINAL_DATA_PAYLOAD, MAX_TOTAL_TERMINAL_SESSIONS,
     };
+    use camellia_remote_protocol::{
+        error::{self, ErrorContext},
+        message_proto::TerminalAction,
+        rendezvous_proto::ErrorCode,
+    };
+
+    #[test]
+    fn missing_terminal_service_uses_typed_error_contract() {
+        let mut proxy = TerminalServiceProxy::new("missing-service".to_owned(), None, None);
+        let response = proxy
+            .handle_action(&TerminalAction::new())
+            .expect("handle missing service")
+            .expect("terminal response");
+        let terminal_error = response.error();
+
+        assert!(terminal_error.message.is_empty());
+        let typed = terminal_error
+            .typed_error
+            .as_ref()
+            .expect("typed terminal error");
+        assert!(error::is_valid_for(typed, ErrorContext::Terminal));
+        assert_eq!(typed.code.enum_value(), Ok(ErrorCode::NOT_FOUND));
+    }
 
     #[test]
     fn utf8_split_point_returns_full_len_for_complete_input() {

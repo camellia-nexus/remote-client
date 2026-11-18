@@ -2089,6 +2089,7 @@ mod tests {
 
     use crate::ipc::Data;
     use camellia_remote_protocol::{
+        error::{self, ErrorContext},
         message_proto::{file_response, FileDirectory, Message},
         tokio::{runtime::Runtime, sync::mpsc::unbounded_channel},
     };
@@ -2114,10 +2115,16 @@ mod tests {
             panic!("expected raw file response");
         };
         let message = Message::parse_from_bytes(&bytes).unwrap();
-        match message.file_response().union.clone() {
+        let error = match message.file_response().union.clone() {
             Some(file_response::Union::Error(error)) => error,
             _ => panic!("expected file error response"),
-        }
+        };
+        assert!(error.error.is_empty());
+        assert!(error
+            .typed_error
+            .as_ref()
+            .is_some_and(|typed| { error::is_valid_for(typed, ErrorContext::FileTransfer) }));
+        error
     }
 
     fn assert_file_error(data: Data) {
