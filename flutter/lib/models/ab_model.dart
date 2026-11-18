@@ -1925,18 +1925,6 @@ Map<String, dynamic> _jsonDecodeRespMap(http.Response response) {
   return decodeManagementObject(response, decode_http_response(response));
 }
 
-List<dynamic> _jsonDecodeRespList(http.Response response) {
-  return decodeManagementList(response, decode_http_response(response));
-}
-
-String _jsonDecodeActionResp(http.Response resp) {
-  try {
-    requireManagementEmptySuccess(resp);
-    return '';
-  } catch (error) {
-    return error.toString();
-  }
-}
 // https://github.com/seanmonstar/reqwest/issues/838
 void _setEmptyBody(Map<String, String> headers) {
   headers['Content-Length'] = '0';
