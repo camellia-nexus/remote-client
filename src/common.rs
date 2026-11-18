@@ -325,9 +325,13 @@ pub fn set_sound_input(device: String) {
     let prior_device = get_option("audio-input".to_owned());
     if prior_device != device {
         log::info!("switch to audio input device {}", device);
-        std::thread::spawn(move || {
+        if let Err(error) = crate::threading::spawn_named("audio-input-update", move || {
             set_option("audio-input".to_owned(), device);
-        });
+        }) {
+            log::error!(
+                "event=thread_spawn_failed name=audio-input-update error={error}; capability=disabled"
+            );
+        }
     } else {
         log::info!("audio input is already set to {}", device);
     }
@@ -625,7 +629,7 @@ pub fn test_nat_type() {
     }
     *NAT_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
 
-    std::thread::spawn(move || {
+    if let Err(error) = crate::threading::spawn_named("nat-type-probe", move || {
         struct NatGuard;
         impl Drop for NatGuard {
             fn drop(&mut self) {
@@ -679,7 +683,12 @@ pub fn test_nat_type() {
             }
             backoff = (backoff * 2).min(30);
         }
-    });
+    }) {
+        NAT_PROBE_RUNNING.store(false, Ordering::SeqCst);
+        log::error!(
+            "event=thread_spawn_failed name=nat-type-probe error={error}; capability=disabled"
+        );
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -929,7 +938,7 @@ pub fn test_rendezvous_server() {
     }
     *RENDEZVOUS_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
 
-    std::thread::spawn(|| {
+    if let Err(error) = crate::threading::spawn_named("rendezvous-health-check", || {
         struct ProbeGuard;
         impl Drop for ProbeGuard {
             fn drop(&mut self) {
@@ -938,7 +947,12 @@ pub fn test_rendezvous_server() {
         }
         let _guard = ProbeGuard;
         test_rendezvous_server_();
-    });
+    }) {
+        RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+        log::error!(
+            "event=thread_spawn_failed name=rendezvous-health-check error={error}; capability=disabled"
+        );
+    }
 }
 
 pub fn refresh_rendezvous_server() {
@@ -963,7 +977,7 @@ pub fn refresh_rendezvous_server() {
     *RENDEZVOUS_LAST_PROBE.lock().unwrap() = Some(std::time::Instant::now());
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    std::thread::spawn(|| {
+    if let Err(error) = crate::threading::spawn_named("rendezvous-refresh", || {
         struct ProbeGuard;
         impl Drop for ProbeGuard {
             fn drop(&mut self) {
@@ -972,10 +986,15 @@ pub fn refresh_rendezvous_server() {
         }
         let _guard = ProbeGuard;
         test_rendezvous_server_();
-    });
+    }) {
+        RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+        log::error!(
+            "event=thread_spawn_failed name=rendezvous-refresh error={error}; capability=disabled"
+        );
+    }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    std::thread::spawn(|| {
+    if let Err(error) = crate::threading::spawn_named("rendezvous-refresh", || {
         struct ProbeGuard;
         impl Drop for ProbeGuard {
             fn drop(&mut self) {
@@ -986,7 +1005,12 @@ pub fn refresh_rendezvous_server() {
         if crate::ipc::test_rendezvous_server().is_err() {
             test_rendezvous_server_();
         }
-    });
+    }) {
+        RENDEZVOUS_PROBE_RUNNING.store(false, Ordering::SeqCst);
+        log::error!(
+            "event=thread_spawn_failed name=rendezvous-refresh error={error}; capability=disabled"
+        );
+    }
 }
 
 pub fn run_me<T: AsRef<std::ffi::OsStr>>(args: Vec<T>) -> std::io::Result<std::process::Child> {
@@ -2632,7 +2656,9 @@ pub fn test_ipv6_sync() {
             job.await.ok();
         }
     }
-    std::thread::spawn(func);
+    if let Err(error) = crate::threading::spawn_named("ipv6-probe", func) {
+        log::error!("event=thread_spawn_failed name=ipv6-probe error={error}; capability=disabled");
+    }
 }
 
 pub async fn get_ipv6_socket() -> Option<(Arc<UdpSocket>, bytes::Bytes)> {

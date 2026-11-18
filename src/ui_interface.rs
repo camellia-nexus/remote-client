@@ -96,12 +96,14 @@ pub fn goto_install() {
 #[inline]
 pub fn install_me(_options: String, _path: String, _silent: bool, _debug: bool) {
     #[cfg(windows)]
-    std::thread::spawn(move || {
+    if let Err(error) = crate::threading::spawn_named("installer", move || {
         allow_err!(crate::platform::windows::install_me(
             &_options, _path, _silent, _debug
         ));
         std::process::exit(0);
-    });
+    }) {
+        log::error!("event=thread_spawn_failed name=installer error={error}");
+    }
 }
 
 #[inline]
@@ -449,9 +451,23 @@ pub fn get_sound_inputs() -> Vec<String> {
         let inputs = Arc::new(Mutex::new(Vec::new()));
         let cloned = inputs.clone();
         // Keep sound device enumeration off the UI thread.
-        std::thread::spawn(move || *cloned.lock().unwrap() = get_sound_inputs_())
-            .join()
-            .ok();
+        match crate::threading::spawn_named("sound-input-enumeration", move || {
+            *cloned.lock().unwrap() = get_sound_inputs_()
+        }) {
+            Ok(handle) => {
+                if let Err(error) = handle.join() {
+                    log::error!(
+                        "event=thread_join_failed name=sound-input-enumeration error={error:?}"
+                    );
+                }
+            }
+            Err(error) => {
+                log::error!(
+                    "event=thread_spawn_failed name=sound-input-enumeration error={error}; falling back to inline enumeration"
+                );
+                *inputs.lock().unwrap() = get_sound_inputs_();
+            }
+        }
         for name in inputs.lock().unwrap().drain(..) {
             a.push(name);
         }
@@ -852,9 +868,13 @@ pub fn discover() {
         log::debug!("LAN discovery already in progress, skipping duplicate thread spawn");
         return;
     }
-    std::thread::spawn(move || {
+    if let Err(error) = crate::threading::spawn_named("lan-discover", move || {
         allow_err!(crate::lan::discover());
-    });
+    }) {
+        log::error!(
+            "event=thread_spawn_failed name=lan-discover error={error}; capability=disabled"
+        );
+    }
 }
 
 #[cfg(feature = "flutter")]
@@ -934,12 +954,14 @@ pub fn change_id(id: String) {
     }
     reset_async_job_status();
     let old_id = get_id();
-    std::thread::spawn(move || {
+    if let Err(error) = crate::threading::spawn_named("change-id", move || {
         change_id_shared_with_generation(id, old_id, gen);
-    });
+    }) {
+        log::error!("event=thread_spawn_failed name=change-id error={error}");
+        reset_async_job_status();
+    }
 }
 
-#[inline]
 pub fn get_async_job_status() -> String {
     ASYNC_JOB_STATUS.lock().unwrap().clone()
 }
@@ -1336,7 +1358,13 @@ pub fn start_option_status_sync() {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn check_connect_status(reconnect: bool) -> mpsc::UnboundedSender<ipc::Data> {
     let (tx, rx) = mpsc::unbounded_channel::<ipc::Data>();
-    std::thread::spawn(move || check_connect_status_(reconnect, rx));
+    if let Err(error) = crate::threading::spawn_named("connect-status", move || {
+        check_connect_status_(reconnect, rx)
+    }) {
+        log::error!(
+            "event=thread_spawn_failed name=connect-status error={error}; capability=disabled"
+        );
+    }
     tx
 }
 

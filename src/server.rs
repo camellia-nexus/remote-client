@@ -535,8 +535,8 @@ impl Drop for Server {
     }
 }
 
-pub fn check_zombie() {
-    std::thread::spawn(|| loop {
+pub fn check_zombie() -> std::io::Result<()> {
+    crate::threading::spawn_named("child-process-reaper", || loop {
         let mut lock = CHILD_PROCESS.lock().unwrap();
         let mut i = 0;
         while i != lock.len() {
@@ -551,7 +551,8 @@ pub fn check_zombie() {
         // RES-045: Proactively reap all supervised subprocesses to eliminate Unix zombies
         crate::child_process::reap_exited_children();
         std::thread::sleep(Duration::from_millis(100));
-    });
+    })
+    .map(|_| ())
 }
 
 /// Start the host server that allows the remote peer to control the current machine.
@@ -593,16 +594,34 @@ pub async fn start_server(is_server: bool, no_server: bool) {
 
     if is_server {
         crate::common::set_server_running(true);
-        std::thread::spawn(move || {
+        if let Err(error) = crate::threading::spawn_named("ipc-server", move || {
             if let Err(err) = crate::ipc::start("") {
                 log::error!("Failed to start ipc: {}", err);
                 if crate::is_server() {
                     log::error!("ipc is occupied by another process, try kill it");
-                    std::thread::spawn(stop_main_window_process).join().ok();
+                    match crate::threading::spawn_named(
+                        "stop-main-window-process",
+                        stop_main_window_process,
+                    ) {
+                        Ok(handle) => {
+                            if let Err(join_error) = handle.join() {
+                                log::error!(
+                                    "event=thread_join_failed name=stop-main-window-process error={join_error:?}"
+                                );
+                            }
+                        }
+                        Err(error) => log::error!(
+                            "event=thread_spawn_failed name=stop-main-window-process error={error}"
+                        ),
+                    }
                 }
                 std::process::exit(-1);
             }
-        });
+        }) {
+            crate::common::set_server_running(false);
+            log::error!("event=thread_spawn_failed name=ipc-server error={error}");
+            return;
+        }
         input_service::fix_key_down_timeout_loop();
         #[cfg(target_os = "linux")]
         if input_service::wayland_use_uinput() {
@@ -643,10 +662,24 @@ pub async fn start_server(is_server: bool, no_server: bool) {
                 log::info!("server not started: {err:?}, no_server: {no_server}");
                 if no_server {
                     camellia_remote_protocol::sleep(1.0).await;
-                    std::thread::spawn(|| start_server(false, true));
+                    if let Err(error) =
+                        crate::threading::spawn_named("server-retry-no-server", || {
+                            start_server(false, true)
+                        })
+                    {
+                        log::error!(
+                            "event=thread_spawn_failed name=server-retry-no-server error={error}"
+                        );
+                    }
                 } else {
                     log::info!("try start server");
-                    std::thread::spawn(|| start_server(true, false));
+                    if let Err(error) = crate::threading::spawn_named("server-retry-start", || {
+                        start_server(true, false)
+                    }) {
+                        log::error!(
+                            "event=thread_spawn_failed name=server-retry-start error={error}"
+                        );
+                    }
                 }
             }
         }

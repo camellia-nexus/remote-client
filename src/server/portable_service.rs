@@ -597,21 +597,61 @@ pub mod server {
         let shmem1 = shmem.clone();
         let shmem2 = shmem.clone();
         let mut threads = vec![];
-        threads.push(std::thread::spawn(|| {
+        let cursor_thread = crate::threading::spawn_named("portable-cursor", move || {
             run_get_cursor_info(shmem1);
-        }));
-        threads.push(std::thread::spawn(|| {
+        });
+        match cursor_thread {
+            Ok(handle) => threads.push(handle),
+            Err(error) => {
+                log::error!(
+                    "event=thread_spawn_failed name=portable-cursor error={error}; aborting startup"
+                );
+                *EXIT.lock().unwrap() = true;
+                return;
+            }
+        }
+        let capture_thread = crate::threading::spawn_named("portable-capture", move || {
             run_capture(shmem2);
-        }));
-        threads.push(std::thread::spawn(move || {
+        });
+        match capture_thread {
+            Ok(handle) => threads.push(handle),
+            Err(error) => {
+                log::error!(
+                    "event=thread_spawn_failed name=portable-capture error={error}; aborting startup"
+                );
+                *EXIT.lock().unwrap() = true;
+                for handle in threads.drain(..) {
+                    let _ = handle.join();
+                }
+                return;
+            }
+        }
+        let ipc_thread = crate::threading::spawn_named("portable-ipc", move || {
             run_ipc_client(ipc_token);
-        }));
+        });
+        match ipc_thread {
+            Ok(handle) => threads.push(handle),
+            Err(error) => {
+                log::error!(
+                    "event=thread_spawn_failed name=portable-ipc error={error}; aborting startup"
+                );
+                *EXIT.lock().unwrap() = true;
+                for handle in threads.drain(..) {
+                    let _ = handle.join();
+                }
+                return;
+            }
+        }
         // Detached shutdown watchdog:
         // - gives graceful shutdown/cleanup a short window
         // - force-exits the process if workers are still stuck
-        std::thread::spawn(|| {
+        if let Err(error) = crate::threading::spawn_named("portable-exit-watchdog", || {
             run_exit_check();
-        });
+        }) {
+            log::error!(
+                "event=thread_spawn_failed name=portable-exit-watchdog error={error}; watchdog=disabled"
+            );
+        }
         let record_pos_handle = crate::input_service::try_start_record_cursor_pos();
         // Arm forced-exit watchdog only for worker join phase.
         // Once join phase completes, cleanup should not be interrupted by forced exit.
@@ -995,8 +1035,8 @@ pub mod client {
     }
 
     #[inline]
-    fn schedule_remove_runtime_shmem_flink_retry(name: String) {
-        std::thread::spawn(move || {
+    fn schedule_remove_runtime_shmem_flink_retry(name: String) -> std::io::Result<()> {
+        crate::threading::spawn_named("portable-shmem-cleanup", move || {
             const MAX_RETRY: usize = 20;
             const RETRY_INTERVAL: Duration = Duration::from_millis(200);
             for _ in 0..MAX_RETRY {
@@ -1009,7 +1049,8 @@ pub mod client {
                 "Failed to remove portable service shared-memory flink artifact '{}' after retry",
                 name
             );
-        });
+        })
+        .map(|_| ())
     }
 
     #[inline]
@@ -1027,7 +1068,11 @@ pub mod client {
         drop(shmem_lock);
         if let Some(name) = runtime_name.as_deref() {
             if !remove_shared_memory_flink_once(name, true, "Client cleanup") {
-                schedule_remove_runtime_shmem_flink_retry(name.to_owned());
+                if let Err(error) = schedule_remove_runtime_shmem_flink_retry(name.to_owned()) {
+                    log::error!(
+                        "event=thread_spawn_failed name=portable-shmem-cleanup error={error}; cleanup=deferred"
+                    );
+                }
             }
         }
     }
@@ -1096,8 +1141,8 @@ pub mod client {
     }
 
     #[inline]
-    fn schedule_starting_timeout_reset(launch_token: u64) {
-        std::thread::spawn(move || {
+    fn schedule_starting_timeout_reset(launch_token: u64) -> std::io::Result<()> {
+        crate::threading::spawn_named("portable-startup-watchdog", move || {
             std::thread::sleep(PORTABLE_SERVICE_STARTUP_TIMEOUT);
             let should_reset = {
                 // Guard against stale watchdogs from previous launches:
@@ -1115,7 +1160,8 @@ pub mod client {
                 );
                 *STARTING.lock().unwrap() = false;
             }
-        });
+        })
+        .map(|_| ())
     }
 
     // Launch flow summary:
@@ -1142,6 +1188,9 @@ pub mod client {
             STARTING_TOKEN.fetch_add(1, Ordering::SeqCst) + 1
         };
         let start_result = (|| -> ResultType<()> {
+            schedule_starting_timeout_reset(launch_token).map_err(|error| {
+                anyhow!("failed to start portable service startup watchdog: {error}")
+            })?;
             clear_runtime_shmem_state();
             let mut shmem_lock = SHMEM.lock().unwrap();
             let displays = scrap::Display::all()?;
@@ -1266,7 +1315,6 @@ pub mod client {
                     }
                 }
             }
-            schedule_starting_timeout_reset(launch_token);
             Ok(())
         })();
         if start_result.is_err() {
@@ -1444,7 +1492,13 @@ pub mod client {
     pub(super) fn start_ipc_server() -> Arc<PortableInputQueue> {
         let queue = Arc::new(PortableInputQueue::new(PORTABLE_IPC_QUEUE_CAPACITY));
         let queue_clone = queue.clone();
-        std::thread::spawn(move || start_ipc_server_async(queue_clone));
+        if let Err(error) = crate::threading::spawn_named("portable-ipc-server", move || {
+            start_ipc_server_async(queue_clone)
+        }) {
+            log::error!(
+                "event=thread_spawn_failed name=portable-ipc-server error={error}; capability=disabled"
+            );
+        }
         queue
     }
 

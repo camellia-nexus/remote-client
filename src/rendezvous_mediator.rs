@@ -111,7 +111,11 @@ impl RendezvousMediator {
             }
         }
         crate::hbbs_http::sync::start();
-        check_zombie();
+        if let Err(error) = check_zombie() {
+            log::error!(
+                "event=thread_spawn_failed name=child-process-reaper error={error}; child cleanup disabled"
+            );
+        }
         let server = new_server();
         if config::option2bool("stop-service", &Config::get_option("stop-service")) {
             crate::test_rendezvous_server();
@@ -125,9 +129,13 @@ impl RendezvousMediator {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let start_lan_listening = crate::platform::is_installed();
         if start_lan_listening {
-            std::thread::spawn(move || {
+            if let Err(error) = crate::threading::spawn_named("lan-discovery", move || {
                 allow_err!(super::lan::start_listening());
-            });
+            }) {
+                log::error!(
+                    "event=thread_spawn_failed name=lan-discovery error={error}; capability=disabled"
+                );
+            }
         }
         // It is ok to run xdesktop manager when the headless function is not allowed.
         #[cfg(target_os = "linux")]

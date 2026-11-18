@@ -806,13 +806,15 @@ impl<T: InvokeUiSession> Session<T> {
             return;
         }
         let last_audit_note = self.last_audit_note.clone();
-        std::thread::spawn(move || {
+        if let Err(error) = crate::threading::spawn_named("audit-note", move || {
             if let Err(error) = send_note(url, audit_session_id, note.clone()) {
                 log::warn!("Failed to persist the audit note: {error}");
                 return;
             }
             *last_audit_note.lock().unwrap() = note;
-        });
+        }) {
+            log::error!("event=thread_spawn_failed name=audit-note error={error}");
+        }
     }
 
     pub fn remove_port_forward(&self, port: i32) {
@@ -1575,9 +1577,22 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.write().unwrap().peer_info = None;
         self.reconnect_count.fetch_add(1, Ordering::SeqCst);
         let mut lock = self.thread.lock().unwrap();
-        *lock = Some(std::thread::spawn(move || {
+        match crate::threading::spawn_named("session-io", move || {
             io_loop(cloned, round);
-        }));
+        }) {
+            Ok(handle) => *lock = Some(handle),
+            Err(error) => {
+                log::error!("event=thread_spawn_failed name=session-io error={error}");
+                drop(lock);
+                self.connection_round_state
+                    .lock()
+                    .unwrap()
+                    .set_disconnected(round);
+                self.on_error(
+                    "Unable to start the remote session worker due to local resource limits.",
+                );
+            }
+        }
     }
 
     pub fn login(
@@ -1809,7 +1824,11 @@ impl<T: InvokeUiSession> Session<T> {
     #[inline]
     pub fn request_voice_call(&self) {
         #[cfg(target_os = "linux")]
-        std::thread::spawn(crate::ipc::start_pa);
+        if let Err(error) = crate::threading::spawn_named("audio-ipc", crate::ipc::start_pa) {
+            log::error!("event=thread_spawn_failed name=audio-ipc error={error}");
+            self.on_error("Unable to start audio due to local resource limits.");
+            return;
+        }
         self.send(Data::NewVoiceCall);
     }
 

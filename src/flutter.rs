@@ -1648,10 +1648,11 @@ pub fn session_start_(
                 session.use_texture_render.load(Ordering::Relaxed)
             );
             let session = (*session).clone();
-            std::thread::spawn(move || {
+            crate::threading::spawn_named("flutter-session-io", move || {
                 let round = session.connection_round_state.lock().unwrap().new_round();
                 io_loop(session, round);
-            });
+            })
+            .map_err(|error| anyhow!("failed to start flutter session worker: {error}"))?;
         }
         Ok(())
     } else {
@@ -1832,13 +1833,18 @@ pub mod connection_manager {
         use crate::ui_cm_interface::{start_ipc, ConnectionManager};
 
         #[cfg(target_os = "linux")]
-        std::thread::spawn(crate::ipc::start_pa);
+        if let Err(error) = crate::threading::spawn_named("audio-ipc", crate::ipc::start_pa) {
+            log::error!("event=thread_spawn_failed name=audio-ipc error={error}");
+        }
 
         let cm = ConnectionManager {
             ui_handler: FlutterHandler {},
         };
         if new_thread {
-            std::thread::spawn(move || start_ipc(cm));
+            if let Err(error) = crate::threading::spawn_named("flutter-ipc", move || start_ipc(cm))
+            {
+                log::error!("event=thread_spawn_failed name=flutter-ipc error={error}");
+            }
         } else {
             start_ipc(cm);
         }
@@ -1862,7 +1868,11 @@ pub mod connection_manager {
         let cm = crate::ui_cm_interface::ConnectionManager {
             ui_handler: FlutterHandler {},
         };
-        std::thread::spawn(move || start_listen(cm, rx, tx));
+        if let Err(error) =
+            crate::threading::spawn_named("flutter-channel", move || start_listen(cm, rx, tx))
+        {
+            log::error!("event=thread_spawn_failed name=flutter-channel error={error}");
+        }
     }
 }
 
@@ -2660,12 +2670,15 @@ pub mod async_tasks {
         let cancel_clone = cancel_token.clone();
         let runner_gen = RUNNER_INSTANCE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
 
-        let join_handle = std::thread::Builder::new()
-            .name("flutter_async_runner".to_string())
-            .spawn(move || {
-                run_online_query_loop(rx, cancel_clone, runner_gen);
-            })
-            .ok();
+        let join_handle = match crate::threading::spawn_named("flutter-async-runner", move || {
+            run_online_query_loop(rx, cancel_clone, runner_gen);
+        }) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                log::error!("event=thread_spawn_failed name=flutter-async-runner error={error}");
+                None
+            }
+        };
 
         *control_guard = Some(RunnerControl {
             tx,

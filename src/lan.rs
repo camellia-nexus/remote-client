@@ -443,10 +443,16 @@ fn spawn_wait_responses(
     let mut handles = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let tx_clone = tx.clone();
-        let handle = std::thread::spawn(move || {
+        match crate::threading::spawn_named("lan-discover-response", move || {
             allow_err!(wait_response(socket, deadline, tx_clone));
-        });
-        handles.push(handle);
+        }) {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                log::error!(
+                    "event=thread_spawn_failed name=lan-discover-response error={error}; capability=degraded"
+                );
+            }
+        }
     }
     drop(tx);
     (rx, handles)

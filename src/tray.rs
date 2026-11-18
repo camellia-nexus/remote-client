@@ -20,7 +20,11 @@ pub fn start_tray() {
     }
 
     #[cfg(target_os = "linux")]
-    crate::server::check_zombie();
+    if let Err(error) = crate::server::check_zombie() {
+        log::error!(
+            "event=thread_spawn_failed name=child-process-reaper error={error}; child cleanup disabled"
+        );
+    }
 
     allow_err!(make_tray());
 }
@@ -125,9 +129,13 @@ fn make_tray() -> camellia_remote_protocol::ResultType<()> {
     };
 
     #[cfg(windows)]
-    std::thread::spawn(move || {
+    if let Err(error) = crate::threading::spawn_named("tray-session-count", move || {
         start_query_session_count(ipc_sender.clone());
-    });
+    }) {
+        log::error!(
+            "event=thread_spawn_failed name=tray-session-count error={error}; capability=disabled"
+        );
+    }
     #[cfg(windows)]
     let mut last_click = std::time::Instant::now();
     #[cfg(target_os = "macos")]

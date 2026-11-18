@@ -279,7 +279,12 @@ pub fn core_main() -> Option<Vec<String>> {
             crate::platform::try_remove_temp_update_files();
             camellia_remote_protocol::config::PeerConfig::preload_peers();
         }
-        std::thread::spawn(move || crate::start_server(false, no_server));
+        if let Err(error) = crate::threading::spawn_named("host-server", move || {
+            crate::start_server(false, no_server)
+        }) {
+            log::error!("event=thread_spawn_failed name=host-server error={error}");
+            return None;
+        }
     } else {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         // Root CLI management commands must talk to the user `--server` main IPC.
@@ -497,7 +502,15 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             #[cfg(target_os = "macos")]
             {
-                let handler = std::thread::spawn(move || crate::start_server(true, false));
+                let handler = match crate::threading::spawn_named("macos-server", move || {
+                    crate::start_server(true, false)
+                }) {
+                    Ok(handler) => handler,
+                    Err(error) => {
+                        log::error!("event=thread_spawn_failed name=macos-server error={error}");
+                        return None;
+                    }
+                };
                 crate::tray::start_tray();
                 // prevent server exit when encountering errors from tray
                 camellia_remote_protocol::allow_err!(handler.join());
