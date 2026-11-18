@@ -2384,6 +2384,7 @@ mod audit_tests {
         let capability = Uuid::new_v4().to_string();
         let event_id = Uuid::new_v4().to_string();
         let valid = serde_json::json!({
+            "response_schema_version": crate::hbbs_http::MANAGEMENT_RESPONSE_SCHEMA_VERSION,
             "version": AUDIT_PROTOCOL_VERSION,
             "audit_session_id": capability,
             "acknowledged_event_id": event_id,
