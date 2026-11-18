@@ -3163,7 +3163,7 @@ mod tests {
         match result {
             Data::RemoveDirResult((id, Some(err))) => {
                 assert_eq!(id, 701);
-                assert!(err.contains("nested"), "unexpected removal error: {err}");
+                assert_eq!(err, file_operation_error_key());
             }
             _ => panic!("expected a failed local recursive removal result"),
         }
