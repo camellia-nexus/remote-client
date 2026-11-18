@@ -103,8 +103,12 @@ jobs:
 
       - name: Install bounded software-codec prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake gcc g++ libclang-dev libvpx-dev libyuv-dev libaom-dev pkg-config
+          export DEBIAN_FRONTEND=noninteractive
+          export NEEDRESTART_MODE=a
+          sudo -E apt-get update
+          sudo -E apt-get install -y \
+            clang cmake gcc g++ libclang-dev libaom-dev libva-dev libvpx-dev libx11-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-xfixes0-dev libyuv-dev pkg-config
 
       - name: Validate shared performance contract
         run: python3 -m unittest -v tools.test_performance_contract
@@ -130,10 +134,13 @@ jobs:
             local repository="$1"
             local output="$2"
             local manifest="$RUNNER_TEMP/${repository}-scrap-artifacts.jsonl"
-            CARGO_TARGET_DIR="$RUNNER_TEMP/client-performance-target" \
+            if ! CARGO_TARGET_DIR="$RUNNER_TEMP/client-performance-target" \
               cargo test --locked --release --no-run --lib --tests --message-format=json \
               --manifest-path "$repository/Cargo.toml" \
-              --package scrap --features linux-pkg-config > "$manifest"
+              --package scrap --features linux-pkg-config > "$manifest"; then
+              python3 -c "import json, sys; [print(json.loads(l).get('message', {}).get('rendered', ''), file=sys.stderr) for l in open(sys.argv[1], encoding='utf-8') if 'message' in json.loads(l)]" "$manifest"
+              exit 1
+            fi
             python3 - "$manifest" "$output" <<'PY'
           import json
           import os
