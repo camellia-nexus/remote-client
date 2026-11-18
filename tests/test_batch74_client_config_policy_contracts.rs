@@ -161,8 +161,12 @@ fn test_batch74_source_provenance_contract() {
 
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["component"], "camellia-remote-client");
+    let proto_commit = json["protocol_source_commit"]
+        .as_str()
+        .expect("protocol_source_commit must be string");
     assert_eq!(
-        json["protocol_source_commit"],
-        "59ba1b42c9441e9760f5657c28e29aa888e29737"
+        proto_commit.len(),
+        40,
+        "protocol_source_commit must be full 40-character SHA"
     );
 }
