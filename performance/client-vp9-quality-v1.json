@@ -1,0 +1,50 @@
+{
+  "max_relative_mad": 0.2,
+  "metrics": {
+    "decode_ms_mean": {
+      "absolute_max": 1000,
+      "absolute_min": 0.001,
+      "direction": "lower",
+      "max_regression_percent": 25,
+      "unit": "ms"
+    },
+    "dropped_frames": {
+      "absolute_max": 8,
+      "absolute_min": 0,
+      "direction": "lower",
+      "max_regression_percent": 0,
+      "unit": "count"
+    },
+    "encode_ms_p95": {
+      "absolute_max": 1000,
+      "absolute_min": 0.001,
+      "direction": "lower",
+      "max_regression_percent": 25,
+      "unit": "ms"
+    },
+    "encoded_bytes_per_second": {
+      "absolute_max": 10000000,
+      "absolute_min": 1000,
+      "direction": "lower",
+      "max_regression_percent": 15,
+      "unit": "bytes_per_second"
+    },
+    "psnr_db": {
+      "absolute_max": 99,
+      "absolute_min": 20,
+      "direction": "higher",
+      "max_regression_percent": 2,
+      "unit": "db"
+    },
+    "ssim": {
+      "absolute_max": 1,
+      "absolute_min": 0.5,
+      "direction": "higher",
+      "max_regression_percent": 2,
+      "unit": "ratio"
+    }
+  },
+  "min_samples": 5,
+  "scenario": "client-vp9-quality-v1",
+  "schema": "camellia-performance-policy-v1"
+}

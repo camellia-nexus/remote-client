@@ -1,0 +1,7 @@
+# Client performance evidence
+
+The committed policies and workflows use the exact `remote-protocol` submodule revision as the evidence contract. The `client-vp9-quality-v1` scenario executes the production libvpx VP9 encode/decode quality harness; it does not substitute a mock codec. Control and candidate are built from exact Git revisions on one runner, with the candidate harness overlaid only to make an older control revision emit the current schema.
+
+PRs run five paired smoke samples. Main and scheduled runs use 15 pairs with five seconds of work per observation. A release dispatch requires an explicit control SHA and uses five pairs, no extra warmup, and 60 seconds per observation, so the configured control-plus-candidate workload is ten minutes. Evidence records both revisions, the hashed runner fingerprint, Rust and real `pkg-config` libvpx versions, policy, input digests, and bounded metric samples; it contains no frames, host identity, or credentials.
+
+The PR, scheduled, and release policies are intentionally separate. Noise produces an artifact-backed inconclusive failure, and a deterministic regression produces a failed comparison; neither is a pass. Reverting the collector/workflow does not waive performance validation: until an equivalent versioned gate is restored, any codec or resource-sensitive release must be run manually with the same exact revisions, runner, policy, scenario, and ten-minute maximum.

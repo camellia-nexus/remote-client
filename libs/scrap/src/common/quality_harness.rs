@@ -49,9 +49,18 @@
 //! actually produced - which is what a viewer would be looking at. Starving the
 //! encoder is therefore penalised in the quality columns rather than hidden.
 
-use std::time::Instant;
+use std::{
+    env,
+    fs::OpenOptions,
+    io::{BufWriter, Write},
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
-use camellia_remote_protocol::sysinfo::System;
+use camellia_remote_protocol::{
+    serde_json::{json, to_writer},
+    sysinfo::System,
+};
 
 use crate::codec::{
     base_bitrate, codec_thread_num, fps_bitrate_scale, EncoderApi, EncoderCfg, Quality,
@@ -1068,6 +1077,24 @@ const FULL_MEASURED: usize = 32;
 const SMOKE_WARMUP: usize = 4;
 const SMOKE_MEASURED: usize = 8;
 
+fn requested_work_duration() -> Result<Option<Duration>, String> {
+    let Some(raw) = env::var_os("CAMELLIA_PERFORMANCE_WORK_SECONDS") else {
+        return Ok(None);
+    };
+    let raw = raw
+        .to_str()
+        .ok_or_else(|| "CAMELLIA_PERFORMANCE_WORK_SECONDS must be UTF-8".to_owned())?;
+    let seconds = raw
+        .parse::<u64>()
+        .map_err(|_| "CAMELLIA_PERFORMANCE_WORK_SECONDS must be an integer".to_owned())?;
+    if raw != seconds.to_string() || !(1..=60).contains(&seconds) {
+        return Err(
+            "CAMELLIA_PERFORMANCE_WORK_SECONDS must be a canonical integer in 1..60".to_owned(),
+        );
+    }
+    Ok(Some(Duration::from_secs(seconds)))
+}
+
 fn case(
     width: u32,
     height: u32,
@@ -1194,6 +1221,119 @@ fn smoke_quality_harness_720p30_balanced() {
         current.ssim,
         legacy.ssim
     );
+}
+
+/// Machine-readable PR performance observation. The surrounding shared
+/// collector launches this ignored test repeatedly and owns warmup/sample
+/// policy; this function measures only the real production VP9 path.
+#[test]
+#[ignore = "run through the shared paired performance collector"]
+fn performance_contract_observation() {
+    let output = PathBuf::from(
+        env::var_os("CAMELLIA_PERFORMANCE_OBSERVATION_FILE")
+            .expect("CAMELLIA_PERFORMANCE_OBSERVATION_FILE is required"),
+    );
+    assert!(
+        output.is_absolute(),
+        "performance observation path must be absolute"
+    );
+
+    let requested_duration = requested_work_duration().expect("valid bounded work duration");
+    let started = Instant::now();
+    let mut measurements = Vec::new();
+    loop {
+        measurements.push(run_case(case(
+            1280,
+            720,
+            30,
+            Quality::Balanced,
+            Motion::Light,
+            Model::Current,
+            SMOKE_WARMUP,
+            SMOKE_MEASURED,
+        )));
+        if requested_duration.is_none_or(|duration| started.elapsed() >= duration) {
+            break;
+        }
+    }
+    let average = |value: fn(&Measurement) -> f64| {
+        measurements.iter().map(value).sum::<f64>() / measurements.len() as f64
+    };
+    let decode_ms_mean = average(|measurement| measurement.decode_ms_mean);
+    let dropped_frames = average(|measurement| measurement.dropped as f64);
+    let encode_ms_p95 = average(|measurement| measurement.encode_ms_p95);
+    let encoded_bytes_per_second = average(|measurement| measurement.achieved_kbps * 125.0);
+    let psnr_db = average(|measurement| measurement.psnr_db);
+    let ssim = average(|measurement| measurement.ssim);
+    for (name, value) in [
+        ("decode_ms_mean", decode_ms_mean),
+        ("encode_ms_p95", encode_ms_p95),
+        ("encoded_bytes_per_second", encoded_bytes_per_second),
+        ("psnr_db", psnr_db),
+        ("ssim", ssim),
+    ] {
+        assert!(
+            value.is_finite() && value > 0.0,
+            "{} is not a finite positive observation",
+            name
+        );
+    }
+    assert!(
+        dropped_frames.is_finite() && dropped_frames >= 0.0,
+        "dropped_frames is not a finite non-negative observation"
+    );
+
+    let document = json!({
+        "metrics": {
+            "decode_ms_mean": {
+                "direction": "lower",
+                "unit": "ms",
+                "value": decode_ms_mean,
+            },
+            "dropped_frames": {
+                "direction": "lower",
+                "unit": "count",
+                "value": dropped_frames,
+            },
+            "encode_ms_p95": {
+                "direction": "lower",
+                "unit": "ms",
+                "value": encode_ms_p95,
+            },
+            "encoded_bytes_per_second": {
+                "direction": "lower",
+                "unit": "bytes_per_second",
+                "value": encoded_bytes_per_second,
+            },
+            "psnr_db": {
+                "direction": "higher",
+                "unit": "db",
+                "value": psnr_db,
+            },
+            "ssim": {
+                "direction": "higher",
+                "unit": "ratio",
+                "value": ssim,
+            },
+        },
+        "scenario": "client-vp9-quality-v1",
+        "schema": "camellia-performance-observation-v1",
+    });
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .expect("create exclusive performance observation");
+    let mut writer = BufWriter::new(file);
+    to_writer(&mut writer, &document).expect("write performance observation");
+    writer
+        .write_all(b"\n")
+        .expect("finish performance observation");
+    writer.flush().expect("flush performance observation");
+    writer
+        .get_ref()
+        .sync_all()
+        .expect("sync performance observation");
 }
 
 /// Full comparison matrix. Slow on purpose - run it explicitly:
