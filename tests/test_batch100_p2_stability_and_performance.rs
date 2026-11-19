@@ -164,6 +164,10 @@ fn test_platform020_uinput_symmetric_rounding_and_drift_elimination() {
     assert_eq!(symmetric_round_half(4), 2);
     assert_eq!(symmetric_round_half(-4), -2);
 
+    // Extreme integer boundaries
+    assert!(symmetric_round_half(i32::MAX) > 0);
+    assert!(symmetric_round_half(i32::MIN) < 0);
+
     // 2. Strict symmetry across a range of displacements
     for x in 1..=100 {
         let pos = symmetric_round_half(x);
@@ -270,6 +274,24 @@ fn test_build023_macos_plists_and_windows_icon_branding() {
         rc_content.contains(r#"VALUE "LegalCopyright", "Copyright (C) 2026 Camellia Computing. All rights reserved.""#),
         "icon.rc must declare LegalCopyright for Camellia Computing"
     );
+
+    // 4. Verify macos.rs write_plists does not contain com.carriez brand residue
+    let macos_rs_path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/platform/macos.rs");
+    let macos_content = fs::read_to_string(macos_rs_path).expect("Read macos.rs");
+    assert!(
+        !macos_content.contains("com.carriez.{}_service.plist"),
+        "macos.rs write_plists must not contain com.carriez.{{}}_service.plist"
+    );
+    assert!(
+        !macos_content.contains("com.carriez.{}_server.plist"),
+        "macos.rs write_plists must not contain com.carriez.{{}}_server.plist"
+    );
+    assert!(
+        macos_content
+            .contains(r#""/Library/LaunchDaemons/{}_service.plist", crate::get_full_name()"#)
+            || macos_content.contains(r#""/Library/LaunchDaemons/{}_service.plist","#),
+        "macos.rs write_plists must use crate::get_full_name() for daemon plist path"
+    );
 }
 
 // =========================================================================
@@ -293,6 +315,12 @@ fn test_video001_dxgi_access_lost_recovery_state_machine() {
 
     let code_err = Error::new(ErrorKind::Other, "Error code: 0x887A0026");
     assert!(is_dxgi_access_lost(&code_err));
+
+    let code_err_lower = Error::new(ErrorKind::Other, "Error code: 0x887a0026");
+    assert!(is_dxgi_access_lost(&code_err_lower));
+
+    let text_err_lower = Error::new(ErrorKind::Other, "access lost during capture");
+    assert!(is_dxgi_access_lost(&text_err_lower));
 
     let unrelated_err = Error::new(ErrorKind::InvalidInput, "Bad argument");
     assert!(!is_dxgi_access_lost(&unrelated_err));

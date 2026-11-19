@@ -99,12 +99,12 @@ pub fn is_dxgi_access_lost(err: &std::io::Error) -> bool {
     match err.kind() {
         ConnectionReset | ConnectionAborted | Interrupted | PermissionDenied => true,
         _ => {
-            let msg = err.to_string();
-            msg.contains("0x887A0026")
-                || msg.contains("0x887A0022")
-                || msg.contains("0x887A0020")
-                || msg.contains("Access lost")
-                || msg.contains("ACCESS_LOST")
+            let msg = err.to_string().to_lowercase();
+            msg.contains("0x887a0026")
+                || msg.contains("0x887a0022")
+                || msg.contains("0x887a0020")
+                || msg.contains("access lost")
+                || msg.contains("access_lost")
         }
     }
 }

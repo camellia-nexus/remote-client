@@ -349,12 +349,12 @@ fn write_plist_atomically(path: &str, body: &str) -> ResultType<()> {
 
 pub fn write_plists() -> ResultType<()> {
     let daemon_plist_path = format!(
-        "/Library/LaunchDaemons/com.carriez.{}_service.plist",
-        crate::get_app_name()
+        "/Library/LaunchDaemons/{}_service.plist",
+        crate::get_full_name()
     );
     let agent_plist_path = format!(
-        "/Library/LaunchAgents/com.carriez.{}_server.plist",
-        crate::get_app_name()
+        "/Library/LaunchAgents/{}_server.plist",
+        crate::get_full_name()
     );
     let Some(daemon_plist) = PRIVILEGES_SCRIPTS_DIR.get_file("daemon.plist") else {
         bail!("daemon.plist not found in embedded resources");
