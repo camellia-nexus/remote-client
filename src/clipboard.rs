@@ -17,7 +17,8 @@ pub const FILE_CLIPBOARD_NAME: &'static str = "file-clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
 
 // This format is used to store the flag in the clipboard.
-const RUSTDESK_CLIPBOARD_OWNER_FORMAT: &'static str = "dyn.com.rustdesk.owner";
+pub const CAMELLIA_CLIPBOARD_OWNER_FORMAT: &'static str = "dyn.com.camellia.remote.owner";
+pub const RUSTDESK_CLIPBOARD_OWNER_FORMAT: &'static str = CAMELLIA_CLIPBOARD_OWNER_FORMAT;
 
 // Add special format for Excel XML Spreadsheet
 const CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET: &'static str = "XML Spreadsheet";
@@ -61,7 +62,8 @@ const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
     #[cfg(feature = "unix-file-copy-paste")]
     ClipboardFormat::FileUrl,
     ClipboardFormat::Special(CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET),
-    ClipboardFormat::Special(RUSTDESK_CLIPBOARD_OWNER_FORMAT),
+    ClipboardFormat::Special(CAMELLIA_CLIPBOARD_OWNER_FORMAT),
+    ClipboardFormat::Special("dyn.com.rustdesk.owner"),
 ];
 
 #[cfg(not(target_os = "android"))]
@@ -333,11 +335,17 @@ fn do_update_clipboard_(mut to_update_data: Vec<ClipboardData>, side: ClipboardS
 }
 
 #[cfg(not(target_os = "android"))]
-fn append_owner_marker(mut data: Vec<ClipboardData>, side: ClipboardSide) -> Vec<ClipboardData> {
-    data.push(ClipboardData::Special((
-        RUSTDESK_CLIPBOARD_OWNER_FORMAT.to_owned(),
-        side.get_owner_data(),
-    )));
+pub fn append_owner_marker(
+    mut data: Vec<ClipboardData>,
+    side: ClipboardSide,
+) -> Vec<ClipboardData> {
+    data.insert(
+        0,
+        ClipboardData::Special((
+            CAMELLIA_CLIPBOARD_OWNER_FORMAT.to_owned(),
+            side.get_owner_data(),
+        )),
+    );
     data
 }
 
@@ -479,7 +487,9 @@ impl ClipboardContext {
         if !force {
             for c in data.iter() {
                 if let ClipboardData::Special((s, d)) = c {
-                    if s == RUSTDESK_CLIPBOARD_OWNER_FORMAT && side.is_owner(d) {
+                    if (s == CAMELLIA_CLIPBOARD_OWNER_FORMAT || s == "dyn.com.rustdesk.owner")
+                        && side.is_owner(d)
+                    {
                         return Ok(vec![]);
                     }
                 }
@@ -488,7 +498,9 @@ impl ClipboardContext {
         Ok(data
             .into_iter()
             .filter(|c| match c {
-                ClipboardData::Special((s, _)) => s != RUSTDESK_CLIPBOARD_OWNER_FORMAT,
+                ClipboardData::Special((s, _)) => {
+                    s != CAMELLIA_CLIPBOARD_OWNER_FORMAT && s != "dyn.com.rustdesk.owner"
+                }
                 // Skip synchronizing empty text to the remote clipboard
                 ClipboardData::Text(text) => !text.is_empty(),
                 _ => true,
@@ -505,7 +517,8 @@ impl ClipboardContext {
         let data = self.get_formats_filter(
             &[
                 ClipboardFormat::FileUrl,
-                ClipboardFormat::Special(RUSTDESK_CLIPBOARD_OWNER_FORMAT),
+                ClipboardFormat::Special(CAMELLIA_CLIPBOARD_OWNER_FORMAT),
+                ClipboardFormat::Special("dyn.com.rustdesk.owner"),
             ],
             side,
             force,
@@ -597,11 +610,11 @@ impl ClipboardContext {
                 .to_string();
                 self.inner
                     .set_formats(&[
-                        ClipboardData::Text(clear_holder_text),
                         ClipboardData::Special((
-                            RUSTDESK_CLIPBOARD_OWNER_FORMAT.to_owned(),
+                            CAMELLIA_CLIPBOARD_OWNER_FORMAT.to_owned(),
                             side.get_owner_data(),
                         )),
+                        ClipboardData::Text(clear_holder_text),
                     ])
                     .ok();
             }
@@ -674,14 +687,14 @@ pub enum ClipboardSide {
 impl ClipboardSide {
     // 01: the clipboard is owned by the host
     // 10: the clipboard is owned by the client
-    fn get_owner_data(&self) -> Vec<u8> {
+    pub fn get_owner_data(&self) -> Vec<u8> {
         match self {
             ClipboardSide::Host => vec![0b01],
             ClipboardSide::Client => vec![0b10],
         }
     }
 
-    fn is_owner(&self, data: &[u8]) -> bool {
+    pub fn is_owner(&self, data: &[u8]) -> bool {
         if data.len() == 0 {
             return false;
         }

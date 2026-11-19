@@ -318,6 +318,7 @@ fn correct_app_name(s: &str) -> String {
     let mut s = s.to_owned();
     if let Some(bundleid) = get_bundle_id() {
         s = s.replace("com.carriez.rustdesk", &bundleid);
+        s = s.replace("com.camellia.remote", &bundleid);
     }
     s = s.replace("rustdesk", "camellia-remote");
     s = s.replace("RustDesk", "Camellia Remote");

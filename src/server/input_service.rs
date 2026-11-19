@@ -1361,6 +1361,9 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
                     en.mouse_scroll_x(x);
                 }
             }
+            if x != 0 || y != 0 {
+                super::video_service::notify_scrolled();
+            }
         }
         _ => {}
     }
@@ -1424,6 +1427,7 @@ fn handle_scale(scale: i32) {
     } else {
         if en.key_down(Key::Control).is_ok() {
             en.mouse_scroll_y(scale);
+            super::video_service::notify_scrolled();
         }
     }
 }

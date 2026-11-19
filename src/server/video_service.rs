@@ -58,6 +58,81 @@ pub const OPTION_REFRESH: &'static str = "refresh";
 const FRAME_ACK_POLL_INTERVAL: Duration = Duration::from_millis(300);
 const FRAME_ACK_DEADLINE: Duration = Duration::from_secs(3);
 
+pub const MAX_DXGI_RETRY_COUNT: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DxgiRecoveryStateMachine {
+    pub retry_count: usize,
+    pub max_retries: usize,
+}
+
+impl DxgiRecoveryStateMachine {
+    pub fn new(max_retries: usize) -> Self {
+        Self {
+            retry_count: 0,
+            max_retries,
+        }
+    }
+
+    pub fn on_success(&mut self) {
+        if self.retry_count > 0 {
+            log::info!(
+                "DXGI capturer recovered; reset retry counter from {}",
+                self.retry_count
+            );
+            self.retry_count = 0;
+        }
+    }
+
+    pub fn should_retry(&mut self) -> bool {
+        if self.retry_count < self.max_retries {
+            self.retry_count += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub fn is_dxgi_access_lost(err: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    match err.kind() {
+        ConnectionReset | ConnectionAborted | Interrupted | PermissionDenied => true,
+        _ => {
+            let msg = err.to_string();
+            msg.contains("0x887A0026")
+                || msg.contains("0x887A0022")
+                || msg.contains("0x887A0020")
+                || msg.contains("Access lost")
+                || msg.contains("ACCESS_LOST")
+        }
+    }
+}
+
+pub const SCROLL_STILL_SETTLE_MS: u64 = 150;
+static LAST_SCROLL_EPOCH_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+lazy_static::lazy_static! {
+    static ref SCROLL_TRACKER_BASE: Instant = Instant::now();
+}
+
+/// Notify video service that a mouse scroll action has occurred (FEAT-01 / VIDEO-002).
+pub fn notify_scrolled() {
+    let ms = (SCROLL_TRACKER_BASE.elapsed().as_millis() as u64).saturating_add(1);
+    LAST_SCROLL_EPOCH_MS.store(ms, std::sync::atomic::Ordering::Release);
+}
+
+/// Milliseconds elapsed since the last scroll event, or None if no scroll has occurred.
+pub fn millis_since_last_scroll() -> Option<u64> {
+    let last = LAST_SCROLL_EPOCH_MS.load(std::sync::atomic::Ordering::Acquire);
+    if last == 0 {
+        None
+    } else {
+        let now = (SCROLL_TRACKER_BASE.elapsed().as_millis() as u64).saturating_add(1);
+        Some(now.saturating_sub(last))
+    }
+}
+
 #[derive(Default)]
 struct FrameAckState {
     pending: HashSet<i32>,
@@ -690,9 +765,14 @@ fn run(vs: VideoService) -> ResultType<()> {
     #[cfg(windows)]
     let mut try_gdi = 1;
     #[cfg(windows)]
+    let mut dxgi_recovery = DxgiRecoveryStateMachine::new(MAX_DXGI_RETRY_COUNT);
+    #[cfg(windows)]
     log::info!("gdi: {}", c.is_gdi());
     #[cfg(windows)]
     start_uac_elevation_check();
+
+    let mut scroll_handled_timestamp: u64 = 0;
+    let mut scroll_enhanced_frame_dispatched: bool = true;
 
     #[cfg(target_os = "linux")]
     let mut would_block_count = 0u32;
@@ -863,11 +943,17 @@ fn run(vs: VideoService) -> ResultType<()> {
                 }
                 #[cfg(windows)]
                 {
+                    dxgi_recovery.on_success();
                     #[cfg(feature = "vram")]
                     if try_gdi == 1 && !c.is_gdi() {
                         VRamEncoder::set_fallback_gdi(sp.name(), false);
                     }
                     try_gdi = 0;
+                }
+                let last_scroll = LAST_SCROLL_EPOCH_MS.load(std::sync::atomic::Ordering::Acquire);
+                if last_scroll > scroll_handled_timestamp {
+                    scroll_handled_timestamp = last_scroll;
+                    scroll_enhanced_frame_dispatched = false;
                 }
                 Ok(())
             }
@@ -901,6 +987,49 @@ fn run(vs: VideoService) -> ResultType<()> {
                         }
                     }
                 }
+                let last_scroll = LAST_SCROLL_EPOCH_MS.load(std::sync::atomic::Ordering::Acquire);
+                if last_scroll > scroll_handled_timestamp {
+                    scroll_handled_timestamp = last_scroll;
+                    scroll_enhanced_frame_dispatched = false;
+                }
+                let now_ms = (SCROLL_TRACKER_BASE.elapsed().as_millis() as u64).saturating_add(1);
+                let quiet_ms = now_ms.saturating_sub(scroll_handled_timestamp);
+
+                if !scroll_enhanced_frame_dispatched
+                    && scroll_handled_timestamp > 0
+                    && quiet_ms >= SCROLL_STILL_SETTLE_MS
+                {
+                    if yuv.len() > 0 {
+                        let can_change_quality = encoder.support_changing_quality();
+                        if can_change_quality {
+                            let enhanced_ratio = (quality * 1.5).max(scrap::codec::BR_BEST);
+                            allow_err!(encoder.set_quality(enhanced_ratio));
+                        }
+                        if let Some(msg) = handle_one_frame(
+                            display_idx,
+                            &sp,
+                            EncodeInput::YUV(&yuv),
+                            ms,
+                            &mut encoder,
+                            recorder.clone(),
+                            &mut encode_fail_counter,
+                            &mut first_frame,
+                            capture_width,
+                            capture_height,
+                        )? {
+                            frame_controller.send(&sp, msg);
+                            send_counter += 1;
+                            log::info!(
+                                "Dispatched post-scroll high-quality still re-encoded frame (quiet {}ms)",
+                                quiet_ms
+                            );
+                        }
+                        if can_change_quality {
+                            allow_err!(encoder.set_quality(quality));
+                        }
+                    }
+                    scroll_enhanced_frame_dispatched = true;
+                }
                 if !encoder.latency_free() && yuv.len() > 0 {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
@@ -932,8 +1061,39 @@ fn run(vs: VideoService) -> ResultType<()> {
 
                 #[cfg(windows)]
                 if !c.is_gdi() {
+                    if is_dxgi_access_lost(&err) && dxgi_recovery.should_retry() {
+                        log::info!(
+                            "DXGI access lost / temporary error (recovery attempt {}/{}): {:?}",
+                            dxgi_recovery.retry_count,
+                            dxgi_recovery.max_retries,
+                            err
+                        );
+                        std::thread::sleep(Duration::from_millis(50));
+                        match get_capturer(vs.source, display_idx, last_portable_service_running) {
+                            Ok(new_c) => {
+                                if !new_c.is_gdi() {
+                                    c = new_c;
+                                    log::info!("DXGI capturer successfully re-initialized during access lost recovery");
+                                } else {
+                                    log::warn!(
+                                        "Recreated capturer is GDI, keeping DXGI retry state"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::debug!(
+                                    "Recreating capturer during DXGI recovery returned: {:?}",
+                                    e
+                                );
+                            }
+                        }
+                        continue;
+                    }
                     c.set_gdi();
-                    log::info!("dxgi error, fall back to gdi: {:?}", err);
+                    log::warn!(
+                        "DXGI error unrecoverable or retries exceeded, falling back to GDI: {:?}",
+                        err
+                    );
                     continue;
                 }
                 return Err(err.into());

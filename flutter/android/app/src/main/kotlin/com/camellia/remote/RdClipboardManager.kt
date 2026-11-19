@@ -19,6 +19,10 @@ import hbb.MessageOuterClass.MultiClipboards
 import ffi.FFI
 
 class RdClipboardManager(private val clipboardManager: ClipboardManager) {
+    companion object {
+        const val MAX_BINDER_CLIPBOARD_BYTES: Int = 1024 * 1024 // 1MB Android Binder transaction hard limit
+    }
+
     private val logTag = "RdClipboardManager"
     private val mainHandler = Handler(Looper.getMainLooper())
     private val supportedMimeTypes = arrayOf(
@@ -199,6 +203,36 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
             Log.d(logTag, "No text or HTML content in clipboard update, ignore")
             return
         }
+
+        // Measure text and HTML byte lengths to protect against Android Binder 1MB transaction buffer limit
+        val textBytesLen = text?.toByteArray(Charsets.UTF_8)?.size ?: 0
+        val htmlBytesLen = html?.toByteArray(Charsets.UTF_8)?.size ?: 0
+        val totalBytes = textBytesLen + htmlBytesLen
+
+        if (totalBytes > MAX_BINDER_CLIPBOARD_BYTES) {
+            Log.w(logTag, "Clipboard content ($totalBytes bytes) exceeds 1MB Binder transaction limit, applying protection")
+            if (text != null && textBytesLen <= MAX_BINDER_CLIPBOARD_BYTES) {
+                // If text fits within 1MB but combined with HTML exceeds 1MB, drop HTML to safely preserve plain text
+                Log.w(logTag, "Dropping HTML content to keep total clipboard size within 1MB Binder limit")
+                html = null
+                mimeTypes.remove(ClipDescription.MIMETYPE_TEXT_HTML)
+            } else if (text != null && textBytesLen > MAX_BINDER_CLIPBOARD_BYTES) {
+                // If text itself exceeds 1MB, drop HTML and smoothly truncate text to safe 1MB limit
+                Log.w(logTag, "Truncating text clipboard content to 1MB Binder limit")
+                html = null
+                mimeTypes.remove(ClipDescription.MIMETYPE_TEXT_HTML)
+                text = truncateUtf8(text, MAX_BINDER_CLIPBOARD_BYTES)
+            } else {
+                // Only HTML is present and exceeds 1MB; cannot be safely truncated without corrupting HTML
+                Log.w(logTag, "Oversized HTML-only clipboard payload ($htmlBytesLen bytes) intercepted to prevent TransactionTooLargeException")
+                return
+            }
+        }
+
+        if (text == null && html == null) {
+            Log.d(logTag, "No text or HTML content remaining after Binder limit check, ignore")
+            return
+        }
         if (mimeTypes.isEmpty()) {
             return
         }
@@ -215,10 +249,34 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
             try {
                 lastUpdatedClipData = clipData
                 clipboardManager.setPrimaryClip(clipData)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(logTag, "Failed to setPrimaryClip: $e")
             }
         }
+    }
+
+    private fun truncateUtf8(str: String, maxBytes: Int): String {
+        val bytes = str.toByteArray(Charsets.UTF_8)
+        if (bytes.size <= maxBytes) return str
+        var end = maxBytes
+        // Back up over UTF-8 continuation bytes (10xxxxxx -> 0x80..0xBF)
+        while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) {
+            end--
+        }
+        // If end landed on a multi-byte lead byte whose full character was truncated, back up 1 more
+        if (end > 0 && (bytes[end - 1].toInt() and 0x80) != 0) {
+            val lead = bytes[end - 1].toInt() and 0xFF
+            val seqLen = when {
+                (lead and 0xE0) == 0xC0 -> 2
+                (lead and 0xF0) == 0xE0 -> 3
+                (lead and 0xF8) == 0xF0 -> 4
+                else -> 1
+            }
+            if ((end - 1) + seqLen > maxBytes) {
+                end -= 1
+            }
+        }
+        return String(bytes, 0, end, Charsets.UTF_8)
     }
 
     fun cleanup() {

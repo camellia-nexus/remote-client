@@ -6,7 +6,7 @@
         <string>com.camellia.remote_service</string>
 
 	<key>AssociatedBundleIdentifiers</key>
-	<string>com.carriez.rustdesk</string>
+	<string>com.camellia.remote</string>
 
         <key>KeepAlive</key>
         <true/>
@@ -14,17 +14,15 @@
         <integer>1</integer>
         <key>ProgramArguments</key>
         <array>
-        <string>/bin/sh</string>
-        <string>-c</string>
-        <string>/Applications/Camellia.app/Contents/MacOS/service</string>
+            <string>/Applications/Camellia.app/Contents/MacOS/service</string>
         </array>
         <key>RunAtLoad</key>
         <true/>
         <key>WorkingDirectory</key>
         <string>/Applications/Camellia.app/Contents/MacOS/</string>
         <key>StandardErrorPath</key>
-        <string>/var/log/rustdesk_service.err</string>
+        <string>/var/log/camellia_remote_service.err</string>
         <key>StandardOutPath</key>
-        <string>/var/log/rustdesk_service.out</string>
+        <string>/var/log/camellia_remote_service.out</string>
     </dict>
 </plist>

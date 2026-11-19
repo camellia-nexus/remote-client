@@ -16,6 +16,19 @@ static IPC_POSTFIX_KEYBOARD: &str = "_uinput_keyboard";
 static IPC_POSTFIX_MOUSE: &str = "_uinput_mouse";
 static IPC_POSTFIX_CONTROL: &str = "_uinput_control";
 
+/// Symmetric rounding for uinput 2-pixel-per-unit relative mouse movements (PLATFORM-020).
+/// Guarantees that positive and negative displacements round symmetrically away from zero:
+/// e.g. +1 => +1, -1 => -1, +2 => +1, -2 => -1, avoiding directional drift.
+#[inline]
+pub fn symmetric_round_half(val: i32) -> scrap::libc::c_int {
+    let v = val as f32 / 2.0;
+    (if v >= 0.0 {
+        (v + 0.5).floor()
+    } else {
+        (v - 0.5).ceil()
+    }) as scrap::libc::c_int
+}
+
 pub mod client {
     use super::*;
 
@@ -1312,8 +1325,8 @@ mod mouce {
             // behavior is the same on other projects that make use of
             // uinput. e.g. `ydotool`. When you try to move your mouse,
             // it will move 2x further pixels
-            self.emit(EV_REL, REL_X as c_int, (x as f32 / 2.).ceil() as c_int)?;
-            self.emit(EV_REL, REL_Y as c_int, (y as f32 / 2.).ceil() as c_int)?;
+            self.emit(EV_REL, REL_X as c_int, super::symmetric_round_half(x))?;
+            self.emit(EV_REL, REL_Y as c_int, super::symmetric_round_half(y))?;
             self.syncronize()
         }
 
