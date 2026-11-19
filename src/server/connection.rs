@@ -3507,6 +3507,10 @@ impl Connection {
 
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
         if password::temporary_enabled() {
+            lazy_static::lazy_static! {
+                static ref TEMPORARY_PASSWORD_VALIDATION_LOCK: Mutex<()> = Mutex::new(());
+            }
+            let _auth_lock = TEMPORARY_PASSWORD_VALIDATION_LOCK.lock().unwrap();
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
                 self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::TemporaryPassword);

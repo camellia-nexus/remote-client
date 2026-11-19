@@ -4,9 +4,12 @@
 
 #![deny(warnings)]
 
+use camellia_remote::ipc::ConnectionTmpl;
+use camellia_remote_protocol::bytes::Bytes;
 use camellia_remote_protocol::password_security::{temporary_password, update_temporary_password};
 use camellia_remote_protocol::tokio;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
 static BATCH99_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -45,50 +48,109 @@ fn test_auth025_temporary_password_immediate_rotation() {
     assert_eq!(temporary_password(), rotated_pwd);
 }
 
-#[tokio::test]
-async fn test_perf013_mock_stream_none_and_err_break_loop() {
+#[test]
+fn test_auth025_concurrent_temporary_password_single_use() {
     let _lock = acquire_lock();
 
-    // Simulate listener incoming.next() returning None
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-    drop(tx); // Close channel immediately so rx.recv() returns None
+    update_temporary_password();
+    let current_pwd = temporary_password();
+    assert!(!current_pwd.is_empty());
 
-    let mut loop_count = 0;
-    #[allow(clippy::while_let_loop)]
-    loop {
-        if let Some(_) = rx.recv().await {
-            loop_count += 1;
-        } else {
-            break;
+    let shared_pwd = Arc::new(current_pwd);
+    let success_count = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(Barrier::new(10));
+
+    let mut handles = vec![];
+    for _ in 0..10 {
+        let pwd_to_claim = shared_pwd.clone();
+        let success = success_count.clone();
+        let bar = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            bar.wait();
+            // Critical section mirroring Connection::validate_password with lock
+            lazy_static::lazy_static! {
+                static ref VALIDATION_LOCK: Mutex<()> = Mutex::new(());
+            }
+            let _g = VALIDATION_LOCK.lock().unwrap();
+            let active = temporary_password();
+            if active == *pwd_to_claim {
+                update_temporary_password();
+                success.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    assert_eq!(
+        success_count.load(Ordering::SeqCst),
+        1,
+        "Exactly one concurrent thread must succeed in consuming the temporary password"
+    );
+    assert_ne!(temporary_password(), *shared_pwd);
+}
+
+#[tokio::test]
+async fn test_perf013_ipc_connection_stream_error_breaks_loop() {
+    let _lock = acquire_lock();
+
+    // 1. Establish duplex stream and wrap in real ConnectionTmpl
+    let (client_io, server_io) = tokio::io::duplex(1024);
+    let mut client_conn = ConnectionTmpl::new(client_io);
+    let mut server_conn = ConnectionTmpl::new(server_io);
+
+    // 2. Normal send/recv works
+    server_conn
+        .send_raw(Bytes::from_static(b"audio-pcm-sample-data"))
+        .await
+        .expect("send_raw should succeed");
+    let received = client_conn
+        .next_raw()
+        .await
+        .expect("next_raw should succeed");
+    assert_eq!(&received[..], b"audio-pcm-sample-data");
+
+    // 3. Drop server end to simulate peer/PulseAudio IPC disconnect
+    drop(server_conn);
+
+    // 4. Simulate audio_service.rs loop: next_raw() returns Err and breaks loop immediately
+    let mut iterations = 0;
+    while iterations < 5 {
+        iterations += 1;
+        match client_conn.next_raw().await {
+            Ok(_) => {}
+            Err(err) => {
+                assert!(
+                    err.to_string().contains("reset by the peer"),
+                    "Expected peer reset, got: {}",
+                    err
+                );
+                break;
+            }
         }
     }
     assert_eq!(
-        loop_count, 0,
-        "Loop must terminate immediately when stream yields None"
+        iterations, 1,
+        "Loop must terminate on the very first Err from next_raw() without spinning"
     );
+}
 
-    // Simulate stream.next_raw() returning Err
-    let mut iterations = 0;
-    let mut err_stream_terminated = false;
-    while !err_stream_terminated {
-        iterations += 1;
-        // Mock error on read
-        let res: Result<Vec<u8>, std::io::Error> = Err(std::io::Error::new(
-            std::io::ErrorKind::ConnectionReset,
-            "stream closed",
-        ));
-        match res {
-            Ok(_) => {}
-            Err(_) => {
-                err_stream_terminated = true;
-            }
-        }
-        if iterations > 1 {
-            panic!("Infinite loop detected on stream error");
-        }
+#[tokio::test]
+async fn test_perf013_listener_stream_none_breaks_loop() {
+    let _lock = acquire_lock();
+
+    // Simulate incoming listener stream yielding None
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+    drop(tx);
+
+    let mut loop_count = 0;
+    while let Some(_) = rx.recv().await {
+        loop_count += 1;
     }
-    assert!(
-        err_stream_terminated,
-        "Stream error must break out of loop cleanly"
+    assert_eq!(
+        loop_count, 0,
+        "while let Some loop must terminate immediately when stream yields None"
     );
 }
