@@ -121,21 +121,27 @@ mod pa_impl {
             })?;
 
             #[cfg(target_os = "linux")]
-            if let Ok(data) = stream.next_raw().await {
-                if data.len() == 0 {
-                    send_f32(&zero_audio_frame, &mut encoder, &sp);
-                    continue;
-                }
+            match stream.next_raw().await {
+                Ok(data) => {
+                    if data.len() == 0 {
+                        send_f32(&zero_audio_frame, &mut encoder, &sp);
+                        continue;
+                    }
 
-                if data.len() != AUDIO_DATA_SIZE_U8 {
-                    continue;
-                }
+                    if data.len() != AUDIO_DATA_SIZE_U8 {
+                        continue;
+                    }
 
-                let aligned = align_to_32(data.into());
-                let data = unsafe {
-                    std::slice::from_raw_parts::<f32>(aligned.as_ptr() as _, aligned.len() / 4)
-                };
-                send_f32(data, &mut encoder, &sp);
+                    let aligned = align_to_32(data.into());
+                    let data = unsafe {
+                        std::slice::from_raw_parts::<f32>(aligned.as_ptr() as _, aligned.len() / 4)
+                    };
+                    send_f32(data, &mut encoder, &sp);
+                }
+                Err(err) => {
+                    log::error!("PulseAudio stream failed or closed: {}", err);
+                    break;
+                }
             }
 
             #[cfg(target_os = "android")]

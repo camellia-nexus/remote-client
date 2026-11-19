@@ -3516,6 +3516,7 @@ impl Connection {
                     Some(false),
                 );
                 self.check_update_temporary_password(true);
+                password::update_temporary_password();
                 return true;
             }
         }

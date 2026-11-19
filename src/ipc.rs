@@ -1561,15 +1561,25 @@ pub async fn start_pa() {
                                 None, // Use default buffering attributes
                             ) {
                                 Ok(s) => loop {
-                                    if let Ok(_) = s.read(&mut buf) {
-                                        let out =
-                                            if buf.iter().filter(|x| **x != 0).next().is_none() {
-                                                vec![]
-                                            } else {
-                                                buf.clone()
-                                            };
-                                        if let Err(err) = stream.send_raw(out.into()).await {
-                                            log::error!("Failed to send audio data:{}", err);
+                                    match s.read(&mut buf) {
+                                        Ok(_) => {
+                                            let out =
+                                                if buf.iter().filter(|x| **x != 0).next().is_none()
+                                                {
+                                                    vec![]
+                                                } else {
+                                                    buf.clone()
+                                                };
+                                            if let Err(err) = stream.send_raw(out.into()).await {
+                                                log::error!("Failed to send audio data:{}", err);
+                                                break;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            log::error!(
+                                                "Failed to read audio data from pulseaudio: {}",
+                                                err
+                                            );
                                             break;
                                         }
                                     }
@@ -1583,6 +1593,8 @@ pub async fn start_pa() {
                             log::error!("Couldn't get pa client: {:?}", err);
                         }
                     }
+                } else {
+                    break;
                 }
             }
         }
