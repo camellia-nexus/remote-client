@@ -269,15 +269,12 @@ GH_TOKEN="$GH_TOKEN" gh release edit "$RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --draft=false
 
-for attempt in {1..15}; do
-  refresh_release
-  if [[ "$(jq -r '.draft' "$release_json")" == false &&
-    "$(jq -r '.immutable' "$release_json")" == true ]]; then
-    verify_remote_release "$work_directory/published"
-    echo "Published and independently re-read $RELEASE_TAG"
-    exit 0
-  fi
-  ((attempt == 15)) || sleep 2
-done
-echo "Published Release did not converge to immutable state" >&2
-exit 1
+refresh_release
+[[ "$(jq -r '.draft' "$release_json")" == false &&
+  "$(jq -r '.immutable' "$release_json")" == true ]] || {
+  echo "Published Release did not converge to immutable state" >&2
+  exit 1
+}
+verify_remote_release "$work_directory/published"
+echo "Published and independently re-read $RELEASE_TAG"
+exit 0

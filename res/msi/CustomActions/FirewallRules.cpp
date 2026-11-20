@@ -115,6 +115,8 @@ HRESULT    RemoveFirewallRule(
     __in LPWSTR exeName)
 {
     HRESULT hr = S_OK;
+    HRESULT hr1 = S_OK;
+    HRESULT hr2 = S_OK;
     INetFwRules* pNetFwRules = NULL;
 
     WCHAR pwszTemp[STRING_BUFFER_SIZE] = L"";
@@ -136,8 +138,8 @@ HRESULT    RemoveFirewallRule(
     }
 
     // Remove rules (both in and out)
-    HRESULT hr1 = pNetFwRules->Remove(RuleName);
-    HRESULT hr2 = pNetFwRules->Remove(RuleName);
+    hr1 = pNetFwRules->Remove(RuleName);
+    hr2 = pNetFwRules->Remove(RuleName);
     if (FAILED(hr1) && hr1 != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) {
         hr = hr1;
         WcaLog(LOGMSG_STANDARD, "Failed to remove firewall rule \"%ls\" : 0x%08lx\n", exeName, hr);

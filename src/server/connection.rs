@@ -726,7 +726,14 @@ impl Connection {
             voice_call_request_timestamp: None,
             voice_calling: false,
             voice_call_generation: 0,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             conn_generation: clipboard::next_connection_generation(),
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            conn_generation: {
+                static MOBILE_CONN_GEN: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(1);
+                MOBILE_CONN_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            },
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -939,6 +946,7 @@ impl Connection {
                                 conn.file = enabled;
                                 conn.send_permission(Permission::File, enabled).await;
                                 if !enabled {
+                                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                                     clipboard::ClipboardOpGuard::abort_for_connection(
                                         conn.inner.id(),
                                         conn.conn_generation,
@@ -6552,8 +6560,14 @@ impl Connection {
         {
             self.send_to_cm(Data::CloseVoiceCall("Owner disconnected".to_owned()));
         }
-        clipboard::ClipboardOpGuard::abort_for_connection(self.inner.id(), self.conn_generation);
-        clipboard::remove_channel_by_conn_id(self.inner.id());
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            clipboard::ClipboardOpGuard::abort_for_connection(
+                self.inner.id(),
+                self.conn_generation,
+            );
+            clipboard::remove_channel_by_conn_id(self.inner.id());
+        }
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock && self.lock_after_session_end && self.keyboard {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

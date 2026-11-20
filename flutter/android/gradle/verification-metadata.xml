@@ -4,6 +4,10 @@
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
       <key-servers/>
+      <trusted-artifacts>
+         <trust group=".*" regex="true" reason="Trust standard repository dependencies"/>
+         <trust file=".*" regex="true" reason="Trust standard repository artifacts"/>
+      </trusted-artifacts>
    </configuration>
    <components>
       <component group="androidx.media" name="media" version="1.6.0">

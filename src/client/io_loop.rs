@@ -2200,10 +2200,10 @@ impl<T: InvokeUiSession> Remote<T> {
                                 .map(|typed| typed.display_key.clone())
                                 .unwrap_or_else(|| "protocol_mismatch".to_owned());
                             match e.operation.enum_value() {
-                                Ok(FileErrorOperation::ReadDir) => {
+                                Ok(FileErrorOperation::FILE_ERROR_OP_READ_DIR) => {
                                     self.handler.file_listing_error(e.path, wire_error, false);
                                 }
-                                Ok(FileErrorOperation::ReadEmptyDirs) => {
+                                Ok(FileErrorOperation::FILE_ERROR_OP_READ_EMPTY_DIRS) => {
                                     self.handler.file_listing_error(e.path, wire_error, true);
                                 }
                                 _ => {

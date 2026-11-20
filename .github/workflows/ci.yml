@@ -123,18 +123,8 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf; echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
-          echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
-          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
-          echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
-          echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          sudo rm -rf /var/lib/apt/lists/*
-          export DEBIAN_FRONTEND=noninteractive
-          export NEEDRESTART_MODE=a
-          sudo -E apt-get update
-          sudo -E apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
             libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
@@ -495,18 +485,8 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo bash -c 'echo "nameserver 8.8.8.8" > /etc/resolv.conf; echo "nameserver 1.1.1.1" >> /etc/resolv.conf'
-          echo 'Acquire::Force-IPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
-          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
-          echo 'Acquire::http::Timeout "30";' | sudo tee /etc/apt/apt.conf.d/80-timeouts >/dev/null
-          echo 'Acquire::https::Timeout "30";' | sudo tee -a /etc/apt/apt.conf.d/80-timeouts >/dev/null
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive\.ubuntu\.com|g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-          sudo rm -rf /var/lib/apt/lists/*
-          export DEBIAN_FRONTEND=noninteractive
-          export NEEDRESTART_MODE=a
-          sudo -E apt-get update
-          sudo -E apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
             libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \

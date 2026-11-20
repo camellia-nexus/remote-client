@@ -84,8 +84,8 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
             libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
@@ -148,8 +148,8 @@ jobs:
 
       - name: Install Linux prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             clang cmake curl gcc g++ git libasound2-dev libclang-dev libdbus-1-dev libglib2.0-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libaom-dev libopus-dev \
             libpam0g-dev libpulse-dev libva-dev libx11-dev libxi-dev libxtst-dev libxcb-randr0-dev libxcb-shape0-dev \
@@ -531,9 +531,160 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build_android:
+    name: Build Android client packages
+    needs: [metadata, generate_bridge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Reclaim disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Download generated bridge
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bridge-generated-${{ github.sha }}
+          path: .
+
+      - name: Setup Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Resolve Android signing mode
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEY: ${{ secrets.ANDROID_SIGNING_KEY || '' }}
+          ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD || '' }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || '' }}
+          ANDROID_ALIAS: ${{ secrets.ANDROID_ALIAS || '' }}
+          ANDROID_SIGNING_CERTIFICATE_SHA256: ${{ vars.ANDROID_SIGNING_CERTIFICATE_SHA256 || '' }}
+        run: |
+          SIGNING_ENV_FILE="$GITHUB_ENV" SIGNING_TEMP_DIRECTORY="$RUNNER_TEMP" \
+            bash .github/scripts/resolve-android-signing.sh
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: aarch64-linux-android
+
+      - name: Install Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: false
+
+      - name: Configure vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
+        with:
+          doNotCache: true
+          vcpkgDirectory: ${{ runner.temp }}/vcpkg
+
+      - name: Install host build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev nasm ninja-build pkg-config
+
+      - name: Install pinned NDK
+        shell: bash
+        run: |
+          sdkmanager --install "ndk;28.2.13676358"
+          echo "ANDROID_NDK_ROOT=${ANDROID_HOME}/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Build Android client
+        shell: bash
+        env:
+          ANDROID_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEY_STORE_PASSWORD || '' }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || '' }}
+          CAMELLIA_FORMAL_RELEASE: "true"
+        run: |
+          bash .github/scripts/sync-version.sh \
+            "${{ needs.metadata.outputs.version }}" \
+            "${{ needs.metadata.outputs.build_number }}" \
+            "${{ needs.metadata.outputs.source_date_epoch }}"
+          bash .github/scripts/prepare-dependencies.sh "${{ env.DEPENDENCY_MODE }}"
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-android --x-install-root="$VCPKG_ROOT/installed"
+          android_api=26
+          ndk_toolchain="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          android_cc="$ndk_toolchain/bin/aarch64-linux-android${android_api}-clang"
+          android_cxx="$ndk_toolchain/bin/aarch64-linux-android${android_api}-clang++"
+          android_flags="--target=aarch64-linux-android${android_api} --sysroot=$ndk_toolchain/sysroot"
+          export CC_aarch64_linux_android="$android_cc"
+          export CXX_aarch64_linux_android="$android_cxx"
+          export AR_aarch64_linux_android="$ndk_toolchain/bin/llvm-ar"
+          export RANLIB_aarch64_linux_android="$ndk_toolchain/bin/llvm-ranlib"
+          export CFLAGS_aarch64_linux_android="$android_flags"
+          export CXXFLAGS_aarch64_linux_android="$android_flags"
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android${android_api} --sysroot=$ndk_toolchain/sysroot -I$ndk_toolchain/sysroot/usr/include -I$ndk_toolchain/sysroot/usr/include/aarch64-linux-android -I$VCPKG_ROOT/installed/arm64-android/include"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="$BINDGEN_EXTRA_CLANG_ARGS"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$android_cc"
+          export OPENSSL_DIR="$VCPKG_ROOT/installed/arm64-android"
+          export OBOE_DIR="$VCPKG_ROOT/installed/arm64-android"
+          export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-android/lib/pkgconfig"
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export CAMELLIA_REMOTE_DOCS_HOME_URL="${{ env.CAMELLIA_REMOTE_DOCS_HOME_URL }}"
+          export CAMELLIA_REMOTE_LINUX_DISPLAY_DOCS_URL="${{ env.CAMELLIA_REMOTE_LINUX_DISPLAY_DOCS_URL }}"
+          cargo build --locked --release --target aarch64-linux-android --lib --no-default-features --features flutter,hwcodec,use_dasp
+          mkdir -p flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/libcamellia_remote.so flutter/android/app/src/main/jniLibs/arm64-v8a/libcamellia_remote.so
+          cxx_candidates=("$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so)
+          if [[ -f "${cxx_candidates[0]}" ]]; then
+            cp "${cxx_candidates[0]}" flutter/android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+          fi
+          flutter_sdk_dir="$(dirname "$(dirname "$(which flutter)")")"
+          gradle_settings="$flutter_sdk_dir/packages/flutter_tools/gradle/settings.gradle.kts"
+          if [[ -f "$gradle_settings" ]] && ! grep -q "pluginManagement" "$gradle_settings"; then
+            printf 'pluginManagement {\n    repositories {\n        mavenCentral()\n        google()\n        gradlePluginPortal()\n    }\n}\n%s' "$(cat "$gradle_settings")" > "$gradle_settings"
+          fi
+          (cd flutter && flutter build apk --release --target-platform android-arm64)
+          (cd flutter && flutter build appbundle --release --target-platform android-arm64)
+          mkdir -p artifacts
+          mapfile -t apk_candidates < <(find flutter/build/app/outputs/flutter-apk -maxdepth 1 -type f -name '*release*.apk')
+          mapfile -t aab_candidates < <(find flutter/build/app/outputs/bundle/release -maxdepth 1 -type f -name '*.aab')
+          [[ "${#apk_candidates[@]}" == 1 && "${#aab_candidates[@]}" == 1 ]] || {
+            echo "Expected exactly one release APK and AAB" >&2
+            exit 1
+          }
+          apk="${apk_candidates[0]}"
+          aab="${aab_candidates[0]}"
+          apk_output="artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-android-arm64${ANDROID_ARTIFACT_SUFFIX}.apk"
+          aab_output="artifacts/camellia-remote-${{ needs.metadata.outputs.version }}-android-arm64${ANDROID_ARTIFACT_SUFFIX}.aab"
+          cp "$apk" "$apk_output"
+          cp "$aab" "$aab_output"
+          bash .github/scripts/check-android-package.sh --apk "$apk_output"
+          bash .github/scripts/check-android-package.sh --aab "$aab_output"
+
+      - name: Upload Android release packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: client-packages-android
+          path: |
+            artifacts/*.apk
+            artifacts/*.aab
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     name: Publish GitHub Release
-    needs: [metadata, build_linux, build_windows, build_macos, build_web]
+    needs: [metadata, build_linux, build_windows, build_macos, build_android, build_web]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -560,7 +711,9 @@ jobs:
             -name '*.exe' -o \
             -name '*.msi' -o \
             -name '*.dmg' -o \
-            -name '*.zip' \
+            -name '*.zip' -o \
+            -name '*.apk' -o \
+            -name '*.aab' \
           \) -exec cp {} release-assets/ \;
           echo "Collected release assets:"
           ls -la release-assets/
@@ -583,13 +736,14 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9ec8723d33963d3cb2430f80 # v2.2.12
-        with:
-          tag_name: ${{ steps.release-tag.outputs.tag }}
-          name: Release ${{ steps.release-tag.outputs.tag }}
-          draft: false
-          prerelease: false
-          files: release-assets/*
-          generate_release_notes: true
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --title "Release $TAG_NAME" \
+            --generate-notes \
+            release-assets/* || \
+          gh release upload "$TAG_NAME" \
+            release-assets/* --clobber

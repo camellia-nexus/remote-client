@@ -95,7 +95,7 @@ SPEC CHECKSUMS:
   package_info_plus: f0052d280d17aa382b932f399edf32507174e870
   screen_retriever: 4f97c103641aab8ce183fa5af3b87029df167936
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
-  texture_rgba_renderer: 6661f577ea5d4990e964c7e3840e544ac798e6da
+  texture_rgba_renderer: ac416b5e34981855e11e2ba3cd063478c7dbd16a
   uni_links_desktop: 34322c2646e4c9abc69b62e1865f9782d2850ba2
   url_launcher_macos: f87a979182d112f911de6820aefddaf56ee9fbfd
   wakelock_plus: 917609be14d812ddd9e9528876538b2263aaa03b

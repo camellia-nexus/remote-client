@@ -30,13 +30,15 @@ pub fn main_service_generation() -> u64 {
 }
 
 fn get_main_service_handles() -> Option<(JavaVM, GlobalRef)> {
-    let jvm = JVM.read().ok()?.as_ref()?.clone();
+    let ptr = JVM.read().ok()?.as_ref()?.get_java_vm_pointer();
+    let jvm = unsafe { JavaVM::from_raw(ptr).ok()? };
     let ctx = MAIN_SERVICE_CTX.read().ok()?.as_ref()?.clone();
     Some((jvm, ctx))
 }
 
 fn get_clipboard_handles() -> Option<(JavaVM, GlobalRef)> {
-    let jvm = JVM.read().ok()?.as_ref()?.clone();
+    let ptr = JVM.read().ok()?.as_ref()?.get_java_vm_pointer();
+    let jvm = unsafe { JavaVM::from_raw(ptr).ok()? };
     let cm = CLIPBOARD_MANAGER.read().ok()?.as_ref()?.clone();
     Some((jvm, cm))
 }

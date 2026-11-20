@@ -128,6 +128,11 @@ android {
     packaging {
         jniLibs {
             pickFirsts += ['**/libc++_shared.so']
+            excludes += [
+                'lib/armeabi-v7a/**',
+                'lib/x86/**',
+                'lib/x86_64/**',
+            ]
         }
     }
 

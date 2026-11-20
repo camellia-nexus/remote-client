@@ -1888,27 +1888,30 @@ async fn read_empty_dirs(dir: &str, include_hidden: bool, tx: &UnboundedSender<D
     let path = dir.to_owned();
     let path_clone = dir.to_owned();
 
-    let msg_out = match spawn_blocking(move || fs::get_empty_dirs_recursive(&path, include_hidden))
-        .await
-    {
-        Ok(Ok(fds)) => {
-            let mut msg_out = Message::new();
-            let mut file_response = FileResponse::new();
-            file_response.set_empty_dirs(ReadEmptyDirsResponse {
-                path: path_clone,
-                empty_dirs: fds,
-                ..Default::default()
-            });
-            msg_out.set_file_response(file_response);
-            msg_out
-        }
-        Ok(Err(err)) => fs::new_listing_error(path_clone, err, FileErrorOperation::ReadEmptyDirs),
-        Err(err) => fs::new_listing_error(
-            path_clone,
-            format!("directory scan task failed: {err}"),
-            FileErrorOperation::ReadEmptyDirs,
-        ),
-    };
+    let msg_out =
+        match spawn_blocking(move || fs::get_empty_dirs_recursive(&path, include_hidden)).await {
+            Ok(Ok(fds)) => {
+                let mut msg_out = Message::new();
+                let mut file_response = FileResponse::new();
+                file_response.set_empty_dirs(ReadEmptyDirsResponse {
+                    path: path_clone,
+                    empty_dirs: fds,
+                    ..Default::default()
+                });
+                msg_out.set_file_response(file_response);
+                msg_out
+            }
+            Ok(Err(err)) => fs::new_listing_error(
+                path_clone,
+                err,
+                FileErrorOperation::FILE_ERROR_OP_READ_EMPTY_DIRS,
+            ),
+            Err(err) => fs::new_listing_error(
+                path_clone,
+                format!("directory scan task failed: {err}"),
+                FileErrorOperation::FILE_ERROR_OP_READ_EMPTY_DIRS,
+            ),
+        };
     send_raw(msg_out, tx);
 }
 
@@ -1930,11 +1933,15 @@ async fn read_dir(dir: &str, include_hidden: bool, tx: &UnboundedSender<Data>) {
             msg_out.set_file_response(file_response);
             msg_out
         }
-        Ok(Err(err)) => fs::new_listing_error(request_path, err, FileErrorOperation::ReadDir),
+        Ok(Err(err)) => fs::new_listing_error(
+            request_path,
+            err,
+            FileErrorOperation::FILE_ERROR_OP_READ_DIR,
+        ),
         Err(err) => fs::new_listing_error(
             request_path,
             format!("directory listing task failed: {err}"),
-            FileErrorOperation::ReadDir,
+            FileErrorOperation::FILE_ERROR_OP_READ_DIR,
         ),
     };
     send_raw(msg_out, tx);
@@ -2436,7 +2443,7 @@ mod tests {
             assert_eq!(error.path, missing.to_string_lossy());
             assert_eq!(
                 error.operation.enum_value(),
-                Ok(FileErrorOperation::ReadDir)
+                Ok(FileErrorOperation::FILE_ERROR_OP_READ_DIR)
             );
         });
     }
@@ -2458,7 +2465,7 @@ mod tests {
             assert_eq!(error.path, missing.to_string_lossy());
             assert_eq!(
                 error.operation.enum_value(),
-                Ok(FileErrorOperation::ReadEmptyDirs)
+                Ok(FileErrorOperation::FILE_ERROR_OP_READ_EMPTY_DIRS)
             );
         });
     }

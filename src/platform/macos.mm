@@ -88,7 +88,10 @@ extern "C" bool Elevate(char* process, char** args) {
 
     if (process != NULL) {
         FILE *pipe = NULL;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         status = AuthorizationExecuteWithPrivileges(authRef, process, kAuthorizationFlagDefaults, args, &pipe);
+#pragma clang diagnostic pop
         if (status != errAuthorizationSuccess) {
             printf("Failed to run as root\n");
             AuthorizationFree(authRef, kAuthorizationFlagDefaults);
@@ -131,7 +134,10 @@ size_t bitDepth(CGDisplayModeRef mode) {
     // Deprecated, same display same bpp?
     // https://stackoverflow.com/questions/8210824/how-to-avoid-cgdisplaymodecopypixelencoding-to-get-bpp
     // https://github.com/libsdl-org/SDL/pull/6628
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	CFStringRef pixelEncoding = CGDisplayModeCopyPixelEncoding(mode);
+#pragma clang diagnostic pop
     if (pixelEncoding == NULL) {
         return 32;
     }

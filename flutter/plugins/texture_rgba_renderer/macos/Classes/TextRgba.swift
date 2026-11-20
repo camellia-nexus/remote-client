@@ -63,14 +63,14 @@ import CoreVideo
         }
     }
 
-    @objc public func markFrameAvaliableRaw(buffer: UnsafePointer<UInt8>, len: Int, width: Int, height: Int, stride_align: Int) -> Bool {
+    @objc @discardableResult public func markFrameAvaliableRaw(buffer: UnsafePointer<UInt8>, len: Int, width: Int, height: Int, stride_align: Int) -> Bool {
         queue.sync {
             _markFrameAvaliable(buffer: buffer, len: len, width: width, height: height, stride_align: stride_align)
         }
     }
     
     
-    @objc public func markFrameAvaliable(data: Data, width: Int, height: Int, stride_align: Int) -> Bool {
+    @objc @discardableResult public func markFrameAvaliable(data: Data, width: Int, height: Int, stride_align: Int) -> Bool {
         data.withUnsafeBytes { buffer in
             markFrameAvaliableRaw(
                 buffer: buffer.baseAddress!.assumingMemoryBound(to: UInt8.self),

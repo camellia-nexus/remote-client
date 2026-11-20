@@ -10,6 +10,7 @@
 
 use super::service::{EmptyExtraFieldService, GenericService, Service};
 use camellia_remote_protocol::{bail, log, ResultType};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use dlopen::symbor::Library;
 use std::{
     sync::{Arc, Mutex},
@@ -100,11 +101,13 @@ pub type GetPrinterAdapterVtableFn =
     unsafe extern "system" fn(vtable: *mut CamelliaPrinterAdapterVtable) -> i32;
 
 pub struct LibWrapper {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     _lib: Option<Library>,
     vtable: Option<CamelliaPrinterAdapterVtable>,
 }
 
 impl LibWrapper {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn new() -> Self {
         let lib_name = match get_lib_name() {
             Ok(name) => name,
@@ -179,6 +182,11 @@ impl LibWrapper {
         }
     }
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    pub fn new() -> Self {
+        Self { vtable: None }
+    }
+
     pub fn vtable(&self) -> Option<&CamelliaPrinterAdapterVtable> {
         self.vtable.as_ref()
     }
@@ -194,6 +202,7 @@ lazy_static::lazy_static! {
     static ref LIB_WRAPPER: Arc<Mutex<LibWrapper>> = Default::default();
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_lib_name() -> ResultType<String> {
     let exe_file = std::env::current_exe()?;
     if let Some(cur_dir) = exe_file.parent() {
