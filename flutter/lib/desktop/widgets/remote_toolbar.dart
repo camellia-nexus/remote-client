@@ -259,7 +259,8 @@ class ToolbarState {
   }
 }
 
-class _ToolbarTheme {
+@visibleForTesting
+class ToolbarTheme {
   static const Color blueColor = CamelliaColors.azure;
   static const Color hoverBlueColor = CamelliaColors.indigo;
   static const Color inactiveColor = Color(0xFF6B7284);
@@ -346,6 +347,8 @@ class _ToolbarTheme {
     );
   }
 }
+
+typedef _ToolbarTheme = ToolbarTheme;
 
 typedef DismissFunc = void Function();
 
@@ -2236,7 +2239,8 @@ class _CustomScaleMenuControlsState
 
 // Lightweight rectangular thumb that paints the current percentage.
 // Stateless and uses only SliderTheme colors; avoids allocations beyond a TextPainter per frame.
-class _RectValueThumbShape extends SliderComponentShape {
+@visibleForTesting
+class RectValueThumbShape extends SliderComponentShape {
   final double min;
   final double max;
   final double width;
@@ -2247,7 +2251,7 @@ class _RectValueThumbShape extends SliderComponentShape {
   // If null, falls back to linear interpolation between min and max.
   final int Function(double normalized)? displayValueForNormalized;
 
-  const _RectValueThumbShape({
+  const RectValueThumbShape({
     required this.min,
     required this.max,
     required this.width,
@@ -2313,12 +2317,17 @@ class _RectValueThumbShape extends SliderComponentShape {
       textDirection: textDirection,
     );
     tp.layout(maxWidth: width - 4);
+    canvas.save();
+    canvas.clipRRect(rrect);
     tp.paint(
       canvas,
       Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
     );
+    canvas.restore();
   }
 }
+
+typedef _RectValueThumbShape = RectValueThumbShape;
 
 class _ResolutionsMenu extends StatefulWidget {
   final String id;
@@ -2861,17 +2870,19 @@ class _KeyboardMenu extends StatelessWidget {
     );
   }
 
-  inputSource() {
+  Widget inputSource() {
     final supportedInputSource = bind.mainSupportedInputSource();
-    if (supportedInputSource.isEmpty) return Offstage();
-    late final List<dynamic> supportedInputSourceList;
+    if (supportedInputSource.isEmpty) return const Offstage();
+    final List<dynamic> supportedInputSourceList;
     try {
-      supportedInputSourceList = jsonDecode(supportedInputSource);
+      final decoded = jsonDecode(supportedInputSource);
+      if (decoded is! List) return const Offstage();
+      supportedInputSourceList = decoded;
     } catch (e) {
       debugPrint('Failed to decode $supportedInputSource, $e');
-      return;
+      return const Offstage();
     }
-    if (supportedInputSourceList.length < 2) return Offstage();
+    if (supportedInputSourceList.length < 2) return const Offstage();
     final inputSource = stateGlobal.getInputSource();
     final enabled = !ffi.ffiModel.viewOnly;
     final children = <Widget>[Divider()];
@@ -3318,8 +3329,10 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
   }
 }
 
-class _CommandBarActionSurface extends StatelessWidget {
-  const _CommandBarActionSurface({
+@visibleForTesting
+class CommandBarActionSurface extends StatelessWidget {
+  const CommandBarActionSurface({
+    super.key,
     required this.icon,
     required this.tint,
     required this.hovered,
@@ -3351,6 +3364,8 @@ class _CommandBarActionSurface extends StatelessWidget {
     );
   }
 }
+
+typedef _CommandBarActionSurface = CommandBarActionSurface;
 
 class _IconSubmenuButton extends StatefulWidget {
   final String tooltip;
@@ -3770,6 +3785,7 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
         child: TextButton(
           onPressed: onPressed,
           style: ButtonStyle(
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             minimumSize: const WidgetStatePropertyAll(
               Size(_controlExtent, _controlExtent),
             ),
@@ -3952,6 +3968,7 @@ class _MinimizedMonitorSwitchButton extends StatelessWidget {
           child: TextButton(
             onPressed: cycle.next,
             style: ButtonStyle(
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               minimumSize: const WidgetStatePropertyAll(Size(32, 32)),
               maximumSize: const WidgetStatePropertyAll(Size(32, 32)),
               padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),

@@ -264,7 +264,7 @@ class _FloatingMouseState extends State<FloatingMouse> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final currentOrientation = MediaQuery.of(context).orientation;
+    final currentOrientation = MediaQuery.orientationOf(context);
     if (_previousOrientation != null &&
         _previousOrientation != currentOrientation) {
       _resetPosition();
@@ -274,7 +274,7 @@ class _FloatingMouseState extends State<FloatingMouse> {
 
   void _resetPosition() {
     setState(() {
-      final size = MediaQuery.of(context).size;
+      final size = MediaQuery.sizeOf(context);
       _position = Offset(
         (size.width - _baseMouseWidth * _mouseScale) / 2,
         (size.height - _baseMouseHeight * _mouseScale) / 2,
@@ -362,7 +362,7 @@ class _FloatingMouseState extends State<FloatingMouse> {
   void _onMoveUpdateDelta(Offset delta) {
     _resetCollapseTimer();
     final context = this.context;
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     Offset newPosition = _position + delta;
     double minX = 0;
     double minY = 0;
@@ -691,7 +691,7 @@ class _FloatingMouseState extends State<FloatingMouse> {
                       _position += _expandOffset;
                     });
                   },
-                  child: Container(
+                  child: SizedBox(
                     width: 18 * _mouseScale,
                     height: 18 * _mouseScale,
                     child: Center(
@@ -785,7 +785,7 @@ class _MouseBodyState extends State<MouseBody> {
   bool _dragDown = false;
 
   Widget _buildScrollUpDown(GlobalKey key, IconData iconData, double s) {
-    return Container(
+    return SizedBox(
       key: key,
       height: 17 * s,
       child: Icon(
@@ -827,7 +827,7 @@ class _MouseBodyState extends State<MouseBody> {
           : null,
       onPointerMove: widget.onPointerMoveUpdate,
       behavior: HitTestBehavior.opaque,
-      child: Container(
+      child: SizedBox(
         height: 28 * s,
         child: Center(
           child: Column(
@@ -1180,7 +1180,7 @@ class DragAreaTopIndentPainter extends CustomPainter {
 
 class CursorPaint extends StatelessWidget {
   final double scale;
-  CursorPaint({super.key, required this.scale});
+  const CursorPaint({super.key, required this.scale});
 
   @override
   Widget build(BuildContext context) {

@@ -13,6 +13,7 @@ import 'package:camellia_remote_app/desktop/pages/view_camera_page.dart';
 import 'package:camellia_remote_app/main.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
 import 'package:scroll_pos/scroll_pos.dart';
@@ -1541,30 +1542,55 @@ class TabbarTheme extends ThemeExtension<TabbarTheme> {
   });
 
   static const light = TabbarTheme(
-    selectedTabIconColor: MyTheme.accent,
-    unSelectedTabIconColor: Color.fromARGB(255, 162, 203, 241),
-    selectedTextColor: Colors.black,
-    unSelectedTextColor: Color.fromARGB(255, 112, 112, 112),
-    selectedIconColor: Color.fromARGB(255, 26, 26, 26),
-    unSelectedIconColor: Color.fromARGB(255, 96, 96, 96),
-    dividerColor: Color.fromARGB(255, 238, 238, 238),
-    hoverColor: Colors.white54,
-    closeHoverColor: Colors.white,
-    selectedTabBackgroundColor: Colors.white54,
+    selectedTabIconColor: CamelliaColors.indigo,
+    unSelectedTabIconColor: CamelliaColors.lightMuted,
+    selectedTextColor: CamelliaColors.lightText,
+    unSelectedTextColor: CamelliaColors.lightMuted,
+    selectedIconColor: CamelliaColors.lightText,
+    unSelectedIconColor: CamelliaColors.lightMuted,
+    dividerColor: CamelliaColors.lightBorder,
+    hoverColor: CamelliaColors.lightAccentWash,
+    closeHoverColor: CamelliaColors.lightRaised,
+    selectedTabBackgroundColor: CamelliaColors.lightSurface,
   );
 
   static const dark = TabbarTheme(
-    selectedTabIconColor: MyTheme.accent,
-    unSelectedTabIconColor: Color.fromARGB(255, 30, 65, 98),
-    selectedTextColor: Colors.white,
-    unSelectedTextColor: Color.fromARGB(255, 192, 192, 192),
-    selectedIconColor: Color.fromARGB(255, 192, 192, 192),
-    unSelectedIconColor: Color.fromARGB(255, 255, 255, 255),
-    dividerColor: Color.fromARGB(255, 64, 64, 64),
-    hoverColor: Colors.black26,
-    closeHoverColor: Colors.black,
-    selectedTabBackgroundColor: Colors.black26,
+    selectedTabIconColor: Color(0xFFAAA7FF),
+    unSelectedTabIconColor: CamelliaColors.darkMuted,
+    selectedTextColor: CamelliaColors.darkText,
+    unSelectedTextColor: CamelliaColors.darkMuted,
+    selectedIconColor: CamelliaColors.darkText,
+    unSelectedIconColor: CamelliaColors.darkMuted,
+    dividerColor: CamelliaColors.darkBorder,
+    hoverColor: CamelliaColors.darkAccentWash,
+    closeHoverColor: CamelliaColors.darkRaised,
+    selectedTabBackgroundColor: CamelliaColors.darkSurface,
   );
+
+  static TabbarTheme of(BuildContext context) {
+    return Theme.of(context).extension<TabbarTheme>() ??
+        (Theme.of(context).brightness == Brightness.dark
+            ? TabbarTheme.dark
+            : TabbarTheme.light);
+  }
+
+  static TabbarTheme fromTokens(AppDesignTokens tokens, {required bool isDark}) {
+    return TabbarTheme(
+      selectedTabIconColor:
+          isDark ? const Color(0xFFAAA7FF) : CamelliaColors.indigo,
+      unSelectedTabIconColor: tokens.muted,
+      selectedTextColor:
+          isDark ? CamelliaColors.darkText : CamelliaColors.lightText,
+      unSelectedTextColor: tokens.muted,
+      selectedIconColor:
+          isDark ? CamelliaColors.darkText : CamelliaColors.lightText,
+      unSelectedIconColor: tokens.muted,
+      dividerColor: tokens.border,
+      hoverColor: tokens.accentContainer,
+      closeHoverColor: tokens.surfaceElevated,
+      selectedTabBackgroundColor: tokens.surface,
+    );
+  }
 
   @override
   ThemeExtension<TabbarTheme> copyWith({

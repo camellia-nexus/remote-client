@@ -761,10 +761,12 @@ class FfiModel with ChangeNotifier {
           Row(
             children: [
               Obx(
-                () => Radio<String>(
-                  value: kValuePrinterIncomingJobDefault,
+                () => RadioGroup<String>(
                   groupValue: defaultOrSelectedGroupValue.value,
                   onChanged: onRatioChanged,
+                  child: const Radio<String>(
+                    value: kValuePrinterIncomingJobDefault,
+                  ),
                 ),
               ),
               GestureDetector(
@@ -778,10 +780,12 @@ class FfiModel with ChangeNotifier {
               Row(
                 children: [
                   Obx(
-                    () => Radio<String>(
-                      value: kValuePrinterIncomingJobSelected,
+                    () => RadioGroup<String>(
                       groupValue: defaultOrSelectedGroupValue.value,
                       onChanged: onRatioChanged,
+                      child: const Radio<String>(
+                        value: kValuePrinterIncomingJobSelected,
+                      ),
                     ),
                   ),
                   GestureDetector(
@@ -2806,7 +2810,8 @@ class CanvasModel with ChangeNotifier {
       isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
 
   Size getSize() {
-    final mediaData = MediaQueryData.fromView(ui.window);
+    final mediaData =
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first);
     final size = mediaData.size;
     // If minimized, w or h may be negative here.
     double w = size.width - leftToEdge - rightToEdge;
@@ -2847,7 +2852,12 @@ class CanvasModel with ChangeNotifier {
   double getAdjustY() {
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
-    return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
+    return max(
+        bottom -
+            MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+                .padding
+                .top,
+        0);
   }
 
   void updateSize([Size? size]) => _size = size ?? getSize();
@@ -2908,7 +2918,8 @@ class CanvasModel with ChangeNotifier {
       }
     }
 
-    _devicePixelRatio = devicePixelRatio ?? ui.window.devicePixelRatio;
+    _devicePixelRatio = devicePixelRatio ??
+        ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
     if (kIgnoreDpi) {
       if (style == kRemoteViewStyleOriginal) {
         _scale = 1.0 / _devicePixelRatio;
@@ -3243,7 +3254,8 @@ class CanvasModel with ChangeNotifier {
   // For reset canvas to the last view style
   reset() {
     _scale = _lastViewStyle.scale;
-    _devicePixelRatio = ui.window.devicePixelRatio;
+    _devicePixelRatio =
+        ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
     if (kIgnoreDpi && _lastViewStyle.style == kRemoteViewStyleOriginal) {
       _scale = 1.0 / _devicePixelRatio;
     }
@@ -3660,9 +3672,9 @@ class CursorModel with ChangeNotifier {
   // remote physical display coordinate
   // For update pan (mobile), onOneFingerPanStart, onOneFingerPanUpdate, onHoldDragUpdate
   Rect getVisibleRect() {
-    final size =
-        parent.target?.canvasModel.getSize() ??
-        MediaQueryData.fromView(ui.window).size;
+    final size = parent.target?.canvasModel.getSize() ??
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+            .size;
     final xoffset = parent.target?.canvasModel.x ?? 0;
     final yoffset = parent.target?.canvasModel.y ?? 0;
     final scale = parent.target?.canvasModel.scale ?? 1;
@@ -3678,9 +3690,9 @@ class CursorModel with ChangeNotifier {
     // See `getVisibleRect()`
     // _x = _displayOriginX - xoffset / scale + size.width / scale * 0.5;
     // _y = _displayOriginY - yoffset / scale + size.height / scale * 0.5;
-    final size =
-        parent.target?.canvasModel.getSize() ??
-        MediaQueryData.fromView(ui.window).size;
+    final size = parent.target?.canvasModel.getSize() ??
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+            .size;
     final xoffset = (_displayOriginX - _x) * scale + size.width * 0.5;
     final yoffset = (_displayOriginY - _y) * scale + size.height * 0.5;
     return Offset(xoffset, yoffset);

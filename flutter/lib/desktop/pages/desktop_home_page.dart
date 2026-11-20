@@ -2,12 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
-import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
-import 'package:camellia_remote_app/common/widgets/animated_rotation_widget.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/common/widgets/custom_password.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
@@ -15,9 +13,11 @@ import 'package:camellia_remote_app/common/widgets/peer_tab_page.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/pages/connection_page.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_setting_page.dart';
+import 'package:camellia_remote_app/desktop/widgets/desktop_shell.dart';
+import 'package:camellia_remote_app/desktop/widgets/identity_board_widgets.dart';
 import 'package:camellia_remote_app/desktop/widgets/titlebar_widget.dart';
+import 'package:camellia_remote_app/common/widgets/address_book.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
-import 'package:camellia_remote_app/models/server_model.dart';
 import 'package:camellia_remote_app/plugin/ui_manager.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/platform_channel.dart';
@@ -28,7 +28,69 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
 class DesktopHomePage extends StatefulWidget {
-  const DesktopHomePage({Key? key}) : super(key: key);
+  const DesktopHomePage({super.key});
+
+  static Widget buildDevicesWorkspace(BuildContext context) {
+    return LayoutBuilder(
+      key: const ValueKey('desktop-devices-workspace'),
+      builder: (context, constraints) {
+        final content = const Padding(
+          padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: PeerTabPage(),
+        );
+        final hasBoundedHeight = constraints.hasBoundedHeight;
+        final hasBoundedWidth = constraints.hasBoundedWidth;
+
+        if (hasBoundedHeight && hasBoundedWidth) {
+          return SizedBox.expand(child: content);
+        } else if (hasBoundedHeight) {
+          return SizedBox(
+            height: constraints.maxHeight,
+            child: content,
+          );
+        } else {
+          return SizedBox(
+            height: (MediaQuery.sizeOf(context).height * 0.58).clamp(
+              380.0,
+              640.0,
+            ),
+            child: content,
+          );
+        }
+      },
+    );
+  }
+
+  static Widget buildAddressBookWorkspace(BuildContext context) {
+    return LayoutBuilder(
+      key: const ValueKey('desktop-address-book-workspace'),
+      builder: (context, constraints) {
+        final content = Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: AddressBook(menuPadding: kDesktopMenuPadding),
+        );
+        final hasBoundedHeight = constraints.hasBoundedHeight;
+        final hasBoundedWidth = constraints.hasBoundedWidth;
+
+        if (hasBoundedHeight && hasBoundedWidth) {
+          return SizedBox.expand(child: content);
+        } else if (hasBoundedHeight) {
+          return SizedBox(
+            height: constraints.maxHeight,
+            child: content,
+          );
+        } else {
+          return SizedBox(
+            height: (MediaQuery.sizeOf(context).height * 0.58).clamp(
+              380.0,
+              640.0,
+            ),
+            child: content,
+          );
+        }
+      },
+    );
+  }
 
   @override
   State<DesktopHomePage> createState() => _DesktopHomePageState();
@@ -50,6 +112,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Timer? _updateTimer;
   bool isCardClosed = false;
   final RxBool _block = false.obs;
+  DesktopNavDestination _currentDestination = DesktopNavDestination.connect;
 
   @override
   Widget build(BuildContext context) {
@@ -66,21 +129,39 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         ),
         Expanded(
           child: _buildBlock(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return CamelliaBackdrop(
-                  child: FocusTraversalGroup(
-                    policy: WidgetOrderTraversalPolicy(),
-                    child: constraints.maxWidth >= AppLayout.splitBreakpoint
-                        ? _buildExpandedWorkspace(context)
-                        : _buildStackedWorkspace(context),
-                  ),
-                );
+            child: CamelliaDesktopShell(
+              currentDestination: _currentDestination,
+              onDestinationChanged: (dest) {
+                if (_currentDestination != dest) {
+                  setState(() => _currentDestination = dest);
+                }
               },
+              connectBuilder: (context) => _buildConnectWorkspace(context),
+              devicesBuilder: (context) => _buildDevicesWorkspace(context),
+              addressBookBuilder: (context) =>
+                  _buildAddressBookWorkspace(context),
+              settingsBuilder: (context) => _buildSettingsWorkspace(context),
+              statusWidget:
+                  const OnlineStatusWidget().marginOnly(bottom: 6, right: 6),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildConnectWorkspace(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return CamelliaBackdrop(
+          child: FocusTraversalGroup(
+            policy: WidgetOrderTraversalPolicy(),
+            child: (constraints.maxWidth >= 840 && constraints.maxHeight >= 660)
+                ? _buildExpandedWorkspace(context)
+                : _buildStackedWorkspace(context),
+          ),
+        );
+      },
     );
   }
 
@@ -108,13 +189,37 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const ConnectionPage(showDevices: false),
-                  const SizedBox(height: 16),
-                  Expanded(child: _buildDevicesWorkspace(context)),
-                ],
+              child: LayoutBuilder(
+                builder: (context, rightConstraints) {
+                  const minDevicesHeight = 240.0;
+                  const connectionPageHeight = 450.0;
+                  const gap = 16.0;
+                  final neededHeight =
+                      connectionPageHeight + gap + minDevicesHeight;
+                  if (rightConstraints.maxHeight < neededHeight) {
+                    return SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const ConnectionPage(showDevices: false),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            height: minDevicesHeight,
+                            child: _buildDevicesWorkspace(context),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const ConnectionPage(showDevices: false),
+                      const SizedBox(height: 16),
+                      Expanded(child: _buildDevicesWorkspace(context)),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -154,15 +259,15 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget _buildDevicesWorkspace(BuildContext context) {
-    return CamelliaSection(
-      title: translate('Devices'),
-      description: translate(
-        'Recent, favorite, discovered, and shared devices',
-      ),
-      accent: CamelliaColors.azure,
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-      child: const PeerTabPage(),
-    );
+    return DesktopHomePage.buildDevicesWorkspace(context);
+  }
+
+  Widget _buildAddressBookWorkspace(BuildContext context) {
+    return DesktopHomePage.buildAddressBookWorkspace(context);
+  }
+
+  Widget _buildSettingsWorkspace(BuildContext context) {
+    return DesktopSettingPage(initialTabkey: SettingsTabKey.general);
   }
 
   Widget _buildAccessPane(BuildContext context, {required bool scrollable}) {
@@ -185,8 +290,11 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: () =>
-                      DesktopSettingPage.switch2page(SettingsTabKey.general),
+                  onPressed: () {
+                    setState(
+                      () => _currentDestination = DesktopNavDestination.settings,
+                    );
+                  },
                   icon: const Icon(Icons.settings_outlined, size: 19),
                   label: Text(translate('Settings')),
                 ),
@@ -219,8 +327,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (bind.isCustomClient())
         Align(alignment: Alignment.center, child: loadPowered(context)),
       buildTip(context),
-      if (!isOutgoingOnly) buildIDBoard(context),
-      if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (!isOutgoingOnly) const IdentityIdBoard(),
+      if (!isOutgoingOnly) const IdentityPasswordBoard(),
       buildHelpCards(),
       buildPluginEntry(),
     ];
@@ -255,183 +363,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
-  buildIDBoard(BuildContext context) {
-    final model = gFFI.serverModel;
-    final theme = Theme.of(context);
-    return AppSurface(
-      margin: const EdgeInsets.only(left: 14, right: 14, top: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      color: AppVisual.toneContainer(context, AppTone.info),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const AppIconBadge(
-            icon: Icons.fingerprint_rounded,
-            colors: AppVisual.identityGradient,
-            size: 36,
-            iconSize: 19,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Text(
-                      translate("ID"),
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: AppVisual.subduedText(context),
-                      ),
-                    ),
-                  ],
-                ),
-                GestureDetector(
-                  onDoubleTap: () {
-                    Clipboard.setData(ClipboardData(text: model.serverId.text));
-                    showToast(translate("Copied"));
-                  },
-                  child: TextFormField(
-                    controller: model.serverId,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.only(top: 4),
-                    ),
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget buildIDBoard(BuildContext context) => const IdentityIdBoard();
 
-  buildPasswordBoard(BuildContext context) {
-    return ChangeNotifierProvider.value(
-      value: gFFI.serverModel,
-      child: Consumer<ServerModel>(
-        builder: (context, model, child) {
-          return buildPasswordBoard2(context, model);
-        },
-      ),
-    );
-  }
+  Widget buildPasswordBoard(BuildContext context) =>
+      const IdentityPasswordBoard();
 
-  buildPasswordBoard2(BuildContext context, ServerModel model) {
-    RxBool refreshHover = false.obs;
-    RxBool editHover = false.obs;
-    final textColor = Theme.of(context).textTheme.titleLarge?.color;
-    final showOneTime =
-        model.approveMode != 'click' &&
-        model.verificationMethod != kUsePermanentPassword;
-    return AppSurface(
-      margin: const EdgeInsets.only(left: 14, right: 14, top: 12, bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      color: AppVisual.toneContainer(context, AppTone.warning),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const AppIconBadge(
-            icon: Icons.key_rounded,
-            colors: AppVisual.securityGradient,
-            size: 36,
-            iconSize: 19,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AutoSizeText(
-                  translate("One-time Password"),
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppVisual.subduedText(context),
-                  ),
-                  maxLines: 1,
-                ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onDoubleTap: () {
-                          if (showOneTime) {
-                            Clipboard.setData(
-                              ClipboardData(text: model.serverPasswd.text),
-                            );
-                            showToast(translate("Copied"));
-                          }
-                        },
-                        child: TextFormField(
-                          controller: model.serverPasswd,
-                          readOnly: true,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            isDense: true,
-                            contentPadding: EdgeInsets.only(top: 8),
-                          ),
-                          style: TextStyle(fontSize: 15, color: textColor),
-                        ).workaroundFreezeLinuxMint(),
-                      ),
-                    ),
-                    if (showOneTime)
-                      AnimatedRotationWidget(
-                        onPressed: () => bind.mainUpdateTemporaryPassword(),
-                        child: Tooltip(
-                          message: translate('Refresh Password'),
-                          child: Obx(
-                            () => RotatedBox(
-                              quarterTurns: 2,
-                              child: Icon(
-                                Icons.refresh_rounded,
-                                color: refreshHover.value
-                                    ? textColor
-                                    : AppVisual.subduedText(context),
-                                size: 21,
-                              ),
-                            ),
-                          ),
-                        ),
-                        onHover: (value) => refreshHover.value = value,
-                      ).marginOnly(right: 8, top: 4),
-                    if (!bind.isDisableSettings())
-                      InkWell(
-                        child: Tooltip(
-                          message: translate('Change Password'),
-                          child: Obx(
-                            () => Icon(
-                              Icons.edit_rounded,
-                              color: editHover.value
-                                  ? textColor
-                                  : AppVisual.subduedText(context),
-                              size: 20,
-                            ).marginOnly(right: 4, top: 4),
-                          ),
-                        ),
-                        onTap: () => DesktopSettingPage.switch2page(
-                          SettingsTabKey.safety,
-                        ),
-                        onHover: (value) => editHover.value = value,
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  buildTip(BuildContext context) {
+  Widget buildTip(BuildContext context) {
     final isOutgoingOnly = bind.isOutgoingOnly();
     return Padding(
       padding: const EdgeInsets.only(

@@ -13,7 +13,9 @@ import 'package:camellia_remote_app/common/widgets/settings_overlay.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_home_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/remote_toolbar.dart';
-import 'package:camellia_remote_app/mobile/widgets/dialog.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
+import 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
+export 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/printer_model.dart';
 import 'package:camellia_remote_app/models/server_model.dart';
@@ -26,6 +28,8 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+import 'package:camellia_remote_app/common/widgets/settings_components.dart';
+import 'package:camellia_remote_app/desktop/widgets/desktop_shell.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
 
@@ -82,6 +86,8 @@ class DesktopSettingPage extends StatefulWidget {
     SettingsTabKey.about,
   ];
 
+  static SettingsTabKey? pendingInitialTabKey;
+
   DesktopSettingPage({Key? key, required this.initialTabkey}) : super(key: key);
 
   @override
@@ -94,6 +100,14 @@ class DesktopSettingPage extends StatefulWidget {
       if (index == -1) {
         return;
       }
+      final context = globalKey.currentContext;
+      if (context != null) {
+        final shell = CamelliaDesktopShell.of(context);
+        if (shell != null) {
+          shell.setDestination(DesktopNavDestination.settings);
+        }
+      }
+      pendingInitialTabKey = page;
       if (Get.isRegistered<PageController>(tag: _kSettingPageControllerTag)) {
         PageController controller = Get.find<PageController>(
           tag: _kSettingPageControllerTag,
@@ -102,15 +116,36 @@ class DesktopSettingPage extends StatefulWidget {
           tag: _kSettingPageTabKeyTag,
         );
         selected.value = page;
-        controller.jumpToPage(index);
+        if (controller.hasClients) {
+          controller.jumpToPage(index);
+        }
       } else {
-        final context = globalKey.currentContext;
         if (context == null) return;
-        showSettingsOverlay<void>(
-          context: context,
-          title: translate('Settings'),
-          builder: (_) => DesktopSettingPage(initialTabkey: page),
-        );
+        final shell = CamelliaDesktopShell.of(context);
+        if (shell == null) {
+          showSettingsOverlay<void>(
+            context: context,
+            title: translate('Settings'),
+            builder: (_) => DesktopSettingPage(initialTabkey: page),
+          );
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (Get.isRegistered<PageController>(
+              tag: _kSettingPageControllerTag,
+            )) {
+              final controller = Get.find<PageController>(
+                tag: _kSettingPageControllerTag,
+              );
+              final selected = Get.find<Rx<SettingsTabKey>>(
+                tag: _kSettingPageTabKeyTag,
+              );
+              selected.value = page;
+              if (controller.hasClients) {
+                controller.jumpToPage(index);
+              }
+            }
+          });
+        }
       }
     } catch (e) {
       debugPrintStack(label: '$e');
@@ -134,7 +169,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   Timer? _videoConnTimer;
 
   _DesktopSettingPageState(SettingsTabKey initialTabkey) {
-    var initialIndex = DesktopSettingPage.tabKeys.indexOf(initialTabkey);
+    final effectiveTab =
+        DesktopSettingPage.pendingInitialTabKey ?? initialTabkey;
+    DesktopSettingPage.pendingInitialTabKey = null;
+    var initialIndex = DesktopSettingPage.tabKeys.indexOf(effectiveTab);
     if (initialIndex == -1) {
       initialIndex = 0;
     }
@@ -564,38 +602,99 @@ class _GeneralState extends State<_General> {
   }
 
   Widget theme() {
-    final current = MyTheme.getThemeModePreference().toShortString();
+    final current = switch (MyTheme.getThemePreference()) {
+      CamelliaThemePreference.light => 'light',
+      CamelliaThemePreference.dark => 'dark',
+      CamelliaThemePreference.midnight => 'midnight',
+      CamelliaThemePreference.system => 'system',
+    };
     onChanged(String value) async {
-      await MyTheme.changeDarkMode(MyTheme.themeModeFromString(value));
+      await MyTheme.changeThemePreference(
+        MyTheme.themePreferenceFromString(value),
+      );
       setState(() {});
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
-    return _Card(
-      title: 'Theme',
-      children: [
-        _Radio<String>(
-          context,
-          value: 'light',
-          groupValue: current,
-          label: 'Light',
-          onChanged: isOptFixed ? null : onChanged,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+          child: SettingsSection(
+            title: Text(translate('Theme')),
+            tiles: [
+              CustomSettingsTile(
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<String>(
+                      showSelectedIcon: false,
+                      style: ButtonStyle(
+                        padding: const WidgetStatePropertyAll(
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                        ),
+                      ),
+                      segments: [
+                        ButtonSegment<String>(
+                          value: 'light',
+                          label: Text(
+                            translate('Light'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          icon: const Icon(Icons.light_mode_outlined, size: 17),
+                        ),
+                        ButtonSegment<String>(
+                          value: 'dark',
+                          label: Text(
+                            translate('Dark'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          icon: const Icon(Icons.dark_mode_outlined, size: 17),
+                        ),
+                        ButtonSegment<String>(
+                          value: 'midnight',
+                          label: Text(
+                            translate('OLED Midnight'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          icon: const Icon(Icons.contrast_rounded, size: 17),
+                        ),
+                        ButtonSegment<String>(
+                          value: 'system',
+                          label: Text(
+                            translate('Follow System'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          icon: const Icon(
+                            Icons.brightness_auto_outlined,
+                            size: 17,
+                          ),
+                        ),
+                      ],
+                      selected: {current},
+                      onSelectionChanged: isOptFixed
+                          ? null
+                          : (selected) {
+                              if (selected.isNotEmpty) {
+                                onChanged(selected.first);
+                              }
+                            },
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        _Radio<String>(
-          context,
-          value: 'dark',
-          groupValue: current,
-          label: 'Dark',
-          onChanged: isOptFixed ? null : onChanged,
-        ),
-        _Radio<String>(
-          context,
-          value: 'system',
-          groupValue: current,
-          label: 'Follow System',
-          onChanged: isOptFixed ? null : onChanged,
-        ),
-      ],
+      ),
     );
   }
 
@@ -2043,168 +2142,125 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         bind.mainGetBuildinOption(key: kOptionHideWebSocketSetting) == 'Y';
 
     if (hideServer && hideProxy && hideWebSocket) {
-      return Offstage();
+      return const Offstage();
     }
-
-    // Helper function to create network setting ListTiles
-    Widget listTile({
-      required IconData icon,
-      required String title,
-      VoidCallback? onTap,
-      Widget? trailing,
-      bool showTooltip = false,
-      String tooltipMessage = '',
-    }) {
-      final titleWidget = showTooltip
-          ? Row(
-              children: [
-                Tooltip(
-                  waitDuration: Duration(milliseconds: 1000),
-                  message: translate(tooltipMessage),
-                  child: Row(
-                    children: [
-                      Text(
-                        translate(title),
-                        style: TextStyle(fontSize: _kContentFontSize),
-                      ),
-                      SizedBox(width: 5),
-                      Icon(
-                        Icons.help_outline,
-                        size: 14,
-                        color: Theme.of(
-                          context,
-                        ).textTheme.titleLarge?.color?.withValues(alpha: 0.7),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            )
-          : Text(
-              translate(title),
-              style: TextStyle(fontSize: _kContentFontSize),
-            );
-
-      return ListTile(
-        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
-        title: titleWidget,
-        enabled: !locked,
-        onTap: onTap,
-        trailing: trailing,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: EdgeInsets.symmetric(horizontal: 16),
-        minLeadingWidth: 0,
-        horizontalTitleGap: 10,
-      );
-    }
-
-    Widget switchWidget(
-      IconData icon,
-      String title,
-      String tooltipMessage,
-      String optionKey,
-    ) => listTile(
-      icon: icon,
-      title: title,
-      showTooltip: true,
-      tooltipMessage: tooltipMessage,
-      trailing: Switch(
-        value: mainGetBoolOptionSync(optionKey),
-        onChanged:
-            locked ||
-                isOptionFixed(optionKey) ||
-                _pendingSwitchKeys.contains(optionKey)
-            ? null
-            : (value) async {
-                _pendingSwitchKeys.add(optionKey);
-                setState(() {});
-                try {
-                  await mainSetBoolOption(optionKey, value);
-                } finally {
-                  _pendingSwitchKeys.remove(optionKey);
-                  if (mounted) {
-                    setState(() {});
-                  }
-                }
-              },
-      ),
-    );
 
     final outgoingOnly = bind.isOutgoingOnly();
 
-    final divider = const Divider(height: 1, indent: 16, endIndent: 16);
-    return _Card(
-      title: 'Network',
-      children: [
-        Container(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!hideServer)
-                listTile(
-                  icon: Icons.dns_outlined,
-                  title: 'ID/Relay Server',
-                  onTap: () => showServerSettings(gFFI.dialogManager, setState),
-                ),
-              if (!hideProxy && !hideServer) divider,
-              if (!hideProxy)
-                listTile(
-                  icon: Icons.network_ping_outlined,
-                  title: 'Socks5/Http(s) Proxy',
-                  onTap: changeSocks5Proxy,
-                ),
-              if (!hideWebSocket && (!hideServer || !hideProxy)) divider,
-              if (!hideWebSocket)
-                switchWidget(
-                  Icons.web_asset_outlined,
-                  'Use WebSocket',
-                  translate('websocket_tip'),
-                  kOptionAllowWebSocket,
-                ),
-              if (!isWeb)
-                futureBuilder(
-                  future: bind.mainIsUsingPublicServer(),
-                  hasData: (isUsingPublicServer) {
-                    if (isUsingPublicServer || outgoingOnly) {
-                      return Offstage();
-                    } else {
-                      return Column(
-                        children: [
-                          if (!hideServer || !hideProxy || !hideWebSocket)
-                            divider,
-                          listTile(
-                            icon: Icons.lan_outlined,
-                            title: 'Disable UDP',
-                            showTooltip: true,
-                            tooltipMessage: translate('disable-udp-tip'),
-                            trailing: Switch(
-                              value:
-                                  bind.mainGetOptionSync(
-                                    key: kOptionDisableUdp,
-                                  ) ==
-                                  'Y',
-                              onChanged:
-                                  locked || isOptionFixed(kOptionDisableUdp)
-                                  ? null
-                                  : (value) async {
-                                      await bind.mainSetOption(
-                                        key: kOptionDisableUdp,
-                                        value: value ? 'Y' : 'N',
-                                      );
-                                      setState(() {});
-                                    },
-                            ),
-                          ),
-                        ],
-                      );
-                    }
-                  },
-                ),
-            ],
+    final tiles = <AbstractSettingsTile>[];
+    if (!hideServer) {
+      tiles.add(
+        SettingsTile(
+          leading: const Icon(Icons.dns_outlined),
+          title: Text(translate('ID/Relay Server')),
+          enabled: !locked,
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+          onPressed: (_) => showServerSettings(gFFI.dialogManager, setState),
+        ),
+      );
+    }
+    if (!hideProxy) {
+      tiles.add(
+        SettingsTile(
+          leading: const Icon(Icons.network_ping_outlined),
+          title: Text(translate('Socks5/Http(s) Proxy')),
+          enabled: !locked,
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+          onPressed: (_) => changeSocks5Proxy(),
+        ),
+      );
+    }
+    if (!hideWebSocket) {
+      tiles.add(
+        SettingsTile.switchTile(
+          leading: const Icon(Icons.web_asset_outlined),
+          title: Text(translate('Use WebSocket')),
+          description: Text(translate('websocket_tip')),
+          enabled: !locked &&
+              !isOptionFixed(kOptionAllowWebSocket) &&
+              !_pendingSwitchKeys.contains(kOptionAllowWebSocket),
+          initialValue: mainGetBoolOptionSync(kOptionAllowWebSocket),
+          onToggle: (value) async {
+            _pendingSwitchKeys.add(kOptionAllowWebSocket);
+            setState(() {});
+            try {
+              await mainSetBoolOption(kOptionAllowWebSocket, value);
+            } finally {
+              _pendingSwitchKeys.remove(kOptionAllowWebSocket);
+              if (mounted) {
+                setState(() {});
+              }
+            }
+          },
+        ),
+      );
+    }
+
+    final sectionWidget = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+          child: SettingsSection(
+            title: Text(translate('Network')),
+            tiles: tiles,
           ),
         ),
-      ],
+      ),
     );
+
+    if (!isWeb) {
+      return Column(
+        children: [
+          sectionWidget,
+          futureBuilder(
+            future: bind.mainIsUsingPublicServer(),
+            hasData: (isUsingPublicServer) {
+              if (isUsingPublicServer || outgoingOnly) {
+                return const Offstage();
+              } else {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(maxWidth: _kCardFixedWidth),
+                      child: SettingsSection(
+                        tiles: [
+                          SettingsTile.switchTile(
+                            leading: const Icon(Icons.lan_outlined),
+                            title: Text(translate('Disable UDP')),
+                            description: Text(translate('disable-udp-tip')),
+                            enabled:
+                                !locked && !isOptionFixed(kOptionDisableUdp),
+                            initialValue:
+                                bind.mainGetOptionSync(
+                                  key: kOptionDisableUdp,
+                                ) ==
+                                'Y',
+                            onToggle: (value) async {
+                              await bind.mainSetOption(
+                                key: kOptionDisableUdp,
+                                value: value ? 'Y' : 'N',
+                              );
+                              setState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }
+            },
+          ),
+        ],
+      );
+    }
+
+    return sectionWidget;
   }
 }
 
@@ -2946,87 +3002,180 @@ class _AboutState extends State<_About> {
         final version = data['version'].toString();
         final buildDate = data['buildDate'].toString();
         final fingerprint = data['fingerprint'].toString();
-        const linkStyle = TextStyle(decoration: TextDecoration.underline);
+        final theme = Theme.of(context);
+        final tokens = AppVisual.tokens(context);
+        final scheme = theme.colorScheme;
+        final isDark = theme.brightness == Brightness.dark;
+
         return SingleChildScrollView(
-          child: _Card(
-            title: 'About Camellia Remote',
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 8.0),
-                  SelectionArea(
-                    child: Text(
-                      '${translate('Version')}: $version',
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  SelectionArea(
-                    child: Text(
-                      '${translate('Build Date')}: $buildDate',
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  if (!isWeb)
-                    SelectionArea(
-                      child: Text(
-                        '${translate('Fingerprint')}: $fingerprint',
-                      ).marginSymmetric(vertical: 4.0),
-                    ),
-                  InkWell(
-                    onTap: () {
-                      launchUrlString(
-                        'https://github.com/camellia-computing/remote-client/blob/main/docs/privacy.md',
-                      );
-                    },
-                    child: Text(
-                      translate('Privacy Statement'),
-                      style: linkStyle,
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  InkWell(
-                    onTap: () {
-                      launchUrlString(
-                        'https://github.com/camellia-computing/remote-client',
-                      );
-                    },
-                    child: Text(
-                      translate('Website'),
-                      style: linkStyle,
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  Container(
-                    decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 24,
-                      horizontal: 8,
-                    ),
-                    child: SelectionArea(
-                      child: Row(
+          padding: const EdgeInsets.only(bottom: _kListViewBottomMargin),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: tokens.surface,
+                        borderRadius:
+                            BorderRadius.circular(CamelliaRadius.surface),
+                        border: Border.all(color: tokens.border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: tokens.shadow.withValues(
+                              alpha: isDark ? 0.3 : 0.08,
+                            ),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Copyright © ${DateTime.now().toString().substring(0, 4)} Camellia Computing\n$license',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                                Text(
-                                  translate('Slogan_tip'),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
+                          Container(
+                            width: 64,
+                            height: 64,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  CamelliaColors.indigo,
+                                  CamelliaColors.azure,
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: CamelliaColors.indigo.withValues(
+                                    alpha: 0.35,
                                   ),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
                                 ),
                               ],
+                            ),
+                            child: const Center(
+                              child: Icon(
+                                Icons.desktop_windows_rounded,
+                                color: Colors.white,
+                                size: 32,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            'Camellia Remote',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primary.withValues(
+                                alpha: isDark ? 0.18 : 0.10,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              'v$version',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.primary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            translate('Slogan_tip'),
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: tokens.muted,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ).marginSymmetric(vertical: 4.0),
-                ],
-              ).marginOnly(left: _kContentHMargin),
-            ],
+                    const SizedBox(height: 16),
+                    SettingsSection(
+                      title: Text(translate('About')),
+                      tiles: [
+                        SettingsTile(
+                          leading: const Icon(Icons.info_outline_rounded),
+                          title: Text(translate('Version')),
+                          value: SelectableText(version),
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.calendar_today_outlined),
+                          title: Text(translate('Build Date')),
+                          value: SelectableText(buildDate),
+                        ),
+                        if (!isWeb)
+                          SettingsTile(
+                            leading: const Icon(Icons.fingerprint_rounded),
+                            title: Text(translate('Fingerprint')),
+                            value: SelectableText(
+                              fingerprint,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        SettingsTile(
+                          leading: const Icon(Icons.privacy_tip_outlined),
+                          title: Text(translate('Privacy Statement')),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            size: 18,
+                          ),
+                          onPressed: (_) {
+                            launchUrlString(
+                              'https://github.com/camellia-computing/remote-client/blob/main/docs/privacy.md',
+                            );
+                          },
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.language_rounded),
+                          title: Text(translate('Website')),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            size: 18,
+                          ),
+                          onPressed: (_) {
+                            launchUrlString(
+                              'https://github.com/camellia-computing/remote-client',
+                            );
+                          },
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.copyright_rounded),
+                          title: Text(
+                            'Copyright © ${DateTime.now().year} Camellia Computing',
+                          ),
+                          description: SelectableText(
+                            license,
+                            style: TextStyle(fontSize: 12, color: tokens.muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -3314,7 +3463,7 @@ class _WaylandCardState extends State<WaylandCard> {
       showConfirmMsgBox,
       tip: 'clear_Wayland_screen_selection_tip',
       style: ButtonStyle(
-        backgroundColor: MaterialStateProperty.all<Color>(
+        backgroundColor: WidgetStateProperty.all<Color>(
           Theme.of(context).colorScheme.error.withValues(alpha: 0.75),
         ),
       ),
@@ -3364,7 +3513,7 @@ class _WaylandCardState extends State<WaylandCard> {
           showConfirmMsgBox,
           tip: 'clear-shortcuts-inhibitor-permission-tip',
           style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.all<Color>(
+            backgroundColor: WidgetStateProperty.all<Color>(
               Theme.of(context).colorScheme.error.withValues(alpha: 0.75),
             ),
           ),
@@ -3529,215 +3678,3 @@ class _CountDownButtonState extends State<_CountDownButton> {
     );
   }
 }
-
-//#endregion
-
-//#region dialogs
-
-const String kStoredPasswordSentinel =
-    '\u0000\u0000STORED_PASSWORD\u0000\u0000';
-
-void changeSocks5Proxy() async {
-  var socks = await bind.mainGetSocks();
-
-  String proxy = '';
-  String proxyMsg = '';
-  String username = '';
-  String password = '';
-  if (socks.length == 3) {
-    proxy = socks[0];
-    username = socks[1];
-    password = socks[2];
-  }
-  var proxyController = TextEditingController(text: proxy);
-  var userController = TextEditingController(text: username);
-  var pwdController = TextEditingController(text: password);
-  RxBool obscure = true.obs;
-
-  // proxy settings
-  // The following option is a not real key, it is just used for custom client advanced settings.
-  const String optionProxyUrl = "proxy-url";
-  final isOptFixed = isOptionFixed(optionProxyUrl);
-
-  var isInProgress = false;
-  gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    safeClose() {
-      if (isClosed) return;
-      isClosed = true;
-      proxyController.clear();
-      userController.clear();
-      pwdController.clear();
-      proxyController.dispose();
-      userController.dispose();
-      pwdController.dispose();
-      close();
-    }
-
-    submit() async {
-      if (isInProgress) return;
-      setState(() {
-        proxyMsg = '';
-        isInProgress = true;
-      });
-      cancel() {
-        setState(() {
-          isInProgress = false;
-        });
-      }
-
-      proxy = proxyController.text.trim();
-      username = userController.text.trim();
-      password = pwdController.text.trim();
-
-      if (proxy.isNotEmpty) {
-        String domainPort = proxy;
-        if (domainPort.contains('://')) {
-          domainPort = domainPort.split('://')[1];
-        }
-        proxyMsg = translate(
-          await bind.mainTestIfValidServer(
-            server: domainPort,
-            testWithProxy: false,
-          ),
-        );
-        if (proxyMsg.isEmpty) {
-          // ignore
-        } else {
-          cancel();
-          return;
-        }
-      }
-      await bind.mainSetSocks(
-        proxy: proxy,
-        username: username,
-        password: password,
-      );
-      safeClose();
-    }
-
-    return CustomAlertDialog(
-      title: Text(translate('Socks5/Http(s) Proxy')),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 500),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Row(
-                        children: [
-                          Text(translate('Server')).marginOnly(right: 4),
-                          Tooltip(
-                            waitDuration: Duration(milliseconds: 0),
-                            message: translate("default_proxy_tip"),
-                            child: Icon(
-                              Icons.help_outline_outlined,
-                              size: 16,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.color
-                                  ?.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
-                      labelText: isMobile ? translate('Server') : null,
-                      helperText: isMobile
-                          ? translate("default_proxy_tip")
-                          : null,
-                      helperMaxLines: isMobile ? 3 : null,
-                    ),
-                    controller: proxyController,
-                    autofocus: true,
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Username")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    controller: userController,
-                    decoration: InputDecoration(
-                      labelText: isMobile ? translate('Username') : null,
-                    ),
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Password")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: Obx(
-                    () => TextField(
-                      obscureText: obscure.value,
-                      decoration: InputDecoration(
-                        labelText: isMobile ? translate('Password') : null,
-                        hintText: password == kStoredPasswordSentinel
-                            ? translate('Unchanged')
-                            : null,
-                        suffixIcon: IconButton(
-                          onPressed: () => obscure.value = !obscure.value,
-                          icon: Icon(
-                            obscure.value
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                        ),
-                      ),
-                      controller: pwdController,
-                      enabled: !isOptFixed,
-                      maxLength: bind.mainMaxEncryptLen(),
-                    ).workaroundFreezeLinuxMint(),
-                  ),
-                ),
-              ],
-            ),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress)
-              const LinearProgressIndicator().marginOnly(top: 8),
-          ],
-        ),
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        if (!isOptFixed) dialogButton('OK', onPressed: submit),
-      ],
-      onSubmit: submit,
-      onCancel: safeClose,
-    );
-  });
-}
-
-//#endregion

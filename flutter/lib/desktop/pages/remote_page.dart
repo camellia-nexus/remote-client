@@ -846,18 +846,23 @@ class _RemotePageState extends State<RemotePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-        onWillPop: () async {
-          clientClose(sessionId, _ffi);
-          return false;
-        },
-        child: MultiProvider(providers: [
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        clientClose(sessionId, _ffi);
+      },
+      child: MultiProvider(
+        providers: [
           ChangeNotifierProvider.value(value: _ffi.ffiModel),
           ChangeNotifierProvider.value(value: _ffi.imageModel),
           ChangeNotifierProvider.value(value: _ffi.cursorModel),
           ChangeNotifierProvider.value(value: _ffi.canvasModel),
           ChangeNotifierProvider.value(value: _ffi.recordingModel),
-        ], child: buildBody(context)));
+        ],
+        child: buildBody(context),
+      ),
+    );
   }
 
   void enterView(PointerEnterEvent evt) {

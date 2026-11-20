@@ -10,6 +10,7 @@ import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
 import 'package:camellia_remote_app/ui/credential_controls.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:camellia_remote_app/utils/http_service.dart' as http;
@@ -18,6 +19,147 @@ import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
+
+class ModernDialogHeader extends StatelessWidget {
+  const ModernDialogHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon,
+    this.iconWidget,
+    this.tone = AppTone.brand,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.confirm({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.check_circle_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.success,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.warning({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.warning_amber_rounded,
+    this.iconWidget,
+    this.tone = AppTone.warning,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.error({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.error_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.danger,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.info({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.info_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.info,
+    this.onClose,
+    this.trailing,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final Widget? iconWidget;
+  final AppTone tone;
+  final VoidCallback? onClose;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
+    final toneColor = AppVisual.tone(context, tone);
+    final toneBg = AppVisual.toneContainer(context, tone);
+
+    final Widget badge = iconWidget ??
+        (icon != null
+            ? Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: toneBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: toneColor.withValues(alpha: 0.22),
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Icon(icon, color: toneColor, size: 22),
+                ),
+              )
+            : const SizedBox.shrink());
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (icon != null || iconWidget != null) ...[
+          badge,
+          const SizedBox(width: 14),
+        ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (subtitle != null && subtitle!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle!,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: tokens.muted,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (trailing != null) trailing!,
+        if (onClose != null) ...[
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: onClose,
+            tooltip: translate('Close'),
+            icon: const Icon(Icons.close_rounded, size: 18),
+            splashRadius: 18,
+            style: IconButton.styleFrom(
+              padding: const EdgeInsets.all(4),
+              minimumSize: const Size(28, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -161,12 +303,16 @@ void changeIdDialog() {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Change ID")),
+      title: ModernDialogHeader(
+        title: translate("Change ID"),
+        subtitle: translate("id_change_tip"),
+        icon: Icons.badge_outlined,
+        tone: AppTone.brand,
+        onClose: handleCancel,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(translate("id_change_tip")),
-          const SizedBox(height: 12.0),
           TextField(
             decoration: InputDecoration(
               labelText: translate('Your new ID'),
@@ -247,7 +393,12 @@ void changeWhiteList({Function()? callback}) async {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("IP Whitelisting")),
+      title: ModernDialogHeader(
+        title: translate("IP Whitelisting"),
+        icon: Icons.shield_outlined,
+        tone: AppTone.brand,
+        onClose: safeClose,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -368,7 +519,12 @@ Future<String?> changeDirectAccessPort(
   try {
     await gFFI.dialogManager.show((setState, close, context) {
       return CustomAlertDialog(
-        title: Text(translate("Change Local Port")),
+        title: ModernDialogHeader(
+          title: translate("Change Local Port"),
+          icon: Icons.settings_ethernet_rounded,
+          tone: AppTone.brand,
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -434,7 +590,12 @@ Future<String?> changeAutoDisconnectTimeout(String old) async {
   try {
     await gFFI.dialogManager.show((setState, close, context) {
       return CustomAlertDialog(
-        title: Text(translate("Timeout in minutes")),
+        title: ModernDialogHeader(
+          title: translate("Timeout in minutes"),
+          icon: Icons.timer_outlined,
+          tone: AppTone.brand,
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -868,6 +1029,7 @@ class PasswordWidget extends StatefulWidget {
 class _PasswordWidgetState extends State<PasswordWidget> {
   bool _passwordVisible = false;
   final _focusNode = FocusNode();
+  final _shakeController = GlassShakeController();
   Timer? _timer;
   Timer? _timerReRequestFocus;
 
@@ -896,40 +1058,62 @@ class _PasswordWidgetState extends State<PasswordWidget> {
   }
 
   @override
+  void didUpdateWidget(covariant PasswordWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newError = widget.errorText?.trim() ?? '';
+    final oldError = oldWidget.errorText?.trim() ?? '';
+    if (newError.isNotEmpty && newError != oldError) {
+      _shakeController.shake();
+      final text = widget.controller.text;
+      if (text.isNotEmpty) {
+        widget.controller.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: text.length,
+        );
+      }
+      _focusNode.requestFocus();
+    }
+  }
+
+  @override
   void dispose() {
     _timer?.cancel();
     _timerReRequestFocus?.cancel();
     _focusNode.unfocus();
     _focusNode.dispose();
+    _shakeController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return DialogTextField(
-      title: translate(widget.title ?? DialogTextField.kPasswordTitle),
-      hintText: translate(widget.hintText ?? 'Enter your password'),
-      controller: widget.controller,
-      prefixIcon: DialogTextField.kPasswordIcon,
-      suffixIcon: IconButton(
-        icon: Icon(
-          // Based on passwordVisible state choose the icon
-          _passwordVisible ? Icons.visibility : Icons.visibility_off,
-          color: Theme.of(context).colorScheme.primary,
+    return GlassShakeBox(
+      controller: _shakeController,
+      child: DialogTextField(
+        title: translate(widget.title ?? DialogTextField.kPasswordTitle),
+        hintText: translate(widget.hintText ?? 'Enter your password'),
+        controller: widget.controller,
+        prefixIcon: DialogTextField.kPasswordIcon,
+        suffixIcon: IconButton(
+          icon: Icon(
+            // Based on passwordVisible state choose the icon
+            _passwordVisible ? Icons.visibility : Icons.visibility_off,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          onPressed: () {
+            // Update the state i.e. toggle the state of passwordVisible variable
+            setState(() {
+              _passwordVisible = !_passwordVisible;
+            });
+          },
         ),
-        onPressed: () {
-          // Update the state i.e. toggle the state of passwordVisible variable
-          setState(() {
-            _passwordVisible = !_passwordVisible;
-          });
-        },
+        obscureText: !_passwordVisible,
+        errorText: widget.errorText,
+        focusNode: _focusNode,
+        maxLength: widget.maxLength,
+        autofocus: widget.autoFocus,
+        onChanged: widget.onChanged,
       ),
-      obscureText: !_passwordVisible,
-      errorText: widget.errorText,
-      focusNode: _focusNode,
-      maxLength: widget.maxLength,
-      autofocus: widget.autoFocus,
-      onChanged: widget.onChanged,
     );
   }
 }
@@ -1195,50 +1379,12 @@ _connectDialog(
         );
       }
 
-      final scheme = Theme.of(context).colorScheme;
-      final titleWidget = Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [scheme.primary, scheme.tertiary],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: const Icon(
-              Icons.lock_rounded,
-              color: Colors.white,
-              size: 21,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  translate('Password Required'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  translate('Authenticate to continue the secure session'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+      final titleWidget = ModernDialogHeader(
+        title: translate('Password Required'),
+        subtitle: translate('Authenticate to continue the secure session'),
+        icon: Icons.lock_rounded,
+        tone: AppTone.brand,
+        onClose: cancel,
       );
       final contentWidget = ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 400),
@@ -1705,19 +1851,10 @@ void showRestartRemoteDevice(
 ) async {
   final res = await dialogManager.show<bool>(
     (setState, close, context) => CustomAlertDialog(
-      title: Row(
-        children: [
-          Icon(
-            Icons.warning_rounded,
-            color: AppVisual.tone(context, AppTone.danger),
-            size: 28,
-          ),
-          Flexible(
-            child: Text(
-              translate("Restart remote device"),
-            ).paddingOnly(left: 10),
-          ),
-        ],
+      title: ModernDialogHeader.warning(
+        title: translate("Restart remote device"),
+        tone: AppTone.danger,
+        onClose: () => close(false),
       ),
       content: Text(
         "${translate('Are you sure you want to restart')} \n${pi.username}@${pi.hostname}($id) ?",
@@ -2515,7 +2652,12 @@ void editAbTagDialog(
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Edit Tag")),
+      title: ModernDialogHeader(
+        title: translate("Edit Tag"),
+        icon: Icons.label_outline_rounded,
+        tone: AppTone.brand,
+        onClose: close,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2594,7 +2736,12 @@ void editAbPeerNoteDialog(String id) {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Edit note")),
+      title: ModernDialogHeader(
+        title: translate("Edit note"),
+        icon: Icons.edit_note_rounded,
+        tone: AppTone.brand,
+        onClose: close,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2756,7 +2903,12 @@ void changeBot({Function()? callback}) async {
     ).workaroundFreezeLinuxMint();
 
     return CustomAlertDialog(
-      title: Text(translate("Telegram bot")),
+      title: ModernDialogHeader(
+        title: translate("Telegram bot"),
+        icon: Icons.send_rounded,
+        tone: AppTone.brand,
+        onClose: safeClose,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

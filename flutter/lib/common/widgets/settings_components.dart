@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../common.dart';
 import '../../ui/camellia_design.dart';
 
 /// Local, Material 3 settings primitives.
@@ -24,6 +25,35 @@ class SettingsThemeData {
     required this.tileTextStyle,
   });
 
+  factory SettingsThemeData.adaptive(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tokens = AppVisual.tokens(context);
+    final scheme = Theme.of(context).colorScheme;
+    return SettingsThemeData(
+      settingsListBackground: tokens.page,
+      settingsSectionBackground: tokens.surface,
+      dividerColor: tokens.border,
+      tileHighlightColor:
+          scheme.primary.withValues(alpha: isDark ? 0.16 : 0.08),
+      titleTextColor: scheme.primary,
+      leadingIconsColor: scheme.primary,
+      trailingTextColor: tokens.muted,
+      tileDescriptionTextColor: tokens.muted,
+      settingsTileTextColor: scheme.onSurface,
+      inactiveTitleColor: tokens.muted.withValues(alpha: 0.65),
+      inactiveSubtitleColor: tokens.muted.withValues(alpha: 0.55),
+      inactiveSwitchColor: tokens.muted.withValues(alpha: 0.35),
+      titleTextStyle: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ) ??
+          const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+      tileTextStyle: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ) ??
+          const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+    );
+  }
+
   final Color settingsListBackground;
   final Color settingsSectionBackground;
   final Color dividerColor;
@@ -44,21 +74,22 @@ class SettingsList extends StatelessWidget {
   const SettingsList({
     super.key,
     required this.sections,
-    required this.lightTheme,
-    required this.darkTheme,
+    this.lightTheme,
+    this.darkTheme,
     this.contentPadding = const EdgeInsets.fromLTRB(16, 12, 16, 32),
   });
 
   final List<Widget> sections;
-  final SettingsThemeData lightTheme;
-  final SettingsThemeData darkTheme;
+  final SettingsThemeData? lightTheme;
+  final SettingsThemeData? darkTheme;
   final EdgeInsetsGeometry contentPadding;
 
   @override
   Widget build(BuildContext context) {
+    final adaptive = SettingsThemeData.adaptive(context);
     final settingsTheme = Theme.of(context).brightness == Brightness.dark
-        ? darkTheme
-        : lightTheme;
+        ? (darkTheme ?? adaptive)
+        : (lightTheme ?? adaptive);
     return _SettingsTheme(
       data: settingsTheme,
       child: ColoredBox(
@@ -145,6 +176,15 @@ class CustomSettingsSection extends StatelessWidget {
 
 abstract class AbstractSettingsTile extends StatelessWidget {
   const AbstractSettingsTile({super.key});
+}
+
+class CustomSettingsTile extends AbstractSettingsTile {
+  const CustomSettingsTile({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 typedef SettingsTilePressed = void Function(BuildContext context);
@@ -292,7 +332,7 @@ class _SettingsTileTrailing extends StatelessWidget {
                 ),
               ),
             if (value != null && trailing != null) const SizedBox(width: 8),
-            if (trailing != null) trailing!,
+            ?trailing,
           ],
         ),
       ),
@@ -308,11 +348,8 @@ class _SettingsTheme extends InheritedWidget {
   static SettingsThemeData of(BuildContext context) {
     final inherited = context
         .dependOnInheritedWidgetOfExactType<_SettingsTheme>();
-    assert(
-      inherited != null,
-      'Settings widgets require a SettingsList ancestor.',
-    );
-    return inherited!.data;
+    if (inherited != null) return inherited.data;
+    return SettingsThemeData.adaptive(context);
   }
 
   @override

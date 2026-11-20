@@ -1,6 +1,3 @@
-import 'dart:ui';
-
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'channels.dart';
@@ -148,7 +145,7 @@ class WindowControllerMainImpl extends WindowController {
       'startResizing',
       {
         "windowId": _id,
-        "resizeEdge": describeEnum(subWindowResizeEdge),
+        "resizeEdge": subWindowResizeEdge.name,
         "top": subWindowResizeEdge == SubWindowResizeEdge.top ||
             subWindowResizeEdge == SubWindowResizeEdge.topLeft ||
             subWindowResizeEdge == SubWindowResizeEdge.topRight,
@@ -194,12 +191,12 @@ class WindowControllerMainImpl extends WindowController {
 
   @override
   Future<void> setInitBackgroundColor(Color color) async {
-     final Map<String, dynamic> arguments = {
+    final Map<String, dynamic> arguments = {
       'windowId': _id,
-      'a': color.alpha,
-      'r': color.red,
-      'g': color.green,
-      'b': color.blue,
+      'a': (color.a * 255.0).round() & 0xff,
+      'r': (color.r * 255.0).round() & 0xff,
+      'g': (color.g * 255.0).round() & 0xff,
+      'b': (color.b * 255.0).round() & 0xff,
     };
     await _channel.invokeMethod('setInitBackgroundColor', arguments);
   }

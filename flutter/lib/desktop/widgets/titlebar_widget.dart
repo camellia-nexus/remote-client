@@ -3,6 +3,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../../ui/camellia_design.dart';
 
 const double kDesktopTitleBarHeight = 40;
 
@@ -163,13 +164,8 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
     final title = widget.appName ?? bind.mainGetAppNameSync();
     return Material(
       color: theme.colorScheme.surface,
-      child: Container(
+      child: SizedBox(
         height: kDesktopTitleBarHeight,
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-          ),
-        ),
         child: Row(
           children: [
             if (isMacOS) const SizedBox(width: 78),
@@ -202,7 +198,8 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
             if (_showCaptionButtons) ...[
               _CaptionButton(
                 tooltip: widget.labels.minimize,
-                icon: IconFont.min,
+                icon: Icons.remove_rounded,
+                iconSize: 16,
                 foreground: foreground,
                 onPressed: widget.controller.minimize,
               ),
@@ -210,13 +207,17 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
                 tooltip: _isMaximized
                     ? widget.labels.restore
                     : widget.labels.maximize,
-                icon: _isMaximized ? IconFont.restore : IconFont.max,
+                icon: _isMaximized
+                    ? Icons.filter_none_rounded
+                    : Icons.crop_square_rounded,
+                iconSize: _isMaximized ? 12 : 14,
                 foreground: foreground,
                 onPressed: _toggleMaximized,
               ),
               _CaptionButton(
                 tooltip: widget.labels.close,
-                icon: IconFont.close,
+                icon: Icons.close_rounded,
+                iconSize: 16,
                 foreground: foreground,
                 destructive: true,
                 onPressed: widget.controller.close,
@@ -268,6 +269,7 @@ class _CaptionButton extends StatefulWidget {
     required this.foreground,
     required this.onPressed,
     this.destructive = false,
+    this.iconSize = 14,
   });
 
   final String tooltip;
@@ -275,6 +277,7 @@ class _CaptionButton extends StatefulWidget {
   final Color foreground;
   final Future<void> Function() onPressed;
   final bool destructive;
+  final double iconSize;
 
   @override
   State<_CaptionButton> createState() => _CaptionButtonState();
@@ -282,34 +285,61 @@ class _CaptionButton extends StatefulWidget {
 
 class _CaptionButtonState extends State<_CaptionButton> {
   bool _hovered = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final background = _hovered
-        ? widget.destructive
-              ? const Color(0xFFC42B1C)
-              : scheme.onSurface.withValues(alpha: 0.08)
-        : Colors.transparent;
-    final foreground = _hovered && widget.destructive
+    final isDestructive = widget.destructive;
+    final Color backgroundColor;
+    if (_pressed) {
+      backgroundColor = isDestructive
+          ? const Color(0xFFB02619)
+          : scheme.onSurface.withValues(alpha: 0.14);
+    } else if (_hovered) {
+      backgroundColor = isDestructive
+          ? const Color(0xFFC42B1C)
+          : scheme.onSurface.withValues(alpha: 0.08);
+    } else {
+      backgroundColor = Colors.transparent;
+    }
+
+    final Color foregroundColor = (_hovered || _pressed) && isDestructive
         ? Colors.white
         : widget.foreground;
+
     return Semantics(
       button: true,
       label: widget.tooltip,
       child: Tooltip(
         message: widget.tooltip,
         child: MouseRegion(
+          cursor: SystemMouseCursors.click,
           onEnter: (_) => setState(() => _hovered = true),
-          onExit: (_) => setState(() => _hovered = false),
-          child: Material(
-            color: background,
-            child: InkWell(
-              onTap: widget.onPressed,
-              child: SizedBox(
-                width: 46,
-                height: kDesktopTitleBarHeight,
-                child: Icon(widget.icon, size: 12, color: foreground),
+          onExit: (_) => setState(() {
+            _hovered = false;
+            _pressed = false;
+          }),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (_) => setState(() => _pressed = true),
+            onTapUp: (_) => setState(() => _pressed = false),
+            onTapCancel: () => setState(() => _pressed = false),
+            onTap: widget.onPressed,
+            child: AnimatedContainer(
+              duration: CamelliaMotion.hover,
+              curve: Curves.easeOutCubic,
+              width: 46,
+              height: kDesktopTitleBarHeight,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: backgroundColor,
+                borderRadius: BorderRadius.circular(CamelliaRadius.control / 2),
+              ),
+              child: Icon(
+                widget.icon,
+                size: widget.iconSize,
+                color: foregroundColor,
               ),
             ),
           ),

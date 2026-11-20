@@ -8,10 +8,10 @@ import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 
 const double _kColumn1Width = 30;
-const double _kColumn4Width = 100;
 const double _kRowHeight = 60;
 const double _kTextLeftMargin = 20;
 
@@ -138,72 +138,57 @@ class _PortForwardPageState extends State<PortForwardPage>
   }
 
   buildPrompt(BuildContext context) {
+    final glass = CamelliaGlassTokens.of(context);
     return Obx(
       () => Offstage(
         offstage: pfs.isEmpty && !widget.isRDP,
-        child: Container(
-          height: 45,
-          color: CamelliaColors.aquaStrong,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                translate('Listening ...'),
-                style: const TextStyle(fontSize: 16, color: Colors.white),
-              ),
-              Text(
-                translate('not_close_tcp_tip'),
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFFDDDDDD),
-                  height: 1.2,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: GlassSurface(
+            layer: CamelliaGlassLayer.floating,
+            tintColor: glass.statusEncrypted.withValues(
+              alpha: Theme.of(context).brightness == Brightness.dark
+                  ? 0.16
+                  : 0.10,
+            ),
+            showShadow: false,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                TelemetryPill(
+                  label: translate('Listening ...'),
+                  statusColor: glass.statusOnline,
+                  icon: Icons.lan_rounded,
+                  compact: true,
                 ),
-              ),
-            ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    translate('not_close_tcp_tip'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ).marginOnly(bottom: 8),
+        ),
       ),
     );
   }
 
   buildTunnel(BuildContext context) {
-    text(String label) => Expanded(
-      child: Text(translate(label)).marginOnly(left: _kTextLeftMargin),
-    );
-
-    return Theme(
-      data: Theme.of(
-        context,
-      ).copyWith(colorScheme: Theme.of(context).colorScheme),
-      child: Obx(
-        () => ListView.builder(
-          controller: ScrollController(),
-          itemCount: pfs.length + 2,
-          itemBuilder: ((context, index) {
-            if (index == 0) {
-              return Container(
-                height: 25,
-                color: Theme.of(context).scaffoldBackgroundColor,
-                child: Row(
-                  children: [
-                    text('Local Port'),
-                    const SizedBox(width: _kColumn1Width),
-                    text('Remote Host'),
-                    text('Remote Port'),
-                    SizedBox(
-                      width: _kColumn4Width,
-                      child: Text(translate('Action')),
-                    ),
-                  ],
-                ),
-              );
-            } else if (index == 1) {
-              return buildTunnelAddRow(context);
-            } else {
-              return buildTunnelDataRow(context, pfs[index - 2], index - 2);
-            }
-          }),
-        ),
+    return Obx(
+      () => ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+        itemCount: pfs.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return buildTunnelAddRow(context);
+          }
+          return buildTunnelDataRow(context, pfs[index - 1], index - 1);
+        },
       ),
     );
   }
@@ -217,57 +202,119 @@ class _PortForwardPageState extends State<PortForwardPage>
       ),
     ];
 
-    return Container(
-      height: _kRowHeight,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-      ),
-      child: Row(
-        children: [
-          buildTunnelInputCell(
-            context,
-            controller: localPortController,
-            inputFormatters: portInputFormatter,
-          ),
-          const SizedBox(
-            width: _kColumn1Width,
-            child: Icon(Icons.arrow_forward_sharp),
-          ),
-          buildTunnelInputCell(
-            context,
-            controller: remoteHostController,
-            hint: 'localhost',
-          ),
-          buildTunnelInputCell(
-            context,
-            controller: remotePortController,
-            inputFormatters: portInputFormatter,
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              int? localPort = int.tryParse(localPortController.text);
-              int? remotePort = int.tryParse(remotePortController.text);
-              if (localPort != null &&
-                  remotePort != null &&
-                  (remoteHostController.text.isEmpty ||
-                      remoteHostController.text.trim().isNotEmpty)) {
-                await bind.sessionAddPortForward(
-                  sessionId: _ffi.sessionId,
-                  localPort: localPort,
-                  remoteHost: remoteHostController.text.trim().isEmpty
-                      ? 'localhost'
-                      : remoteHostController.text.trim(),
-                  remotePort: remotePort,
-                );
-                localPortController.clear();
-                remoteHostController.clear();
-                remotePortController.clear();
-                refreshTunnelConfig();
-              }
-            },
-            child: Text(translate('Add')),
-          ).marginSymmetric(horizontal: 10),
-        ],
+    Future<void> onAddTunnel() async {
+      final int? localPort = int.tryParse(localPortController.text.trim());
+      final int? remotePort = int.tryParse(remotePortController.text.trim());
+      if (localPort == null ||
+          remotePort == null ||
+          localPort < 1 ||
+          localPort > 65535 ||
+          remotePort < 1 ||
+          remotePort > 65535) {
+        showToast(translate('Invalid port'));
+        return;
+      }
+      final remoteHost = remoteHostController.text.trim().isEmpty
+          ? 'localhost'
+          : remoteHostController.text.trim();
+      await bind.sessionAddPortForward(
+        sessionId: _ffi.sessionId,
+        localPort: localPort,
+        remoteHost: remoteHost,
+        remotePort: remotePort,
+      );
+      localPortController.clear();
+      remoteHostController.clear();
+      remotePortController.clear();
+      refreshTunnelConfig();
+    }
+
+    final addButton = GlassButton(
+      variant: GlassButtonVariant.primary,
+      icon: const Icon(Icons.add_rounded, size: 18),
+      onPressed: onAddTunnel,
+      child: Text(translate('Add')),
+    );
+
+    return GlassCard(
+      margin: const EdgeInsets.only(bottom: 14),
+      title: translate('Add'),
+      subtitle:
+          '${translate('Local Port')} → ${translate('Remote Host')}:${translate('Remote Port')}',
+      accent: CamelliaColors.aqua,
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 560) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    buildTunnelInputCell(
+                      context,
+                      controller: localPortController,
+                      inputFormatters: portInputFormatter,
+                      label: translate('Local Port'),
+                      hint: '8080',
+                    ),
+                    buildTunnelInputCell(
+                      context,
+                      controller: remotePortController,
+                      inputFormatters: portInputFormatter,
+                      label: translate('Remote Port'),
+                      hint: '80',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    buildTunnelInputCell(
+                      context,
+                      controller: remoteHostController,
+                      label: translate('Remote Host'),
+                      hint: 'localhost',
+                    ),
+                    const SizedBox(width: 8),
+                    addButton,
+                  ],
+                ),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              buildTunnelInputCell(
+                context,
+                controller: localPortController,
+                inputFormatters: portInputFormatter,
+                label: translate('Local Port'),
+                hint: '8080',
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Icon(Icons.arrow_forward_rounded, size: 20),
+              ),
+              buildTunnelInputCell(
+                context,
+                controller: remoteHostController,
+                label: translate('Remote Host'),
+                hint: 'localhost',
+              ),
+              buildTunnelInputCell(
+                context,
+                controller: remotePortController,
+                inputFormatters: portInputFormatter,
+                label: translate('Remote Port'),
+                hint: '80',
+              ),
+              const SizedBox(width: 8),
+              addButton,
+            ],
+          );
+        },
       ),
     );
   }
@@ -276,55 +323,126 @@ class _PortForwardPageState extends State<PortForwardPage>
     BuildContext context, {
     required TextEditingController controller,
     List<TextInputFormatter>? inputFormatters,
+    String? label,
     String? hint,
   }) {
     return Expanded(
       child: Padding(
-        padding: const EdgeInsets.all(10.0),
+        padding: const EdgeInsets.symmetric(horizontal: 6),
         child: TextField(
           controller: controller,
           inputFormatters: inputFormatters,
-          decoration: InputDecoration(hintText: hint),
+          style: CamelliaTypography.tabular(
+            Theme.of(context).textTheme.bodyMedium,
+          ),
+          decoration: InputDecoration(labelText: label, hintText: hint),
         ).workaroundFreezeLinuxMint(),
       ),
     );
   }
 
   Widget buildTunnelDataRow(BuildContext context, _PortForward pf, int index) {
-    text(String label) => Expanded(
-      child: Text(
-        label,
-        style: const TextStyle(fontSize: 20),
-      ).marginOnly(left: _kTextLeftMargin),
-    );
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
 
-    return Container(
-      height: _kRowHeight,
-      decoration: BoxDecoration(
-        color: index % 2 == 0
-            ? MyTheme.currentThemeMode() == ThemeMode.dark
-                  ? const Color(0xFF202020)
-                  : const Color(0xFFF4F5F6)
-            : Theme.of(context).colorScheme.surface,
-      ),
+    Widget endpointBadge(String title, String value, IconData icon, Color tone) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppVisual.inset(context).withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            border: Border.all(
+              color: tone.withValues(alpha: 0.28),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 17, color: tone),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall,
+                    ),
+                    Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: CamelliaTypography.tabular(
+                        theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return GlassSurface(
+      layer: CamelliaGlassLayer.floating,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
-          text(pf.localPort.toString()),
-          const SizedBox(width: _kColumn1Width),
-          text(pf.remoteHost),
-          text(pf.remotePort.toString()),
-          SizedBox(
-            width: _kColumn4Width,
-            child: IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () async {
-                await bind.sessionRemovePortForward(
-                  sessionId: _ffi.sessionId,
-                  localPort: pf.localPort,
-                );
-                refreshTunnelConfig();
-              },
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: glass.statusOnline,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: glass.statusOnline.withValues(alpha: 0.5),
+                  blurRadius: 6,
+                ),
+              ],
             ),
+          ),
+          const SizedBox(width: 12),
+          endpointBadge(
+            translate('Local Port'),
+            ':${pf.localPort}',
+            Icons.laptop_rounded,
+            CamelliaColors.indigo,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Icon(
+              Icons.double_arrow_rounded,
+              size: 18,
+              color: glass.statusEncrypted,
+            ),
+          ),
+          endpointBadge(
+            translate('Remote Host'),
+            '${pf.remoteHost}:${pf.remotePort}',
+            Icons.dns_rounded,
+            glass.statusEncrypted,
+          ),
+          const SizedBox(width: 12),
+          GlassIconButton(
+            icon: Icons.close_rounded,
+            tooltip: translate('Remove'),
+            accentColor: glass.statusAlert,
+            onPressed: () async {
+              await bind.sessionRemovePortForward(
+                sessionId: _ffi.sessionId,
+                localPort: pf.localPort,
+              );
+              refreshTunnelConfig();
+            },
           ),
         ],
       ),

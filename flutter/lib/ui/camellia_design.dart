@@ -1,4 +1,7 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 
 enum CamelliaLanguage { english, simplifiedChinese, traditionalChinese }
 
@@ -41,6 +44,11 @@ abstract final class CamelliaTypography {
       language == CamelliaLanguage.traditionalChinese
       ? traditionalFamily
       : simplifiedFamily;
+
+  /// Enforces tabular numerals (`tabular-nums`) for device IDs, passcodes,
+  /// live telemetry (ms / FPS / Mbps), and file transfer progress counters.
+  static TextStyle tabular(TextStyle? base) => (base ?? const TextStyle())
+      .copyWith(fontFeatures: const <FontFeature>[FontFeature.tabularFigures()]);
 }
 
 abstract final class CamelliaColors {
@@ -57,6 +65,18 @@ abstract final class CamelliaColors {
   static const sun = Color(0xFFF0A202);
   static const sunStrong = Color(0xFF9A6200);
   static const leaf = Color(0xFF16A36A);
+
+  // Remote-desktop semantic status tokens (WCAG AA+ balanced for glass overlays)
+  static const statusOnlineLight = Color(0xFF0D8A5A);
+  static const statusOnlineDark = Color(0xFF34D399);
+  static const statusConnectingLight = Color(0xFF0B74E5);
+  static const statusConnectingDark = Color(0xFF56B4FF);
+  static const statusHighLatencyLight = Color(0xFFB46900);
+  static const statusHighLatencyDark = Color(0xFFFBBF24);
+  static const statusEncryptedLight = Color(0xFF087F73);
+  static const statusEncryptedDark = Color(0xFF2DD4BF);
+  static const statusAlertLight = Color(0xFFC5221F);
+  static const statusAlertDark = Color(0xFFFF6B6B);
 
   static const portalBlue = Color(0xFF1BA7FF);
   static const portalIndigo = Color(0xFF6558F5);
@@ -84,8 +104,250 @@ abstract final class CamelliaColors {
   static const darkText = Color(0xFFEDF4FF);
   static const darkMuted = Color(0xFF9AAAC2);
 
+  // OLED Pure Black (Midnight) surface ramp
+  static const midnightCanvas = Color(0xFF000000);
+  static const midnightSurface = Color(0xFF090C12);
+  static const midnightInset = Color(0xFF111622);
+  static const midnightRaised = Color(0xFF171E2E);
+  static const midnightBorder = Color(0xFF263147);
+  static const midnightText = Color(0xFFF2F6FF);
+  static const midnightMuted = Color(0xFF96A5BE);
+
   static const lightAccentWash = indigoSoft;
   static const darkAccentWash = Color(0xFF29264F);
+  static const midnightAccentWash = Color(0xFF1F1C3D);
+}
+
+/// Four-tier Soft Frosted Glass / Liquid Depth hierarchy.
+enum CamelliaGlassLayer { canvas, sidebar, floating, modal }
+
+/// Soft Frosted Glass material & specular edge tokens registered via [ThemeExtension].
+class CamelliaGlassTokens extends ThemeExtension<CamelliaGlassTokens> {
+  const CamelliaGlassTokens({
+    required this.isMidnight,
+    required this.sidebarTint,
+    required this.floatingTint,
+    required this.modalTint,
+    required this.sidebarBlur,
+    required this.floatingBlur,
+    required this.modalBlur,
+    required this.specularTop,
+    required this.specularBottom,
+    required this.ambientShadow,
+    required this.elevatedShadow,
+    required this.hoverOverlay,
+    required this.focusGlow,
+    required this.statusOnline,
+    required this.statusConnecting,
+    required this.statusHighLatency,
+    required this.statusEncrypted,
+    required this.statusAlert,
+  });
+
+  final bool isMidnight;
+  final Color sidebarTint;
+  final Color floatingTint;
+  final Color modalTint;
+  final double sidebarBlur;
+  final double floatingBlur;
+  final double modalBlur;
+  final Color specularTop;
+  final Color specularBottom;
+  final Color ambientShadow;
+  final Color elevatedShadow;
+  final Color hoverOverlay;
+  final Color focusGlow;
+  final Color statusOnline;
+  final Color statusConnecting;
+  final Color statusHighLatency;
+  final Color statusEncrypted;
+  final Color statusAlert;
+
+  static const light = CamelliaGlassTokens(
+    isMidnight: false,
+    sidebarTint: Color(0xCCFFFFFF),
+    floatingTint: Color(0xD9FCFDFF),
+    modalTint: Color(0xE8FFFFFF),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0xE6FFFFFF),
+    specularBottom: Color(0x47B8C8DF),
+    ambientShadow: Color(0x14172033),
+    elevatedShadow: Color(0x26172033),
+    hoverOverlay: Color(0x126558F5),
+    focusGlow: Color(0x401B8FFF),
+    statusOnline: CamelliaColors.statusOnlineLight,
+    statusConnecting: CamelliaColors.statusConnectingLight,
+    statusHighLatency: CamelliaColors.statusHighLatencyLight,
+    statusEncrypted: CamelliaColors.statusEncryptedLight,
+    statusAlert: CamelliaColors.statusAlertLight,
+  );
+
+  static const dark = CamelliaGlassTokens(
+    isMidnight: false,
+    sidebarTint: Color(0xB8111A2B),
+    floatingTint: Color(0xC7162238),
+    modalTint: Color(0xDE1B2842),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0x45FFFFFF),
+    specularBottom: Color(0x14FFFFFF),
+    ambientShadow: Color(0x52000000),
+    elevatedShadow: Color(0x73000000),
+    hoverOverlay: Color(0x18FFFFFF),
+    focusGlow: Color(0x5256B4FF),
+    statusOnline: CamelliaColors.statusOnlineDark,
+    statusConnecting: CamelliaColors.statusConnectingDark,
+    statusHighLatency: CamelliaColors.statusHighLatencyDark,
+    statusEncrypted: CamelliaColors.statusEncryptedDark,
+    statusAlert: CamelliaColors.statusAlertDark,
+  );
+
+  static const midnight = CamelliaGlassTokens(
+    isMidnight: true,
+    sidebarTint: Color(0xCC070A10),
+    floatingTint: Color(0xD90C111C),
+    modalTint: Color(0xEB111726),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0x3DFFFFFF),
+    specularBottom: Color(0x10FFFFFF),
+    ambientShadow: Color(0x80000000),
+    elevatedShadow: Color(0xA6000000),
+    hoverOverlay: Color(0x1AFFFFFF),
+    focusGlow: Color(0x5A56B4FF),
+    statusOnline: CamelliaColors.statusOnlineDark,
+    statusConnecting: CamelliaColors.statusConnectingDark,
+    statusHighLatency: CamelliaColors.statusHighLatencyDark,
+    statusEncrypted: CamelliaColors.statusEncryptedDark,
+    statusAlert: CamelliaColors.statusAlertDark,
+  );
+
+  static CamelliaGlassTokens of(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<CamelliaGlassTokens>() ??
+        (theme.brightness == Brightness.dark ? dark : light);
+  }
+
+  Color tintFor(CamelliaGlassLayer layer) => switch (layer) {
+    CamelliaGlassLayer.canvas => sidebarTint,
+    CamelliaGlassLayer.sidebar => sidebarTint,
+    CamelliaGlassLayer.floating => floatingTint,
+    CamelliaGlassLayer.modal => modalTint,
+  };
+
+  double blurFor(CamelliaGlassLayer layer) => switch (layer) {
+    CamelliaGlassLayer.canvas => 0,
+    CamelliaGlassLayer.sidebar => sidebarBlur,
+    CamelliaGlassLayer.floating => floatingBlur,
+    CamelliaGlassLayer.modal => modalBlur,
+  };
+
+  @override
+  CamelliaGlassTokens copyWith({
+    bool? isMidnight,
+    Color? sidebarTint,
+    Color? floatingTint,
+    Color? modalTint,
+    double? sidebarBlur,
+    double? floatingBlur,
+    double? modalBlur,
+    Color? specularTop,
+    Color? specularBottom,
+    Color? ambientShadow,
+    Color? elevatedShadow,
+    Color? hoverOverlay,
+    Color? focusGlow,
+    Color? statusOnline,
+    Color? statusConnecting,
+    Color? statusHighLatency,
+    Color? statusEncrypted,
+    Color? statusAlert,
+  }) {
+    return CamelliaGlassTokens(
+      isMidnight: isMidnight ?? this.isMidnight,
+      sidebarTint: sidebarTint ?? this.sidebarTint,
+      floatingTint: floatingTint ?? this.floatingTint,
+      modalTint: modalTint ?? this.modalTint,
+      sidebarBlur: sidebarBlur ?? this.sidebarBlur,
+      floatingBlur: floatingBlur ?? this.floatingBlur,
+      modalBlur: modalBlur ?? this.modalBlur,
+      specularTop: specularTop ?? this.specularTop,
+      specularBottom: specularBottom ?? this.specularBottom,
+      ambientShadow: ambientShadow ?? this.ambientShadow,
+      elevatedShadow: elevatedShadow ?? this.elevatedShadow,
+      hoverOverlay: hoverOverlay ?? this.hoverOverlay,
+      focusGlow: focusGlow ?? this.focusGlow,
+      statusOnline: statusOnline ?? this.statusOnline,
+      statusConnecting: statusConnecting ?? this.statusConnecting,
+      statusHighLatency: statusHighLatency ?? this.statusHighLatency,
+      statusEncrypted: statusEncrypted ?? this.statusEncrypted,
+      statusAlert: statusAlert ?? this.statusAlert,
+    );
+  }
+
+  @override
+  CamelliaGlassTokens lerp(
+    ThemeExtension<CamelliaGlassTokens>? other,
+    double t,
+  ) {
+    if (other is! CamelliaGlassTokens) return this;
+    return CamelliaGlassTokens(
+      isMidnight: t < 0.5 ? isMidnight : other.isMidnight,
+      sidebarTint: Color.lerp(sidebarTint, other.sidebarTint, t)!,
+      floatingTint: Color.lerp(floatingTint, other.floatingTint, t)!,
+      modalTint: Color.lerp(modalTint, other.modalTint, t)!,
+      sidebarBlur: lerpDouble(sidebarBlur, other.sidebarBlur, t)!,
+      floatingBlur: lerpDouble(floatingBlur, other.floatingBlur, t)!,
+      modalBlur: lerpDouble(modalBlur, other.modalBlur, t)!,
+      specularTop: Color.lerp(specularTop, other.specularTop, t)!,
+      specularBottom: Color.lerp(specularBottom, other.specularBottom, t)!,
+      ambientShadow: Color.lerp(ambientShadow, other.ambientShadow, t)!,
+      elevatedShadow: Color.lerp(elevatedShadow, other.elevatedShadow, t)!,
+      hoverOverlay: Color.lerp(hoverOverlay, other.hoverOverlay, t)!,
+      focusGlow: Color.lerp(focusGlow, other.focusGlow, t)!,
+      statusOnline: Color.lerp(statusOnline, other.statusOnline, t)!,
+      statusConnecting: Color.lerp(
+        statusConnecting,
+        other.statusConnecting,
+        t,
+      )!,
+      statusHighLatency: Color.lerp(
+        statusHighLatency,
+        other.statusHighLatency,
+        t,
+      )!,
+      statusEncrypted: Color.lerp(statusEncrypted, other.statusEncrypted, t)!,
+      statusAlert: Color.lerp(statusAlert, other.statusAlert, t)!,
+    );
+  }
+}
+
+/// Physics-damped spring curve adapter for tactile Apple-like motion.
+class CamelliaSpringCurve extends Curve {
+  const CamelliaSpringCurve({
+    this.mass = 1.0,
+    this.stiffness = 380.0,
+    this.damping = 28.0,
+  });
+
+  final double mass;
+  final double stiffness;
+  final double damping;
+
+  @override
+  double transformInternal(double t) {
+    final simulation = SpringSimulation(
+      SpringDescription(mass: mass, stiffness: stiffness, damping: damping),
+      0.0,
+      1.0,
+      0.0,
+    );
+    return simulation.x(t * 0.55).clamp(0.0, 1.08);
+  }
 }
 
 abstract final class CamelliaSpace {
@@ -102,52 +364,105 @@ abstract final class CamelliaRadius {
   static const control = 10.0;
   static const surface = 14.0;
   static const sheet = 18.0;
+  static const pill = 999.0;
   static const status = 999.0;
 }
 
 abstract final class CamelliaMotion {
   static const hover = Duration(milliseconds: 120);
   static const feedback = Duration(milliseconds: 160);
-  static const state = Duration(milliseconds: 200);
-  static const content = Duration(milliseconds: 220);
-  static const modal = Duration(milliseconds: 260);
-  static const route = Duration(milliseconds: 280);
+  static const state = Duration(milliseconds: 220);
+  static const content = Duration(milliseconds: 240);
+  static const modal = Duration(milliseconds: 280);
+  static const route = Duration(milliseconds: 300);
   static const enter = Curves.easeOutCubic;
   static const exit = Curves.easeInCubic;
   static const standard = Curves.easeInOutCubic;
+  static const springSnappy = CamelliaSpringCurve(
+    stiffness: 460.0,
+    damping: 32.0,
+  );
+  static const springGentle = CamelliaSpringCurve(
+    stiffness: 300.0,
+    damping: 26.0,
+  );
+  static const springBouncy = CamelliaSpringCurve(
+    stiffness: 380.0,
+    damping: 20.0,
+  );
+
+  /// Honors OS Reduce Motion preference by degrading animations to instant fade.
+  static bool reduceMotion(BuildContext context) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+  static Duration resolve(BuildContext context, Duration normal) =>
+      reduceMotion(context) ? Duration.zero : normal;
 }
 
 abstract final class CamelliaTheme {
   static ThemeData build({
     required Brightness brightness,
     required bool desktopDensity,
+    bool oledMidnight = false,
     String fontFamily = CamelliaTypography.simplifiedFamily,
     List<String> fontFamilyFallback = CamelliaTypography.systemFontFallbacks,
     List<ThemeExtension<dynamic>> extensions = const [],
   }) {
     final dark = brightness == Brightness.dark;
-    final canvas = dark
+    final midnight = dark && oledMidnight;
+    final canvas = midnight
+        ? CamelliaColors.midnightCanvas
+        : dark
         ? CamelliaColors.darkCanvas
         : CamelliaColors.lightCanvas;
-    final surface = dark
+    final surface = midnight
+        ? CamelliaColors.midnightSurface
+        : dark
         ? CamelliaColors.darkSurface
         : CamelliaColors.lightSurface;
-    final inset = dark ? CamelliaColors.darkInset : CamelliaColors.lightInset;
-    final raised = dark
+    final inset = midnight
+        ? CamelliaColors.midnightInset
+        : dark
+        ? CamelliaColors.darkInset
+        : CamelliaColors.lightInset;
+    final raised = midnight
+        ? CamelliaColors.midnightRaised
+        : dark
         ? CamelliaColors.darkRaised
         : CamelliaColors.lightRaised;
-    final border = dark
+    final border = midnight
+        ? CamelliaColors.midnightBorder
+        : dark
         ? CamelliaColors.darkBorder
         : CamelliaColors.lightBorder;
-    final text = dark ? CamelliaColors.darkText : CamelliaColors.lightText;
-    final muted = dark ? CamelliaColors.darkMuted : CamelliaColors.lightMuted;
+    final text = midnight
+        ? CamelliaColors.midnightText
+        : dark
+        ? CamelliaColors.darkText
+        : CamelliaColors.lightText;
+    final muted = midnight
+        ? CamelliaColors.midnightMuted
+        : dark
+        ? CamelliaColors.darkMuted
+        : CamelliaColors.lightMuted;
     final primary = dark ? const Color(0xFFAAA7FF) : CamelliaColors.indigo;
-    final primaryContainer = dark
+    final primaryContainer = midnight
+        ? CamelliaColors.midnightAccentWash
+        : dark
         ? CamelliaColors.darkAccentWash
         : CamelliaColors.lightAccentWash;
     final onPrimaryContainer = dark
         ? const Color(0xFFE4E2FF)
         : const Color(0xFF292274);
+    final glassTokens = midnight
+        ? CamelliaGlassTokens.midnight
+        : dark
+        ? CamelliaGlassTokens.dark
+        : CamelliaGlassTokens.light;
+    final mergedExtensions = List<ThemeExtension<dynamic>>.of(extensions);
+    if (!mergedExtensions.any((e) => e is CamelliaGlassTokens)) {
+      mergedExtensions.insert(0, glassTokens);
+    }
     final scheme =
         ColorScheme.fromSeed(
           seedColor: CamelliaColors.indigo,
@@ -535,7 +850,7 @@ abstract final class CamelliaTheme {
           return muted.withValues(alpha: 0.55);
         }),
       ),
-      extensions: extensions,
+      extensions: mergedExtensions,
     );
   }
 }
@@ -550,37 +865,95 @@ class CamelliaBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            theme.scaffoldBackgroundColor,
-            Color.alphaBlend(
-              (dark ? CamelliaColors.indigo : CamelliaColors.azure).withValues(
-                alpha: dark ? 0.16 : 0.065,
-              ),
-              theme.scaffoldBackgroundColor,
-            ),
-            Color.alphaBlend(
-              (dark ? CamelliaColors.azure : CamelliaColors.indigo).withValues(
-                alpha: dark ? 0.10 : 0.04,
-              ),
-              theme.scaffoldBackgroundColor,
-            ),
-            if (dark)
-              Color.alphaBlend(
-                CamelliaColors.aqua.withValues(alpha: 0.045),
-                theme.scaffoldBackgroundColor,
-              ),
-          ],
-          stops: dark ? const [0, 0.36, 0.72, 1] : const [0, 0.5, 1],
+    final glass = CamelliaGlassTokens.of(context);
+    if (glass.isMidnight) {
+      return ColoredBox(
+        color: CamelliaColors.midnightCanvas,
+        child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+      );
+    }
+    return RepaintBoundary(
+      child: CustomPaint(
+        painter: _AmbientMeshPainter(
+          baseColor: theme.scaffoldBackgroundColor,
+          dark: dark,
         ),
+        child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
       ),
-      child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
     );
   }
+}
+
+class _AmbientMeshPainter extends CustomPainter {
+  const _AmbientMeshPainter({required this.baseColor, required this.dark});
+
+  final Color baseColor;
+  final bool dark;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final basePaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          baseColor,
+          Color.alphaBlend(
+            (dark ? CamelliaColors.indigo : CamelliaColors.azure).withValues(
+              alpha: dark ? 0.14 : 0.055,
+            ),
+            baseColor,
+          ),
+          Color.alphaBlend(
+            (dark ? CamelliaColors.azure : CamelliaColors.indigo).withValues(
+              alpha: dark ? 0.09 : 0.035,
+            ),
+            baseColor,
+          ),
+          if (dark)
+            Color.alphaBlend(
+              CamelliaColors.aqua.withValues(alpha: 0.045),
+              baseColor,
+            ),
+        ],
+        stops: dark ? const [0, 0.36, 0.72, 1] : const [0, 0.5, 1],
+      ).createShader(rect);
+    canvas.drawRect(rect, basePaint);
+
+    // Restrained low-power radial mesh glow orbs giving frosted glass real depth.
+    final maxDim = size.longestSide.clamp(320.0, 1800.0);
+    void paintOrb(Offset center, double radius, Color color, double alpha) {
+      final orbPaint = Paint()
+        ..shader = RadialGradient(
+          colors: [color.withValues(alpha: alpha), color.withValues(alpha: 0)],
+        ).createShader(Rect.fromCircle(center: center, radius: radius));
+      canvas.drawCircle(center, radius, orbPaint);
+    }
+
+    paintOrb(
+      Offset(size.width * 0.14, size.height * 0.12),
+      maxDim * 0.44,
+      CamelliaColors.indigo,
+      dark ? 0.13 : 0.07,
+    );
+    paintOrb(
+      Offset(size.width * 0.86, size.height * 0.18),
+      maxDim * 0.38,
+      CamelliaColors.azure,
+      dark ? 0.10 : 0.055,
+    );
+    paintOrb(
+      Offset(size.width * 0.72, size.height * 0.88),
+      maxDim * 0.40,
+      CamelliaColors.aqua,
+      dark ? 0.07 : 0.045,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AmbientMeshPainter oldDelegate) =>
+      oldDelegate.baseColor != baseColor || oldDelegate.dark != dark;
 }
 
 class CamelliaPageHeader extends StatelessWidget {

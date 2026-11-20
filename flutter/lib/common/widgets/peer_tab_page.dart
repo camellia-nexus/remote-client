@@ -558,8 +558,8 @@ class _PeerTabPageState extends State<PeerTabPage>
           .map(
             (entry) => entry.build(
               context,
-              const MenuConfig(
-                commonColor: MyTheme.accent,
+              MenuConfig(
+                commonColor: Theme.of(context).colorScheme.primary,
                 height: 20.0,
                 dividerHeight: 12.0,
               ),
@@ -809,7 +809,7 @@ class _PeerTabPageState extends State<PeerTabPage>
 }
 
 class PeerSearchBar extends StatefulWidget {
-  const PeerSearchBar({Key? key, this.onFocusChanged}) : super(key: key);
+  const PeerSearchBar({super.key, this.onFocusChanged});
 
   final ValueChanged<bool>? onFocusChanged;
 

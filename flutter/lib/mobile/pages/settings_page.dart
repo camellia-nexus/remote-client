@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/common/widgets/settings_components.dart';
-import 'package:camellia_remote_app/desktop/pages/desktop_setting_page.dart';
+import 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -19,19 +19,22 @@ import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../widgets/deploy_dialog.dart';
-import '../widgets/dialog.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
 import 'home_page.dart';
 import 'scan_page.dart';
 
 class SettingsPage extends StatefulWidget implements PageShape {
-  @override
-  final title = translate("Settings");
+  const SettingsPage({super.key});
 
   @override
-  final icon = const Icon(Icons.tune_outlined);
+  String get title => translate("Settings");
 
   @override
-  final appBarActions = bind.isDisableSettings() ? [] : [ScanButton()];
+  Icon get icon => const Icon(Icons.tune_outlined);
+
+  @override
+  List<Widget> get appBarActions =>
+      bind.isDisableSettings() ? const [] : const [ScanButton()];
 
   @override
   State<SettingsPage> createState() => _SettingsState();
@@ -41,21 +44,38 @@ const url = 'https://github.com/camellia-computing/remote-client';
 
 SettingsThemeData _camelliaSettingsTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
-  final surface = dark
-      ? CamelliaColors.darkSurface
-      : CamelliaColors.lightSurface;
-  final text = dark ? CamelliaColors.darkText : CamelliaColors.lightText;
-  final muted = dark ? CamelliaColors.darkMuted : CamelliaColors.lightMuted;
-  final border = dark ? CamelliaColors.darkBorder : CamelliaColors.lightBorder;
+  final midnight =
+      dark && MyTheme.getThemePreference() == CamelliaThemePreference.midnight;
+  final glass = midnight
+      ? CamelliaGlassTokens.midnight
+      : dark
+      ? CamelliaGlassTokens.dark
+      : CamelliaGlassTokens.light;
+  final surface = glass.floatingTint;
+  final text = midnight
+      ? CamelliaColors.midnightText
+      : dark
+      ? CamelliaColors.darkText
+      : CamelliaColors.lightText;
+  final muted = midnight
+      ? CamelliaColors.midnightMuted
+      : dark
+      ? CamelliaColors.darkMuted
+      : CamelliaColors.lightMuted;
+  final border = midnight
+      ? CamelliaColors.midnightBorder
+      : dark
+      ? CamelliaColors.darkBorder
+      : CamelliaColors.lightBorder;
   return SettingsThemeData(
     settingsListBackground: Colors.transparent,
     settingsSectionBackground: surface,
-    dividerColor: border,
-    tileHighlightColor: CamelliaColors.azure.withValues(
+    dividerColor: border.withValues(alpha: 0.65),
+    tileHighlightColor: CamelliaColors.indigo.withValues(
       alpha: dark ? 0.22 : 0.10,
     ),
-    titleTextColor: CamelliaColors.coral,
-    leadingIconsColor: CamelliaColors.azure,
+    titleTextColor: dark ? const Color(0xFFAAA7FF) : CamelliaColors.indigo,
+    leadingIconsColor: dark ? const Color(0xFF77C7FF) : CamelliaColors.azure,
     trailingTextColor: muted,
     tileDescriptionTextColor: muted,
     settingsTileTextColor: text,
@@ -1218,7 +1238,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     return true;
   }
 
-  defaultDisplaySection() {
+  SettingsSection defaultDisplaySection() {
     return SettingsSection(
       title: Text(translate("Display Settings")),
       tiles: [
@@ -1336,7 +1356,7 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
 }
 
 void showThemeSettings(OverlayDialogManager dialogManager) async {
-  var themeMode = MyTheme.getThemeModePreference();
+  var themePref = MyTheme.getThemePreference();
 
   dialogManager.show(
     (setState, close, context) {
@@ -1350,12 +1370,12 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
         }
       }
 
-      setTheme(v) {
-        if (themeMode != v) {
+      void setTheme(CamelliaThemePreference? v) {
+        if (v != null && themePref != v) {
           setState(() {
-            themeMode = v;
+            themePref = v;
           });
-          MyTheme.changeDarkMode(themeMode);
+          MyTheme.changeThemePreference(v);
           closeTimer?.cancel();
           closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
         }
@@ -1364,23 +1384,30 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
       final isOptFixed = isOptionFixed(kCommConfKeyTheme);
       return CustomAlertDialog(
         content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             getRadio(
               Text(translate('Light')),
-              ThemeMode.light,
-              themeMode,
+              CamelliaThemePreference.light,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
             getRadio(
               Text(translate('Dark')),
-              ThemeMode.dark,
-              themeMode,
+              CamelliaThemePreference.dark,
+              themePref,
+              isOptFixed ? null : setTheme,
+            ),
+            getRadio(
+              Text(translate('OLED Midnight')),
+              CamelliaThemePreference.midnight,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
             getRadio(
               Text(translate('Follow System')),
-              ThemeMode.system,
-              themeMode,
+              CamelliaThemePreference.system,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
           ],
@@ -1428,6 +1455,8 @@ void showAbout(OverlayDialogManager dialogManager) {
 }
 
 class ScanButton extends StatelessWidget {
+  const ScanButton({super.key});
+
   @override
   Widget build(BuildContext context) {
     return IconButton(
@@ -1697,16 +1726,14 @@ SettingsTile _getPopupDialogRadioEntry({
           content: Obx(
             () => Column(
               children: [
-                ...list
-                    .map(
-                      (e) => getRadio(
-                        Text(translate(e.label)),
-                        e.value,
-                        groupValue.value,
-                        onChanged,
-                      ),
-                    )
-                    .toList(),
+                ...list.map(
+                  (e) => getRadio(
+                    Text(translate(e.label)),
+                    e.value,
+                    groupValue.value,
+                    onChanged,
+                  ),
+                ),
                 Offstage(
                   offstage:
                       !(tail != null &&

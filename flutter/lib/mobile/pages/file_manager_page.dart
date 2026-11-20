@@ -10,13 +10,13 @@ import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 
 class FileManagerPage extends StatefulWidget {
-  FileManagerPage({
-    Key? key,
+  const FileManagerPage({
+    super.key,
     required this.id,
     this.password,
     this.isSharedPassword,
     this.forceRelay,
-  }) : super(key: key);
+  });
   final String id;
   final String? password;
   final bool? isSharedPassword;
@@ -480,7 +480,7 @@ class FileManagerView extends StatefulWidget {
   final FileController controller;
   final Rx<SelectMode> selectMode;
 
-  FileManagerView({required this.controller, required this.selectMode});
+  const FileManagerView({super.key, required this.controller, required this.selectMode});
 
   @override
   State<StatefulWidget> createState() => _FileManagerViewState();
@@ -684,9 +684,8 @@ class _FileManagerViewState extends State<FileManagerView> {
     });
   }
 
-  Widget headTools() => Container(
-    child: Row(
-      children: [
+  Widget headTools() => Row(
+    children: [
         Expanded(
           child: Obx(() {
             final home = controller.options.value.home;
@@ -754,11 +753,10 @@ class _FileManagerViewState extends State<FileManagerView> {
           ],
         ),
       ],
-    ),
-  );
+    );
 
   Widget listTail() => Obx(
-    () => Container(
+    () => SizedBox(
       height: 100,
       child: Column(
         children: [
@@ -799,7 +797,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           content: TextButton(
             child: Text(e.value),
             style: ButtonStyle(
-              minimumSize: MaterialStateProperty.all(Size(0, 0)),
+              minimumSize: WidgetStatePropertyAll(Size(0, 0)),
             ),
             onPressed: () => onPressed(list.sublist(0, e.key + 1)),
           ),
@@ -811,7 +809,8 @@ class _FileManagerViewState extends State<FileManagerView> {
 }
 
 class BottomSheetBody extends StatelessWidget {
-  BottomSheetBody({
+  const BottomSheetBody({
+    super.key,
     required this.leading,
     required this.title,
     required this.text,

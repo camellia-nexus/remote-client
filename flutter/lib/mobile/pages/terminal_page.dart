@@ -16,14 +16,14 @@ import '../../consts.dart';
 
 class TerminalPage extends StatefulWidget {
   const TerminalPage({
-    Key? key,
+    super.key,
     required this.id,
     required this.password,
     required this.isSharedPassword,
     this.forceRelay,
     this.connToken,
     this.isTerminalRunAsAdmin = false,
-  }) : super(key: key);
+  });
   final String id;
   final String? password;
   final bool? forceRelay;
@@ -185,7 +185,7 @@ class _TerminalPageState extends State<TerminalPage>
 
     _keyboardDebounce?.cancel();
     _keyboardDebounce = Timer(const Duration(milliseconds: 20), () {
-      final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+      final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
       setState(() {
         _sysKeyboardHeight = bottomInset;
       });
@@ -252,10 +252,11 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         clientClose(sessionId, _ffi);
-        return false; // Prevent default back behavior
       },
       child: buildBody(),
     );
@@ -593,10 +594,10 @@ class _TerminalPageState extends State<TerminalPage>
           padding: EdgeInsets.zero,
           textStyle: const TextStyle(fontSize: 12),
           backgroundColor: isLocked
-              ? Colors.blue
+              ? Theme.of(context).colorScheme.primary
               : Theme.of(context).colorScheme.surfaceContainerHighest,
           foregroundColor: isLocked
-              ? Colors.white
+              ? Theme.of(context).colorScheme.onPrimary
               : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),

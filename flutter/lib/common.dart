@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' show lerpDouble;
+import 'dart:ui' show ImageFilter, lerpDouble;
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -16,6 +16,7 @@ import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/platform_channel.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
@@ -312,7 +313,7 @@ class AppDesignTokens extends ThemeExtension<AppDesignTokens> {
     accentContainer: CamelliaColors.lightAccentWash,
     secondary: CamelliaColors.indigoStrong,
     success: Color(0xFF087A55),
-    warning: Color(0xFF9A6200),
+    warning: CamelliaColors.sunStrong,
     danger: Color(0xFFB3261E),
     info: CamelliaColors.azureStrong,
     focusRing: CamelliaColors.azure,
@@ -344,6 +345,28 @@ class AppDesignTokens extends ThemeExtension<AppDesignTokens> {
     touchTarget: 48,
     shadow: Color(0x52000000),
     shadowStrong: Color(0x66000000),
+  );
+
+  static const midnight = AppDesignTokens(
+    page: CamelliaColors.midnightCanvas,
+    surface: CamelliaColors.midnightSurface,
+    surfaceContainer: CamelliaColors.midnightInset,
+    surfaceElevated: CamelliaColors.midnightRaised,
+    border: CamelliaColors.midnightBorder,
+    muted: CamelliaColors.midnightMuted,
+    accentContainer: CamelliaColors.midnightAccentWash,
+    secondary: Color(0xFFA9A5FF),
+    success: CamelliaColors.statusOnlineDark,
+    warning: CamelliaColors.statusHighLatencyDark,
+    danger: CamelliaColors.statusAlertDark,
+    info: CamelliaColors.statusConnectingDark,
+    focusRing: CamelliaColors.statusConnectingDark,
+    radiusSmall: CamelliaRadius.control,
+    radiusMedium: CamelliaRadius.surface,
+    controlHeight: 44,
+    touchTarget: 48,
+    shadow: Color(0x80000000),
+    shadowStrong: Color(0xA6000000),
   );
 
   @override
@@ -422,21 +445,27 @@ class AppDesignTokens extends ThemeExtension<AppDesignTokens> {
   }
 }
 
+enum CamelliaThemePreference { system, light, dark, midnight }
+
 class MyTheme {
   MyTheme._();
 
   static const Color grayBg = CamelliaColors.lightCanvas;
-  static const Color accent = CamelliaColors.coralStrong;
-  static const Color accent50 = Color(0x77FF4F70);
-  static const Color accent80 = Color(0xAAFF4F70);
+  static const Color accent = CamelliaColors.coral;
+  static const Color accent50 = Color(0x80FF5C7A);
+  static const Color accent80 = Color(0xCCFF5C7A);
   static const Color canvasColor = CamelliaColors.darkCanvas;
   static const Color border = CamelliaColors.lightBorder;
   static const Color idColor = CamelliaColors.azureStrong;
-  static const Color darkGray = Color.fromARGB(255, 148, 148, 148);
+  static const Color darkGray = CamelliaColors.lightMuted;
   static const Color cmIdColor = CamelliaColors.aquaStrong;
-  static const Color dark = Colors.black87;
+  static const Color dark = CamelliaColors.lightText;
   static const Color button = CamelliaColors.azureStrong;
   static const Color hoverBorder = CamelliaColors.azure;
+
+  static AppDesignTokens tokens(BuildContext context) {
+    return AppVisual.tokens(context);
+  }
 
   // ListTile
   static const ListTileThemeData listTileTheme = ListTileThemeData(
@@ -589,28 +618,75 @@ class MyTheme {
     ],
   );
 
+  static ThemeData get midnightTheme => CamelliaTheme.build(
+    brightness: Brightness.dark,
+    desktopDensity: isDesktop || isWebDesktop,
+    oledMidnight: true,
+    fontFamily: _fontFamily,
+    extensions: <ThemeExtension<dynamic>>[
+      ColorThemeExtension.dark,
+      TabbarTheme.dark,
+      AppDesignTokens.midnight,
+    ],
+  );
+
+  static final ValueNotifier<CamelliaThemePreference> themeNotifier =
+      ValueNotifier<CamelliaThemePreference>(CamelliaThemePreference.system);
+
+  static ThemeData get activeDarkTheme =>
+      getThemePreference() == CamelliaThemePreference.midnight
+      ? midnightTheme
+      : darkTheme;
+
+  static CamelliaThemePreference getThemePreference() {
+    try {
+      final pref = themePreferenceFromString(
+        bind.mainGetLocalOption(key: kCommConfKeyTheme),
+      );
+      if (themeNotifier.value != pref) {
+        themeNotifier.value = pref;
+      }
+      return pref;
+    } catch (_) {
+      return themeNotifier.value;
+    }
+  }
+
   static ThemeMode getThemeModePreference() {
     return themeModeFromString(bind.mainGetLocalOption(key: kCommConfKeyTheme));
   }
 
-  static Future<void> changeDarkMode(ThemeMode mode) async {
-    Get.changeThemeMode(mode);
+  static Future<void> changeThemePreference(
+    CamelliaThemePreference preference,
+  ) async {
+    final mode = switch (preference) {
+      CamelliaThemePreference.light => ThemeMode.light,
+      CamelliaThemePreference.dark ||
+      CamelliaThemePreference.midnight => ThemeMode.dark,
+      CamelliaThemePreference.system => ThemeMode.system,
+    };
+    final persisted = switch (preference) {
+      CamelliaThemePreference.light => 'light',
+      CamelliaThemePreference.dark => 'dark',
+      CamelliaThemePreference.midnight => 'midnight',
+      CamelliaThemePreference.system => defaultOptionTheme,
+    };
+    themeNotifier.value = preference;
     if (desktopType == DesktopType.main || isAndroid || isIOS || isWeb) {
-      if (mode == ThemeMode.system) {
-        await bind.mainSetLocalOption(
-          key: kCommConfKeyTheme,
-          value: defaultOptionTheme,
-        );
-      } else {
-        await bind.mainSetLocalOption(
-          key: kCommConfKeyTheme,
-          value: mode.toShortString(),
-        );
-      }
-      if (!isWeb) await bind.mainChangeTheme(dark: mode.toShortString());
-      // Synchronize the window theme of the system.
+      await bind.mainSetLocalOption(key: kCommConfKeyTheme, value: persisted);
+      if (!isWeb) await bind.mainChangeTheme(dark: persisted);
       updateSystemWindowTheme();
     }
+    Get.changeThemeMode(mode);
+  }
+
+  static Future<void> changeDarkMode(ThemeMode mode) async {
+    final pref = switch (mode) {
+      ThemeMode.light => CamelliaThemePreference.light,
+      ThemeMode.dark => CamelliaThemePreference.dark,
+      ThemeMode.system => CamelliaThemePreference.system,
+    };
+    await changeThemePreference(pref);
   }
 
   static ThemeMode currentThemeMode() {
@@ -632,14 +708,30 @@ class MyTheme {
   }
 
   static TabbarTheme tabbar(BuildContext context) {
-    return Theme.of(context).extension<TabbarTheme>()!;
+    return TabbarTheme.of(context);
+  }
+
+  static CamelliaThemePreference themePreferenceFromString(String v) {
+    switch (v.trim().toLowerCase()) {
+      case 'light':
+        return CamelliaThemePreference.light;
+      case 'dark':
+        return CamelliaThemePreference.dark;
+      case 'midnight':
+      case 'oled':
+        return CamelliaThemePreference.midnight;
+      default:
+        return CamelliaThemePreference.system;
+    }
   }
 
   static ThemeMode themeModeFromString(String v) {
-    switch (v) {
+    switch (v.trim().toLowerCase()) {
       case "light":
         return ThemeMode.light;
       case "dark":
+      case "midnight":
+      case "oled":
         return ThemeMode.dark;
       default:
         return ThemeMode.system;
@@ -950,16 +1042,39 @@ class AppSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final glass = CamelliaGlassTokens.of(context);
+    final radius = BorderRadius.circular(AppVisual.radius);
     return Container(
       margin: margin,
-      padding: padding,
-      decoration: AppVisual.surfaceDecoration(
-        context,
-        elevated: elevated,
+      decoration: BoxDecoration(
+        color: gradient == null
+            ? color ??
+                  (elevated
+                      ? glass.floatingTint
+                      : AppVisual.surface(context))
+            : null,
         gradient: gradient,
-        color: color,
+        borderRadius: radius,
+        boxShadow: elevated
+            ? [
+                BoxShadow(
+                  color: glass.ambientShadow,
+                  blurRadius: 18,
+                  spreadRadius: -2,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : const [],
       ),
-      child: child,
+      child: CustomPaint(
+        foregroundPainter: SpecularEdgePainter(
+          borderRadius: radius,
+          topColor: glass.specularTop,
+          bottomColor: glass.specularBottom,
+          strokeWidth: 0.85,
+        ),
+        child: Padding(padding: padding, child: child),
+      ),
     );
   }
 }
@@ -1139,6 +1254,69 @@ class OverlayKeyState {
   GlobalKey<OverlayState>? get key => _overlayKey;
 }
 
+class _AnimatedDialogBackdrop extends StatefulWidget {
+  const _AnimatedDialogBackdrop({
+    required this.child,
+    required this.useAnimation,
+  });
+
+  final Widget child;
+  final bool useAnimation;
+
+  @override
+  State<_AnimatedDialogBackdrop> createState() =>
+      _AnimatedDialogBackdropState();
+}
+
+class _AnimatedDialogBackdropState extends State<_AnimatedDialogBackdrop>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fadeAnimation;
+  late final Animation<double> _scaleAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: widget.useAnimation
+          ? const Duration(milliseconds: 200)
+          : Duration.zero,
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    );
+    _scaleAnimation = Tween<double>(begin: 0.96, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.useAnimation) {
+      return widget.child;
+    }
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: ScaleTransition(
+        scale: _scaleAnimation,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
 class OverlayDialogManager {
   final Map<String, Dialog> _dialogs = {};
   var _overlayKeyState = OverlayKeyState();
@@ -1226,6 +1404,9 @@ class OverlayDialogManager {
     dialog.entry = OverlayEntry(
       builder: (context) {
         bool innerClicked = false;
+        final isLight = Theme.of(context).brightness == Brightness.light;
+        final maskColor =
+            Colors.black.withValues(alpha: isLight ? 0.32 : 0.48);
         return Listener(
           onPointerUp: (_) {
             if (!innerClicked && clickMaskDismiss) {
@@ -1233,18 +1414,25 @@ class OverlayDialogManager {
             }
             innerClicked = false;
           },
-          child: Container(
-            color: Theme.of(context).brightness == Brightness.light
-                ? Colors.black12
-                : Colors.black45,
-            child: StatefulBuilder(
-              builder: (context, setState) {
-                return Listener(
-                  onPointerUp: (_) => innerClicked = true,
-                  child: builder(setState, close, overlayState.context),
-                );
-              },
-            ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                child: ColoredBox(color: maskColor),
+              ),
+              _AnimatedDialogBackdrop(
+                useAnimation: useAnimation,
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    return Listener(
+                      onPointerUp: (_) => innerClicked = true,
+                      child: builder(setState, close, overlayState.context),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         );
       },
@@ -1368,8 +1556,9 @@ makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
     const double overlayW = 200;
     const double overlayH = 45;
     computeOverlayPosition() {
-      final screenW = MediaQuery.of(context).size.width;
-      final screenH = MediaQuery.of(context).size.height;
+      final screenSize = MediaQuery.sizeOf(context);
+      final screenW = screenSize.width;
+      final screenH = screenSize.height;
       final left = (screenW - overlayW * scale) / 2;
       final top = screenH - (overlayH + 80) * scale;
       return Offset(left, top);
@@ -1404,43 +1593,327 @@ makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
   );
 }
 
-void showToast(
-  String text, {
-  Duration timeout = const Duration(seconds: 3),
-  Alignment alignment = const Alignment(0.0, 0.8),
-}) {
-  final overlayState = globalKey.currentState?.overlay;
-  if (overlayState == null) return;
-  final entry = OverlayEntry(
-    builder: (context) {
-      return IgnorePointer(
-        child: Align(
+class _ModernToastManager {
+  _ModernToastManager._();
+  static final _ModernToastManager instance = _ModernToastManager._();
+
+  OverlayEntry? _currentEntry;
+
+  void show({
+    required OverlayState overlayState,
+    required String text,
+    required Duration timeout,
+    required Alignment alignment,
+    required AppTone tone,
+    required IconData icon,
+  }) {
+    dismissCurrent();
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (context) {
+        return Align(
           alignment: alignment,
-          child: Container(
-            decoration: BoxDecoration(
-              color: MyTheme.color(context).toastBg,
-              borderRadius: const BorderRadius.all(Radius.circular(20)),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
-            child: Text(
-              text,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                decoration: TextDecoration.none,
-                fontWeight: FontWeight.w300,
-                fontSize: 18,
-                color: MyTheme.color(context).toastText,
+          child: _ModernToastPill(
+            key: UniqueKey(),
+            text: text,
+            tone: tone,
+            icon: icon,
+            timeout: timeout,
+            onDismiss: () {
+              if (_currentEntry == entry) {
+                _currentEntry = null;
+              }
+              try {
+                entry.remove();
+              } catch (_) {}
+            },
+          ),
+        );
+      },
+    );
+
+    _currentEntry = entry;
+    overlayState.insert(entry);
+  }
+
+  void dismissCurrent() {
+    if (_currentEntry != null) {
+      try {
+        _currentEntry!.remove();
+      } catch (_) {}
+      _currentEntry = null;
+    }
+  }
+}
+
+class _ModernToastPill extends StatefulWidget {
+  const _ModernToastPill({
+    super.key,
+    required this.text,
+    required this.tone,
+    required this.icon,
+    required this.timeout,
+    required this.onDismiss,
+  });
+
+  final String text;
+  final AppTone tone;
+  final IconData icon;
+  final Duration timeout;
+  final VoidCallback onDismiss;
+
+  @override
+  State<_ModernToastPill> createState() => _ModernToastPillState();
+}
+
+class _ModernToastPillState extends State<_ModernToastPill>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fadeAnimation;
+  late final Animation<Offset> _slideAnimation;
+  Timer? _dismissTimer;
+  bool _isExiting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    );
+    _slideAnimation = Tween<Offset>(
+      begin: const Offset(0.0, 0.3),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _controller.forward();
+    _dismissTimer = Timer(widget.timeout, () {
+      animateOutAndRemove();
+    });
+  }
+
+  void animateOutAndRemove() {
+    if (!mounted || _isExiting) return;
+    _isExiting = true;
+    _dismissTimer?.cancel();
+    _controller.reverse().then((_) {
+      if (mounted) {
+        widget.onDismiss();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _dismissTimer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: SlideTransition(
+        position: _slideAnimation,
+        child: ModernToastPill(
+          text: widget.text,
+          tone: widget.tone,
+          icon: widget.icon,
+          onTap: animateOutAndRemove,
+        ),
+      ),
+    );
+  }
+}
+
+class ModernToastPill extends StatelessWidget {
+  const ModernToastPill({
+    super.key,
+    required this.text,
+    this.tone = AppTone.info,
+    this.icon,
+    this.onTap,
+  });
+
+  final String text;
+  final AppTone tone;
+  final IconData? icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tokens = AppVisual.tokens(context);
+    final toneColor = AppVisual.tone(context, tone);
+    final toneContainer = AppVisual.toneContainer(context, tone);
+    final resolvedIcon = icon ??
+        (tone == AppTone.success
+            ? Icons.check_circle_outline_rounded
+            : tone == AppTone.danger
+                ? Icons.error_outline_rounded
+                : tone == AppTone.warning
+                    ? Icons.warning_amber_rounded
+                    : Icons.info_outline_rounded);
+
+    return Material(
+      color: Colors.transparent,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          key: const Key('modern_toast_pill'),
+          margin: const EdgeInsets.symmetric(horizontal: 24),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: tokens.shadowStrong.withValues(
+                  alpha: isDark ? 0.35 : 0.16,
+                ),
+                blurRadius: 18,
+                spreadRadius: -2,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? tokens.surfaceElevated.withValues(alpha: 0.85)
+                      : tokens.surfaceElevated.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: tokens.border.withValues(
+                      alpha: isDark ? 0.5 : 0.7,
+                    ),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: toneContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Icon(
+                          resolvedIcon,
+                          key: const Key('modern_toast_icon'),
+                          size: 15,
+                          color: toneColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(
+                        text,
+                        key: const Key('modern_toast_text'),
+                        textAlign: TextAlign.start,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                              decoration: TextDecoration.none,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      );
-    },
+      ),
+    );
+  }
+}
+
+void showToast(
+  String text, {
+  Duration timeout = const Duration(seconds: 3),
+  Alignment alignment = const Alignment(0.0, 0.8),
+  IconData? icon,
+  AppTone? tone,
+}) {
+  final overlayState = globalKey.currentState?.overlay;
+  if (overlayState == null) return;
+
+  AppTone resolvedTone = tone ?? AppTone.info;
+  IconData resolvedIcon = icon ?? Icons.info_outline_rounded;
+  if (tone == null && icon == null) {
+    final lower = text.toLowerCase();
+    if (lower.contains('success') ||
+        lower.contains('copied') ||
+        lower.contains('done') ||
+        lower.contains('saved') ||
+        lower.contains('connected') ||
+        lower.contains('succeed')) {
+      resolvedTone = AppTone.success;
+      resolvedIcon = Icons.check_circle_outline_rounded;
+    } else if (lower.contains('fail') ||
+        lower.contains('error') ||
+        lower.contains('invalid') ||
+        lower.contains('denied') ||
+        lower.contains('cannot') ||
+        lower.contains('not exist')) {
+      resolvedTone = AppTone.danger;
+      resolvedIcon = Icons.error_outline_rounded;
+    } else if (lower.contains('warn') ||
+        lower.contains('caution') ||
+        lower.contains('wait') ||
+        lower.contains('timeout')) {
+      resolvedTone = AppTone.warning;
+      resolvedIcon = Icons.warning_amber_rounded;
+    }
+  } else if (tone != null && icon == null) {
+    switch (tone) {
+      case AppTone.success:
+        resolvedIcon = Icons.check_circle_outline_rounded;
+        break;
+      case AppTone.danger:
+        resolvedIcon = Icons.error_outline_rounded;
+        break;
+      case AppTone.warning:
+        resolvedIcon = Icons.warning_amber_rounded;
+        break;
+      default:
+        resolvedIcon = Icons.info_outline_rounded;
+    }
+  }
+
+  _ModernToastManager.instance.show(
+    overlayState: overlayState,
+    text: text,
+    timeout: timeout,
+    alignment: alignment,
+    tone: resolvedTone,
+    icon: resolvedIcon,
   );
-  overlayState.insert(entry);
-  Future.delayed(timeout, () {
-    entry.remove();
-  });
 }
 
 class CustomAlertDialog extends StatelessWidget {
@@ -1453,6 +1926,8 @@ class CustomAlertDialog extends StatelessWidget {
     this.contentBoxConstraints = const BoxConstraints(maxWidth: 500),
     this.onSubmit,
     this.onCancel,
+    this.borderRadius,
+    this.elevation,
   });
 
   final Widget? title;
@@ -1462,10 +1937,16 @@ class CustomAlertDialog extends StatelessWidget {
   final BoxConstraints contentBoxConstraints;
   final VoidCallback? onSubmit;
   final VoidCallback? onCancel;
+  final double? borderRadius;
+  final double? elevation;
 
   @override
   Widget build(BuildContext context) {
     if (isAndroid) gFFI.invokeMethod("enable_soft_keyboard", true);
+
+    final tokens = AppVisual.tokens(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final radius = borderRadius ?? 18.0;
 
     return Focus(
       autofocus: true,
@@ -1485,15 +1966,27 @@ class CustomAlertDialog extends StatelessWidget {
       },
       child: AlertDialog(
         scrollable: true,
+        backgroundColor: tokens.surfaceElevated,
+        surfaceTintColor: Colors.transparent,
+        elevation: elevation ?? 16,
+        shadowColor:
+            tokens.shadowStrong.withValues(alpha: isDark ? 0.45 : 0.20),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(radius),
+          side: BorderSide(
+            color: tokens.border.withValues(alpha: 0.8),
+            width: 1,
+          ),
+        ),
         title: title,
         content: ConstrainedBox(
           constraints: contentBoxConstraints,
           child: content,
         ),
         actions: actions,
-        titlePadding: titlePadding ?? MyTheme.dialogTitlePadding(),
-        contentPadding: MyTheme.dialogContentPadding(actions: actions is List),
-        actionsPadding: MyTheme.dialogActionsPadding(),
+        titlePadding: titlePadding ?? const EdgeInsets.fromLTRB(24, 22, 24, 12),
+        contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
         buttonPadding: MyTheme.dialogButtonPadding,
       ),
     );
@@ -1693,45 +2186,73 @@ void msgBox(
   );
 }
 
-Color? _msgboxColor(String type) {
-  if (type == "input-password" || type == "custom-os-password") {
-    return Color(0xFFAD448E);
+AppTone _msgboxTone(String type) {
+  if (type.contains("error") || type == "re-input-password") {
+    return AppTone.danger;
   }
   if (type.contains("success")) {
-    return Color(0xFF32bea6);
+    return AppTone.success;
   }
+  if (type.contains("warn") ||
+      type == "wait-uac" ||
+      type == "wait-remote-accept-nook") {
+    return AppTone.warning;
+  }
+  return AppTone.brand;
+}
+
+IconData _msgboxIconData(String type) {
   if (type.contains("error") || type == "re-input-password") {
-    return Color(0xFFE04F5F);
+    return Icons.error_outline_rounded;
   }
-  return Color(0xFF2C8CFF);
+  if (type.contains("success")) {
+    return Icons.check_circle_outline_rounded;
+  }
+  if (type == "wait-uac" || type == "wait-remote-accept-nook") {
+    return Icons.hourglass_top_rounded;
+  }
+  if (type == 'on-uac' || type == 'on-foreground-elevated') {
+    return Icons.admin_panel_settings_rounded;
+  }
+  if (type.contains("warn")) {
+    return Icons.warning_amber_rounded;
+  }
+  if (type == "input-password" || type == "custom-os-password") {
+    return Icons.lock_outline_rounded;
+  }
+  return Icons.info_outline_rounded;
 }
 
 Widget msgboxIcon(String type) {
-  IconData? iconData;
-  if (type.contains("error") || type == "re-input-password") {
-    iconData = Icons.cancel;
-  }
-  if (type.contains("success")) {
-    iconData = Icons.check_circle;
-  }
-  if (type == "wait-uac" || type == "wait-remote-accept-nook") {
-    iconData = Icons.hourglass_top;
-  }
-  if (type == 'on-uac' || type == 'on-foreground-elevated') {
-    iconData = Icons.admin_panel_settings;
-  }
-  if (type.contains('info')) {
-    iconData = Icons.info;
-  }
-  if (iconData != null) {
-    return Icon(
-      iconData,
-      size: 50,
-      color: _msgboxColor(type),
-    ).marginOnly(right: 16);
-  }
+  final iconData = _msgboxIconData(type);
+  return Builder(
+    builder: (context) {
+      final tone = _msgboxTone(type);
+      final toneColor = AppVisual.tone(context, tone);
+      final toneBg = AppVisual.toneContainer(context, tone);
 
-  return Offstage();
+      return Container(
+        width: 44,
+        height: 44,
+        margin: const EdgeInsets.only(right: 14),
+        decoration: BoxDecoration(
+          color: toneBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: toneColor.withValues(alpha: 0.22),
+            width: 1,
+          ),
+        ),
+        child: Center(
+          child: Icon(
+            iconData,
+            size: 22,
+            color: toneColor,
+          ),
+        ),
+      );
+    },
+  );
 }
 
 // title should be null
@@ -1756,23 +2277,37 @@ Widget msgboxContent(String type, String title, String text) {
     return text;
   }
 
-  return Row(
-    children: [
-      msgboxIcon(type),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              translate(title),
-              style: TextStyle(fontSize: 21),
-            ).marginOnly(bottom: 10),
-            createDialogContent(translateText(text)),
-          ],
-        ),
-      ),
-    ],
-  ).marginOnly(bottom: 12);
+  return Builder(
+    builder: (context) {
+      final theme = Theme.of(context);
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          msgboxIcon(type),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (title.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      translate(title),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                  ),
+                createDialogContent(translateText(text)),
+              ],
+            ),
+          ),
+        ],
+      ).marginOnly(bottom: 12);
+    },
+  );
 }
 
 void msgBoxCommon(
@@ -1784,7 +2319,15 @@ void msgBoxCommon(
 }) {
   dialogManager.show(
     (setState, close, context) => CustomAlertDialog(
-      title: Text(translate(title), style: TextStyle(fontSize: 21)),
+      title: Builder(
+        builder: (context) => Text(
+          translate(title),
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
+              ),
+        ),
+      ),
       content: content,
       actions: buttons,
       onCancel: hasCancel ? close : null,
@@ -1830,9 +2373,9 @@ Color str2color2(String str, {List<int> existing = const []}) {
   List<Color> colorList = colorMap.values.toList();
   hash = hash % colorList.length;
   var result = colorList[hash].withAlpha(0xFF);
-  if (existing.contains(result.value)) {
+  if (existing.contains(result.toARGB32())) {
     Color? notUsed = colorList.firstWhereOrNull(
-      (e) => !existing.contains(e.value),
+      (e) => !existing.contains(e.toARGB32()),
     );
     if (notUsed != null) {
       result = notUsed;
@@ -2007,21 +2550,23 @@ class AndroidPermissionManager {
   }
 }
 
-RadioListTile<T> getRadio<T>(
+Widget getRadio<T>(
   Widget title,
   T toValue,
   T curValue,
   ValueChanged<T?>? onChange, {
   bool? dense,
 }) {
-  return RadioListTile<T>(
-    visualDensity: VisualDensity.compact,
-    controlAffinity: ListTileControlAffinity.trailing,
-    title: title,
-    value: toValue,
+  return RadioGroup<T>(
     groupValue: curValue,
-    onChanged: onChange,
-    dense: dense,
+    onChanged: onChange ?? (_) {},
+    child: RadioListTile<T>(
+      visualDensity: VisualDensity.compact,
+      controlAffinity: ListTileControlAffinity.trailing,
+      title: title,
+      value: toValue,
+      dense: dense,
+    ),
   );
 }
 
@@ -3619,40 +4164,68 @@ Widget dialogButton(
   String text, {
   required VoidCallback? onPressed,
   bool isOutline = false,
+  bool isDestructive = false,
+  AppTone? tone,
   Widget? icon,
   TextStyle? style,
   ButtonStyle? buttonStyle,
 }) {
+  final effectiveTone = isDestructive ? AppTone.danger : tone;
   if (isDesktop || isWebDesktop) {
     if (isOutline) {
+      ButtonStyle? effectiveOutlineStyle = buttonStyle;
+      if (effectiveTone == AppTone.danger) {
+        effectiveOutlineStyle = OutlinedButton.styleFrom(
+          foregroundColor: CamelliaColors.coral,
+          side: const BorderSide(color: CamelliaColors.coral),
+        ).merge(buttonStyle);
+      }
       return icon == null
           ? OutlinedButton(
+              style: effectiveOutlineStyle,
               onPressed: onPressed,
               child: Text(translate(text), style: style),
             )
           : OutlinedButton.icon(
               icon: icon,
+              style: effectiveOutlineStyle,
               onPressed: onPressed,
               label: Text(translate(text), style: style),
             );
     } else {
+      ButtonStyle? effectiveElevatedStyle;
+      if (effectiveTone == AppTone.danger) {
+        effectiveElevatedStyle = ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: CamelliaColors.coral,
+          foregroundColor: Colors.white,
+        ).merge(buttonStyle);
+      } else {
+        effectiveElevatedStyle =
+            ElevatedButton.styleFrom(elevation: 0).merge(buttonStyle);
+      }
       return icon == null
           ? ElevatedButton(
-              style: ElevatedButton.styleFrom(elevation: 0).merge(buttonStyle),
+              style: effectiveElevatedStyle,
               onPressed: onPressed,
               child: Text(translate(text), style: style),
             )
           : ElevatedButton.icon(
               icon: icon,
-              style: ElevatedButton.styleFrom(elevation: 0).merge(buttonStyle),
+              style: effectiveElevatedStyle,
               onPressed: onPressed,
               label: Text(translate(text), style: style),
             );
     }
   } else {
+    TextStyle? effectiveStyle = style;
+    if (effectiveTone == AppTone.danger) {
+      effectiveStyle =
+          (style ?? const TextStyle()).copyWith(color: CamelliaColors.coral);
+    }
     return TextButton(
       onPressed: onPressed,
-      child: Text(translate(text), style: style),
+      child: Text(translate(text), style: effectiveStyle),
     );
   }
 }
@@ -4595,30 +5168,54 @@ bool isInHomePage() => desktopType == DesktopType.main;
 Widget _buildPresetPasswordWarning() {
   if (bind.mainGetBuildinOption(key: kOptionRemovePresetPasswordWarning) !=
       'N') {
-    return SizedBox.shrink();
+    return const SizedBox.shrink();
   }
-  return Container(
-    color: Colors.yellow,
-    child: Column(
-      children: [
-        Align(
-          child: Text(
-            translate("Security Alert"),
-            style: TextStyle(
-              color: Colors.red,
-              fontSize:
-                  18, // https://github.com/rustdesk/rustdesk-server-pro/issues/261
-              fontWeight: FontWeight.bold,
+  return Builder(
+    builder: (context) {
+      final theme = Theme.of(context);
+      final warningColor = AppVisual.tone(context, AppTone.warning);
+      return AppSurface(
+        margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        padding: const EdgeInsets.all(12),
+        color: AppVisual.toneContainer(context, AppTone.warning),
+        elevated: true,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.warning_amber_rounded,
+              color: warningColor,
+              size: 20,
             ),
-          ),
-        ).paddingOnly(bottom: 8),
-        Text(
-          translate("preset_password_warning"),
-          style: TextStyle(color: Colors.red),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    translate("Security Alert"),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: warningColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    translate("preset_password_warning"),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color:
+                          theme.colorScheme.onSurface.withValues(alpha: 0.82),
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-      ],
-    ).paddingAll(8),
-  ); // Show a warning message if the Future completed with true
+      );
+    },
+  );
 }
 
 Widget buildPresetPasswordWarningMobile() {

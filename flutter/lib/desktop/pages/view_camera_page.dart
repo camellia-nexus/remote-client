@@ -386,10 +386,11 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         clientClose(sessionId, _ffi);
-        return false;
       },
       child: MultiProvider(
         providers: [

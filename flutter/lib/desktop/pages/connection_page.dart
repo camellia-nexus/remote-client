@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
@@ -30,10 +31,10 @@ Color _connectionModeTone(_ConnectionMode mode) => switch (mode) {
 
 class OnlineStatusWidget extends StatefulWidget {
   const OnlineStatusWidget({
-    Key? key,
+    super.key,
     this.onSvcStatusChanged,
     this.compact = false,
-  }) : super(key: key);
+  });
 
   final VoidCallback? onSvcStatusChanged;
   final bool compact;
@@ -115,6 +116,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
             child: AppStatusPill(
               label: _connStatusText(),
               color: _statusColor(),
+              busy: stateGlobal.svcStatus.value == SvcStatus.connecting,
               icon: stateGlobal.svcStatus.value == SvcStatus.ready
                   ? Icons.check_circle_rounded
                   : Icons.circle_rounded,
@@ -166,7 +168,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
         : translate('Ready');
   }
 
-  updateStatus() async {
+  Future<void> updateStatus() async {
     final status =
         jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
     final statusNum = status['status_num'] as int;
@@ -188,7 +190,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({Key? key, this.showDevices = true}) : super(key: key);
+  const ConnectionPage({super.key, this.showDevices = true});
 
   final bool showDevices;
 
@@ -203,6 +205,8 @@ class _ConnectionPageState extends State<ConnectionPage>
   final _idController = IDTextEditingController();
 
   final RxBool _idInputFocused = false.obs;
+  final RxBool _hasInputError = false.obs;
+  final RxBool _isConnecting = false.obs;
   final FocusNode _idFocusNode = FocusNode();
   final TextEditingController _idEditingController = TextEditingController();
 
@@ -391,11 +395,29 @@ class _ConnectionPageState extends State<ConnectionPage>
   }
 
   void _connectSelectedMode() {
-    onConnect(
-      isFileTransfer: _connectionMode == _ConnectionMode.files,
-      isViewCamera: _connectionMode == _ConnectionMode.camera,
-      isTerminal: _connectionMode == _ConnectionMode.terminal,
-    );
+    final rawId = _idController.id.trim();
+    if (rawId.isEmpty) {
+      _hasInputError.value = true;
+      _idFocusNode.requestFocus();
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) _hasInputError.value = false;
+      });
+      return;
+    }
+    _isConnecting.value = true;
+    try {
+      onConnect(
+        isFileTransfer: _connectionMode == _ConnectionMode.files,
+        isViewCamera: _connectionMode == _ConnectionMode.camera,
+        isTerminal: _connectionMode == _ConnectionMode.terminal,
+      );
+    } finally {
+      if (mounted) {
+        Future.delayed(const Duration(milliseconds: 400), () {
+          if (mounted) _isConnecting.value = false;
+        });
+      }
+    }
   }
 
   /// UI for the remote ID TextField.
@@ -430,8 +452,48 @@ class _ConnectionPageState extends State<ConnectionPage>
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final showLabels = constraints.maxWidth >= 560;
+                    final modeTone = _connectionModeTone(_connectionMode);
+                    final isLight = AppVisual.isLight(context);
+                    final tokens = AppVisual.tokens(context);
                     return SegmentedButton<_ConnectionMode>(
                       showSelectedIcon: false,
+                      style: ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                        backgroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return modeTone.withValues(
+                              alpha: isLight ? 0.16 : 0.26,
+                            );
+                          }
+                          return tokens.surfaceContainer;
+                        }),
+                        foregroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return isLight
+                                ? modeTone
+                                : Color.lerp(modeTone, Colors.white, 0.2)!;
+                          }
+                          return tokens.muted;
+                        }),
+                        side: WidgetStatePropertyAll(
+                          BorderSide(
+                            color: AppVisual.border(context),
+                            width: 1.0,
+                          ),
+                        ),
+                        shape: WidgetStatePropertyAll(
+                          RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.control,
+                            ),
+                          ),
+                        ),
+                        overlayColor: WidgetStatePropertyAll(
+                          modeTone.withValues(alpha: 0.08),
+                        ),
+                      ),
                       segments: [
                         ButtonSegment(
                           value: _ConnectionMode.desktop,
@@ -469,73 +531,160 @@ class _ConnectionPageState extends State<ConnectionPage>
                 ),
                 const SizedBox(height: 14),
                 Obx(
-                  () => AnimatedContainer(
-                    duration: AppMotion.duration(
-                      context,
-                      AppMotion.stateChange,
-                    ),
-                    curve: Curves.easeOutCubic,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppVisual.inset(context),
-                      borderRadius: BorderRadius.circular(AppVisual.radius),
-                      border: Border.all(
-                        color: _idInputFocused.value
-                            ? CamelliaColors.azure
-                            : AppVisual.border(context),
-                        width: _idInputFocused.value ? 1.4 : 1,
+                  () {
+                    final modeTone = _connectionModeTone(_connectionMode);
+                    final isLight = AppVisual.isLight(context);
+                    final dangerTone = AppVisual.tone(context, AppTone.danger);
+                    return AnimatedContainer(
+                      duration: AppMotion.duration(
+                        context,
+                        AppMotion.stateChange,
                       ),
-                    ),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final compact = constraints.maxWidth < 460;
-                        final optionsWidth =
-                            (constraints.maxWidth - (compact ? 72.0 : 146.0))
-                                .clamp(220.0, 620.0)
-                                .toDouble();
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: _buildAutocomplete(context, optionsWidth),
-                            ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              height: 42,
-                              child: compact
-                                  ? FilledButton(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: _connectionModeTone(
-                                          _connectionMode,
-                                        ),
+                      curve: Curves.easeOutCubic,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppVisual.inset(context),
+                        borderRadius: BorderRadius.circular(AppVisual.radius),
+                        border: Border.all(
+                          color: _hasInputError.value
+                              ? dangerTone
+                              : (_idInputFocused.value
+                                  ? modeTone
+                                  : AppVisual.border(context)),
+                          width: (_idInputFocused.value || _hasInputError.value)
+                              ? 1.5
+                              : 1,
+                        ),
+                        boxShadow: _hasInputError.value
+                            ? [
+                                BoxShadow(
+                                  color: dangerTone.withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  spreadRadius: 1,
+                                ),
+                              ]
+                            : (_idInputFocused.value
+                                ? [
+                                    BoxShadow(
+                                      color: modeTone.withValues(
+                                        alpha: isLight ? 0.20 : 0.30,
                                       ),
-                                      onPressed: _connectSelectedMode,
-                                      child: const Icon(
-                                        Icons.arrow_forward_rounded,
-                                        size: 18,
-                                      ),
-                                    )
-                                  : FilledButton.icon(
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: _connectionModeTone(
-                                          _connectionMode,
-                                        ),
-                                      ),
-                                      onPressed: _connectSelectedMode,
-                                      icon: const Icon(
-                                        Icons.arrow_forward_rounded,
-                                        size: 18,
-                                      ),
-                                      label: Text(translate("Connect")),
+                                      blurRadius: 8,
+                                      spreadRadius: 1,
                                     ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
+                                  ]
+                                : const []),
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 460;
+                          final optionsWidth =
+                              (constraints.maxWidth - (compact ? 72.0 : 146.0))
+                                  .clamp(220.0, 620.0)
+                                  .toDouble();
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: _buildAutocomplete(context, optionsWidth),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                height: 42,
+                                child: compact
+                                    ? FilledButton(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: modeTone,
+                                          foregroundColor: Colors.white,
+                                          elevation: 2,
+                                          shadowColor: modeTone.withValues(
+                                            alpha: 0.38,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(
+                                              CamelliaRadius.control,
+                                            ),
+                                          ),
+                                        ),
+                                        onPressed: _connectSelectedMode,
+                                        child: AnimatedSwitcher(
+                                          duration: AppMotion.duration(
+                                            context,
+                                            AppMotion.feedback,
+                                          ),
+                                          child: _isConnecting.value
+                                              ? const SizedBox(
+                                                  key: ValueKey('loading'),
+                                                  width: 18,
+                                                  height: 18,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    color: Colors.white,
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  key: ValueKey('arrow'),
+                                                  Icons.arrow_forward_rounded,
+                                                  size: 18,
+                                                ),
+                                        ),
+                                      )
+                                    : FilledButton.icon(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: modeTone,
+                                          foregroundColor: Colors.white,
+                                          elevation: 2,
+                                          shadowColor: modeTone.withValues(
+                                            alpha: 0.38,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(
+                                              CamelliaRadius.control,
+                                            ),
+                                          ),
+                                          textStyle: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                        onPressed: _connectSelectedMode,
+                                        icon: AnimatedSwitcher(
+                                          duration: AppMotion.duration(
+                                            context,
+                                            AppMotion.feedback,
+                                          ),
+                                          child: _isConnecting.value
+                                              ? const SizedBox(
+                                                  key: ValueKey('loading'),
+                                                  width: 18,
+                                                  height: 18,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    color: Colors.white,
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  key: ValueKey('arrow'),
+                                                  Icons.arrow_forward_rounded,
+                                                  size: 18,
+                                                ),
+                                        ),
+                                        label: Text(translate("Connect")),
+                                      ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -604,38 +753,70 @@ class _ConnectionPageState extends State<ConnectionPage>
               fieldTextEditingController,
               _idController.text,
             );
-            return Obx(
-              () => TextField(
-                autocorrect: false,
-                enableSuggestions: false,
-                keyboardType: TextInputType.visiblePassword,
-                focusNode: fieldFocusNode,
-                style: const TextStyle(fontSize: 22, height: 1.35),
-                maxLines: 1,
-                cursorColor: Theme.of(context).textTheme.titleLarge?.color,
-                decoration: InputDecoration(
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  counterText: '',
-                  hintText: _idInputFocused.value
-                      ? null
-                      : translate('Enter Remote ID'),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 9,
-                  ),
-                ),
-                controller: fieldTextEditingController,
-                inputFormatters: [IDTextInputFormatter()],
-                onChanged: (v) {
-                  _idController.id = v;
-                },
-                onSubmitted: (_) {
-                  _connectSelectedMode();
-                },
-              ).workaroundFreezeLinuxMint(),
+            final modeTone = _connectionModeTone(_connectionMode);
+            final tokens = AppVisual.tokens(context);
+            return ValueListenableBuilder<TextEditingValue>(
+              valueListenable: fieldTextEditingController,
+              builder: (context, textValue, _) {
+                return Obx(
+                  () => TextField(
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    keyboardType: TextInputType.visiblePassword,
+                    focusNode: fieldFocusNode,
+                    style: TextStyle(
+                      fontSize: 22,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.8,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: Theme.of(context).textTheme.titleLarge?.color,
+                    ),
+                    maxLines: 1,
+                    cursorColor: modeTone,
+                    decoration: InputDecoration(
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      counterText: '',
+                      hintText: _idInputFocused.value
+                          ? null
+                          : translate('Enter Remote ID'),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 9,
+                      ),
+                      suffixIcon: textValue.text.isNotEmpty
+                          ? IconButton(
+                              tooltip: translate('Clear'),
+                              icon: Icon(
+                                Icons.cancel_rounded,
+                                size: 18,
+                                color: tokens.muted,
+                              ),
+                              onPressed: () {
+                                fieldTextEditingController.clear();
+                                _idEditingController.clear();
+                                _idController.id = '';
+                              },
+                            )
+                          : null,
+                    ),
+                    controller: fieldTextEditingController,
+                    inputFormatters: [IDTextInputFormatter()],
+                    onChanged: (v) {
+                      _idController.id = v;
+                      if (_hasInputError.value && v.trim().isNotEmpty) {
+                        _hasInputError.value = false;
+                      }
+                    },
+                    onSubmitted: (_) {
+                      _connectSelectedMode();
+                    },
+                  ).workaroundFreezeLinuxMint(),
+                );
+              },
             );
           },
       onSelected: (option) {
@@ -651,62 +832,79 @@ class _ConnectionPageState extends State<ConnectionPage>
             Iterable<Peer> options,
           ) {
             options = _autocompleteOpts;
-            double maxHeight = options.length * 50;
+            double maxHeight = options.length * 52.0;
             if (options.length == 1) {
-              maxHeight = 52;
+              maxHeight = 58;
             } else if (options.length == 3) {
-              maxHeight = 146;
+              maxHeight = 156;
             } else if (options.length == 4) {
-              maxHeight = 193;
+              maxHeight = 208;
             }
-            maxHeight = maxHeight.clamp(0, 200);
+            maxHeight = maxHeight.clamp(0, 240);
+
+            final isLight = AppVisual.isLight(context);
+            final tokens = AppVisual.tokens(context);
 
             return Align(
               alignment: Alignment.topLeft,
               child: Container(
                 decoration: BoxDecoration(
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.24),
-                      blurRadius: 14,
-                      spreadRadius: 1,
-                    ),
-                  ],
+                  borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                  boxShadow: AppVisual.shadow(context, elevated: true),
                 ),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(AppVisual.radius),
-                  child: Material(
-                    elevation: 0,
-                    color: Theme.of(context).colorScheme.surface,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: maxHeight,
-                        maxWidth: optionsWidth.clamp(280, 620).toDouble(),
+                  borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: (isLight
+                                ? tokens.surfaceElevated
+                                : tokens.surfaceContainer)
+                            .withValues(alpha: isLight ? 0.88 : 0.84),
+                        borderRadius:
+                            BorderRadius.circular(CamelliaRadius.surface),
+                        border: Border.all(color: AppVisual.border(context)),
                       ),
-                      child:
-                          _allPeersLoader.peers.isEmpty &&
-                              !_allPeersLoader.isPeersLoaded
-                          ? const SizedBox(
-                              height: 80,
-                              child: Center(
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            )
-                          : Padding(
-                              padding: const EdgeInsets.only(top: 5),
-                              child: ListView(
-                                children: options
-                                    .map(
-                                      (peer) => AutocompletePeerTile(
-                                        onSelect: () => onSelected(peer),
-                                        peer: peer,
+                      child: Material(
+                        elevation: 0,
+                        color: Colors.transparent,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: maxHeight,
+                            maxWidth: optionsWidth.clamp(280, 620).toDouble(),
+                          ),
+                          child:
+                              _allPeersLoader.peers.isEmpty &&
+                                      !_allPeersLoader.isPeersLoaded
+                                  ? const SizedBox(
+                                      height: 80,
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
                                       ),
                                     )
-                                    .toList(),
-                              ),
-                            ),
+                                  : Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 2,
+                                      ),
+                                      child: ListView(
+                                        padding: EdgeInsets.zero,
+                                        children: options
+                                            .map(
+                                              (peer) => AutocompletePeerTile(
+                                                onSelect: () =>
+                                                    onSelected(peer),
+                                                peer: peer,
+                                              ),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                        ),
+                      ),
                     ),
                   ),
                 ),

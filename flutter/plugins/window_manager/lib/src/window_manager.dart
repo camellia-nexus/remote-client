@@ -316,10 +316,10 @@ class WindowManager {
   /// Sets the background color of the window.
   Future<void> setBackgroundColor(Color backgroundColor) async {
     final Map<String, dynamic> arguments = {
-      'backgroundColorA': backgroundColor.alpha,
-      'backgroundColorR': backgroundColor.red,
-      'backgroundColorG': backgroundColor.green,
-      'backgroundColorB': backgroundColor.blue,
+      'backgroundColorA': (backgroundColor.a * 255.0).round().clamp(0, 255),
+      'backgroundColorR': (backgroundColor.r * 255.0).round().clamp(0, 255),
+      'backgroundColorG': (backgroundColor.g * 255.0).round().clamp(0, 255),
+      'backgroundColorB': (backgroundColor.b * 255.0).round().clamp(0, 255),
     };
     await _channel.invokeMethod('setBackgroundColor', arguments);
   }
@@ -577,7 +577,7 @@ class WindowManager {
     bool windowButtonVisibility = true,
   }) async {
     final Map<String, dynamic> arguments = {
-      'titleBarStyle': describeEnum(titleBarStyle),
+      'titleBarStyle': titleBarStyle.name,
       'windowButtonVisibility': windowButtonVisibility,
     };
     await _channel.invokeMethod('setTitleBarStyle', arguments);
@@ -703,7 +703,7 @@ class WindowManager {
   /// Sets the brightness of the window.
   Future<void> setBrightness(Brightness brightness) async {
     final Map<String, dynamic> arguments = {
-      'brightness': describeEnum(brightness),
+      'brightness': brightness.name,
     };
     await _channel.invokeMethod('setBrightness', arguments);
   }
@@ -740,7 +740,7 @@ class WindowManager {
     await _channel.invokeMethod<bool>(
       'startResizing',
       {
-        'resizeEdge': describeEnum(resizeEdge),
+        'resizeEdge': resizeEdge.name,
         'top': resizeEdge == ResizeEdge.top ||
             resizeEdge == ResizeEdge.topLeft ||
             resizeEdge == ResizeEdge.topRight,

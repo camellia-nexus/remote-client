@@ -93,7 +93,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         page: ViewCameraPage(
           key: ValueKey(peerId),
           id: peerId!,
-          sessionId: sessionId == null ? null : SessionID(sessionId),
+          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
           tabWindowId: tabWindowId,
           display: display,
           displays: displays?.cast<int>(),
@@ -432,7 +432,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         page: ViewCameraPage(
           key: ValueKey(id),
           id: id,
-          sessionId: sessionId == null ? null : SessionID(sessionId),
+          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
           tabWindowId: tabWindowId,
           display: display,
           displays: displays?.cast<int>(),

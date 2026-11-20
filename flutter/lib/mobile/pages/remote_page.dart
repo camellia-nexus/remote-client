@@ -9,6 +9,8 @@ import 'package:camellia_remote_app/mobile/widgets/floating_mouse.dart';
 import 'package:camellia_remote_app/mobile/widgets/floating_mouse_widgets.dart';
 import 'package:camellia_remote_app/mobile/widgets/gesture_help.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
@@ -63,6 +65,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _teardownCalled = false;
   Timer? _timer;
   bool _showGestureHelp = false;
+  bool _showVirtualKeys = false;
   String _value = '';
   Orientation? _currentOrientation;
   Timer? _orientationTimer;
@@ -608,6 +611,139 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildVirtualKeyBar() {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    Widget keyPill({
+      required String label,
+      IconData? icon,
+      bool active = false,
+      required VoidCallback onTap,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: GestureDetector(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: AnimatedContainer(
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            decoration: BoxDecoration(
+              color: active
+                  ? primary.withValues(alpha: 0.24)
+                  : AppVisual.inset(context).withValues(alpha: 0.78),
+              borderRadius: BorderRadius.circular(CamelliaRadius.control),
+              border: Border.all(
+                color: active
+                    ? primary.withValues(alpha: 0.65)
+                    : AppVisual.border(context).withValues(alpha: 0.55),
+              ),
+            ),
+            child: icon != null
+                ? Icon(
+                    icon,
+                    size: 16,
+                    color: active ? primary : theme.colorScheme.onSurface,
+                  )
+                : Text(
+                    label,
+                    style: CamelliaTypography.tabular(
+                      theme.textTheme.labelMedium?.copyWith(
+                        color: active ? primary : theme.colorScheme.onSurface,
+                        fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      child: Center(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  keyPill(
+                    label: 'Esc',
+                    onTap: () => inputModel.inputKey('Escape'),
+                  ),
+                  keyPill(
+                    label: 'Tab',
+                    onTap: () => inputModel.inputKey('Tab'),
+                  ),
+                  keyPill(
+                    label: 'Ctrl',
+                    active: inputModel.ctrl,
+                    onTap: () => setState(() => inputModel.ctrl = !inputModel.ctrl),
+                  ),
+                  keyPill(
+                    label: 'Alt',
+                    active: inputModel.alt,
+                    onTap: () => setState(() => inputModel.alt = !inputModel.alt),
+                  ),
+                  keyPill(
+                    label: 'Win',
+                    active: inputModel.command,
+                    onTap: () => setState(
+                      () => inputModel.command = !inputModel.command,
+                    ),
+                  ),
+                  keyPill(
+                    label: 'Shift',
+                    active: inputModel.shift,
+                    onTap: () =>
+                        setState(() => inputModel.shift = !inputModel.shift),
+                  ),
+                  keyPill(
+                    label: 'Left',
+                    icon: Icons.keyboard_arrow_left_rounded,
+                    onTap: () => inputModel.inputKey('LeftArrow'),
+                  ),
+                  keyPill(
+                    label: 'Up',
+                    icon: Icons.keyboard_arrow_up_rounded,
+                    onTap: () => inputModel.inputKey('UpArrow'),
+                  ),
+                  keyPill(
+                    label: 'Down',
+                    icon: Icons.keyboard_arrow_down_rounded,
+                    onTap: () => inputModel.inputKey('DownArrow'),
+                  ),
+                  keyPill(
+                    label: 'Right',
+                    icon: Icons.keyboard_arrow_right_rounded,
+                    onTap: () => inputModel.inputKey('RightArrow'),
+                  ),
+                  keyPill(
+                    label: 'Del',
+                    onTap: () => inputModel.inputKey('Delete'),
+                  ),
+                  keyPill(
+                    label: 'CAD',
+                    onTap: () => bind.sessionCtrlAltDel(sessionId: sessionId),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget getBottomAppBar() {
     final ffiModel = Provider.of<FfiModel>(context);
     final canInput =
@@ -617,12 +753,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         icon: Icons.close_rounded,
         label: translate('Close'),
         destructive: true,
-        onPressed: () => clientClose(sessionId, gFFI),
+        onPressed: () {
+          HapticFeedback.mediumImpact();
+          clientClose(sessionId, gFFI);
+        },
       ),
       _RemoteDockButton(
         icon: Icons.display_settings_outlined,
         label: translate('Display'),
         onPressed: () {
+          HapticFeedback.selectionClick();
           setState(() => _showEdit = false);
           showOptions(context, widget.id, gFFI.dialogManager);
         },
@@ -631,19 +771,51 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         _RemoteDockButton(
           icon: Icons.keyboard_alt_outlined,
           label: translate('Keyboard'),
-          onPressed: openKeyboard,
+          onPressed: () {
+            HapticFeedback.selectionClick();
+            openKeyboard();
+          },
+        ),
+      if (canInput)
+        _RemoteDockButton(
+          icon: _showVirtualKeys
+              ? Icons.keyboard_hide_rounded
+              : Icons.keyboard_command_key_rounded,
+          label: 'Fn',
+          active: _showVirtualKeys,
+          onPressed: () {
+            HapticFeedback.selectionClick();
+            setState(() => _showVirtualKeys = !_showVirtualKeys);
+          },
         ),
       if (canInput)
         _RemoteDockButton(
           icon: ffiModel.isPeerAndroid
               ? Icons.smartphone_rounded
               : ffiModel.touchMode
-              ? Icons.touch_app_outlined
-              : Icons.mouse_outlined,
-          label: translate(ffiModel.isPeerAndroid ? 'Actions' : 'Input'),
-          onPressed: ffiModel.isPeerAndroid
-              ? () => gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)
-              : () => setState(() => _showGestureHelp = true),
+              ? Icons.touch_app_rounded
+              : Icons.mouse_rounded,
+          label: translate(
+            ffiModel.isPeerAndroid
+                ? 'Actions'
+                : (ffiModel.touchMode ? 'Touch' : 'Mouse'),
+          ),
+          active: !ffiModel.isPeerAndroid && ffiModel.touchMode,
+          onPressed: () {
+            HapticFeedback.selectionClick();
+            if (ffiModel.isPeerAndroid) {
+              gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI);
+            } else {
+              ffiModel.toggleTouchMode();
+              final enabled = ffiModel.touchMode;
+              bind.sessionPeerOption(
+                sessionId: sessionId,
+                name: kOptionTouchMode,
+                value: enabled ? 'Y' : 'N',
+              );
+              showToast(translate(enabled ? 'Touch mode' : 'Mouse mode'));
+            }
+          },
         ),
       if (!isWeb)
         FutureBuilder<dynamic>(
@@ -659,6 +831,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 icon: Icons.forum_outlined,
                 label: translate('Chat'),
                 onPressed: () {
+                  HapticFeedback.selectionClick();
                   if ((isAndroid && supportsVoice) || isInVoice) {
                     showChatOptions(widget.id);
                   } else {
@@ -673,35 +846,41 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         icon: Icons.more_horiz_rounded,
         label: translate('More'),
         onPressed: () {
+          HapticFeedback.selectionClick();
           setState(() => _showEdit = false);
           showActions(widget.id);
         },
       ),
     ];
-    return Material(
-      elevation: 12,
-      color: Theme.of(context).colorScheme.surface,
-      shape: Border(
-        top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      child: SafeArea(
-        top: false,
-        minimum: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-        child: Center(
-          heightFactor: 1,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: SizedBox(
-              height: 64,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final action in actions) Expanded(child: action),
-                ],
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (canInput && _showVirtualKeys) _buildVirtualKeyBar(),
+          Center(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: GlassSurface(
+                layer: CamelliaGlassLayer.modal,
+                elevated: true,
+                borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 54),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      for (final action in actions) Expanded(child: action),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -732,7 +911,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               width: 0,
               height: 0,
               child: !_showEdit
-                  ? Container()
+                  ? const SizedBox.shrink()
                   : TextFormField(
                       textInputAction: TextInputAction.newline,
                       autocorrect: false,
@@ -829,10 +1008,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void showActions(String id) async {
     final mobileActionMenus = _getMobileActionMenus();
     final menus = toolbarControls(context, id, gFFI);
-    await showModalBottomSheet<void>(
+    await showGlassBottomSheet<void>(
       context: context,
-      useSafeArea: true,
-      showDragHandle: true,
+      title: translate('Session actions'),
       builder: (sheetContext) {
         Widget section(String title, List<TTextMenu> actions) {
           final visibleActions = actions.where((action) => !action.divider);
@@ -853,6 +1031,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 (action) => ListTile(
                   title: action.getChild(),
                   onTap: () {
+                    HapticFeedback.selectionClick();
                     Navigator.of(sheetContext).pop();
                     action.onPressed?.call();
                   },
@@ -864,11 +1043,21 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
         return ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.7,
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.72,
           ),
           child: ListView(
             shrinkWrap: true,
             children: [
+              if (!gFFI.ffiModel.isPeerAndroid)
+                ListTile(
+                  leading: const Icon(Icons.gesture_rounded),
+                  title: Text(translate('Gesture Help')),
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    Navigator.of(sheetContext).pop();
+                    setState(() => _showGestureHelp = true);
+                  },
+                ),
               section(translate('Device actions'), mobileActionMenus),
               section(translate('Session actions'), menus),
               const SizedBox(height: 12),
@@ -1010,40 +1199,60 @@ class _RemoteDockButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.destructive = false,
+    this.active = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
   final bool destructive;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = destructive ? scheme.error : scheme.onSurfaceVariant;
+    final color = destructive
+        ? scheme.error
+        : active
+        ? scheme.primary
+        : scheme.onSurfaceVariant;
     return Semantics(
       button: true,
+      selected: active,
       label: label,
       child: Tooltip(
         message: label,
         child: InkWell(
           onTap: onPressed,
           borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
+          child: AnimatedContainer(
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
+            decoration: BoxDecoration(
+              color: active
+                  ? scheme.primary.withValues(
+                      alpha: Theme.of(context).brightness == Brightness.dark
+                          ? 0.20
+                          : 0.12,
+                    )
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, size: 22, color: onPressed == null ? null : color),
-                const SizedBox(height: 4),
+                Icon(icon, size: 20, color: onPressed == null ? null : color),
+                const SizedBox(height: 3),
                 Text(
                   label,
-                  maxLines: 2,
+                  maxLines: 1,
+                  softWrap: false,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: onPressed == null ? null : color,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w600,
                   ),
                 ),
               ],
@@ -1158,7 +1367,7 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
       );
       return Offstage();
     }
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
 
     final pi = gFFI.ffiModel.pi;
     final isMac = pi.platform == kPeerPlatformMacOS;

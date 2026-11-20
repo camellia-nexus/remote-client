@@ -447,7 +447,7 @@ class PlatformFFI {
     js.context['dialog'] = ((JSAny? type, JSAny? title, JSAny? text) {
       final uuid = Uuid();
       msgBox(
-        SessionID(uuid.v4()),
+        UuidValue.fromString(uuid.v4()),
         (type?.dartify() ?? '').toString(),
         (title?.dartify() ?? '').toString(),
         (text?.dartify() ?? '').toString(),

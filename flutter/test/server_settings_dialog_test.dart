@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:camellia_remote_app/mobile/widgets/dialog.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
 
 void main() {
   testWidgets('server settings text fields preserve literal input',

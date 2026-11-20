@@ -404,31 +404,37 @@ hideCmWindow({bool isStartup = false}) async {
 
 void _runApp(String title, Widget home, ThemeMode themeMode) {
   final botToastBuilder = BotToastInit();
+  MyTheme.getThemePreference();
   runApp(
     RefreshWrapper(
-      builder: (context) => GetMaterialApp(
-        navigatorKey: globalKey,
-        debugShowCheckedModeBanner: false,
-        title: title,
-        theme: MyTheme.lightTheme,
-        darkTheme: MyTheme.darkTheme,
-        themeMode: themeMode,
-        home: home,
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: supportedLocales,
-        navigatorObservers: [
-          // FirebaseAnalyticsObserver(analytics: analytics),
-          BotToastNavigatorObserver(),
-        ],
-        builder: (context, child) {
-          child = _keepScaleBuilder(context, child);
-          child = botToastBuilder(context, child);
-          return child;
-        },
+      builder: (context) => ValueListenableBuilder<CamelliaThemePreference>(
+        valueListenable: MyTheme.themeNotifier,
+        builder: (context, pref, _) => GetMaterialApp(
+          navigatorKey: globalKey,
+          debugShowCheckedModeBanner: false,
+          title: title,
+          theme: MyTheme.lightTheme,
+          darkTheme: pref == CamelliaThemePreference.midnight
+              ? MyTheme.midnightTheme
+              : MyTheme.darkTheme,
+          themeMode: themeMode,
+          home: home,
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: supportedLocales,
+          navigatorObservers: [
+            // FirebaseAnalyticsObserver(analytics: analytics),
+            BotToastNavigatorObserver(),
+          ],
+          builder: (context, child) {
+            child = _keepScaleBuilder(context, child);
+            child = botToastBuilder(context, child);
+            return child;
+          },
+        ),
       ),
     ),
   );
@@ -480,7 +486,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.window.onPlatformBrightnessChanged = () {
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged = () {
       final userPreference = MyTheme.getThemeModePreference();
       if (userPreference != ThemeMode.system) return;
       WidgetsBinding.instance.handlePlatformBrightnessChanged();
@@ -546,46 +552,59 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             ChangeNotifierProvider.value(value: gFFI.canvasModel),
             ChangeNotifierProvider.value(value: gFFI.peerTabModel),
           ],
-          child: GetMaterialApp(
-            navigatorKey: globalKey,
-            debugShowCheckedModeBanner: false,
-            title: buildMainAppTitle(bind.mainGetAppNameSync()),
-            theme: MyTheme.lightTheme,
-            darkTheme: MyTheme.darkTheme,
-            themeMode: MyTheme.currentThemeMode(),
-            home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
-            localizationsDelegates: const [
-              GlobalMaterialLocalizations.delegate,
-              GlobalWidgetsLocalizations.delegate,
-              GlobalCupertinoLocalizations.delegate,
-            ],
-            supportedLocales: supportedLocales,
-            navigatorObservers: [
-              // FirebaseAnalyticsObserver(analytics: analytics),
-              BotToastNavigatorObserver(),
-            ],
-            builder: isAndroid
-                ? (context, child) =>
-                      AccessibilityListener(child: child ?? Container())
-                : (context, child) {
-                    child = _keepScaleBuilder(context, child);
-                    child = botToastBuilder(context, child);
-                    if ((isDesktop && desktopType == DesktopType.main) ||
-                        isWebDesktop) {
-                      child = keyListenerBuilder(context, child);
-                    }
-                    if (isWeb) {
-                      child = FocusTraversalGroup(
-                        policy: WidgetOrderTraversalPolicy(),
-                        child: child,
-                      );
-                    }
-                    if (isLinux) {
-                      return buildVirtualWindowFrame(context, child);
-                    } else {
-                      return workaroundWindowBorder(context, child);
-                    }
-                  },
+          child: ValueListenableBuilder<CamelliaThemePreference>(
+            valueListenable: MyTheme.themeNotifier,
+            builder: (context, pref, _) {
+              final resolvedMode = switch (pref) {
+                CamelliaThemePreference.light => ThemeMode.light,
+                CamelliaThemePreference.dark ||
+                CamelliaThemePreference.midnight => ThemeMode.dark,
+                CamelliaThemePreference.system => MyTheme.currentThemeMode(),
+              };
+              return GetMaterialApp(
+                navigatorKey: globalKey,
+                debugShowCheckedModeBanner: false,
+                title: buildMainAppTitle(bind.mainGetAppNameSync()),
+                theme: MyTheme.lightTheme,
+                darkTheme: pref == CamelliaThemePreference.midnight
+                    ? MyTheme.midnightTheme
+                    : MyTheme.darkTheme,
+                themeMode: resolvedMode,
+                home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                supportedLocales: supportedLocales,
+                navigatorObservers: [
+                  // FirebaseAnalyticsObserver(analytics: analytics),
+                  BotToastNavigatorObserver(),
+                ],
+                builder: isAndroid
+                    ? (context, child) =>
+                          AccessibilityListener(child: child ?? Container())
+                    : (context, child) {
+                        child = _keepScaleBuilder(context, child);
+                        child = botToastBuilder(context, child);
+                        if ((isDesktop && desktopType == DesktopType.main) ||
+                            isWebDesktop) {
+                          child = keyListenerBuilder(context, child);
+                        }
+                        if (isWeb) {
+                          child = FocusTraversalGroup(
+                            policy: WidgetOrderTraversalPolicy(),
+                            child: child,
+                          );
+                        }
+                        if (isLinux) {
+                          return buildVirtualWindowFrame(context, child);
+                        } else {
+                          return workaroundWindowBorder(context, child);
+                        }
+                      },
+              );
+            },
           ),
         );
       },
@@ -602,7 +621,9 @@ _registerEventHandler() {
     platformFFI.registerEventHandler('theme', 'theme', (evt) async {
       String? dark = evt['dark'];
       if (dark != null) {
-        await MyTheme.changeDarkMode(MyTheme.themeModeFromString(dark));
+        await MyTheme.changeThemePreference(
+          MyTheme.themePreferenceFromString(dark),
+        );
       }
     });
     platformFFI.registerEventHandler('language', 'language', (_) async {
@@ -629,14 +650,14 @@ _registerEventHandler() {
 }
 
 Widget keyListenerBuilder(BuildContext context, Widget? child) {
-  return RawKeyboardListener(
+  return KeyboardListener(
     focusNode: FocusNode(),
     child: child ?? Container(),
-    onKey: (RawKeyEvent event) {
+    onKeyEvent: (KeyEvent event) {
       if (event.logicalKey == LogicalKeyboardKey.shiftLeft) {
-        if (event is RawKeyDownEvent) {
+        if (event is KeyDownEvent) {
           gFFI.peerTabModel.setShiftDown(true);
-        } else if (event is RawKeyUpEvent) {
+        } else if (event is KeyUpEvent) {
           gFFI.peerTabModel.setShiftDown(false);
         }
       }

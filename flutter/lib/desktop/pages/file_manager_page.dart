@@ -156,10 +156,11 @@ class _FileManagerPageState extends State<FileManagerPage>
 
   Widget willPopScope(Widget child) {
     if (isWeb) {
-      return WillPopScope(
-        onWillPop: () async {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (didPop) return;
           clientClose(_ffi.sessionId, _ffi);
-          return false;
         },
         child: child,
       );
@@ -923,12 +924,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                 Obx(
                   () => ElevatedButton.icon(
                     style: ButtonStyle(
-                      padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
+                      padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
                         isLocal
                             ? EdgeInsets.only(left: 10)
                             : EdgeInsets.only(right: 10),
                       ),
-                      backgroundColor: MaterialStateProperty.all(
+                      backgroundColor: WidgetStatePropertyAll(
                         selectedItems.items.isEmpty
                             ? MyTheme.accent80
                             : MyTheme.accent,
@@ -992,12 +993,12 @@ class _FileManagerViewState extends State<FileManagerView> {
               Obx(
                 () => ElevatedButton.icon(
                   style: ButtonStyle(
-                    padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
+                    padding: WidgetStatePropertyAll<EdgeInsetsGeometry>(
                       isLocal
                           ? EdgeInsets.only(left: 10)
                           : EdgeInsets.only(right: 10),
                     ),
-                    backgroundColor: MaterialStateProperty.all(
+                    backgroundColor: WidgetStatePropertyAll(
                       selectedItems.items.isEmpty
                           ? MyTheme.accent80
                           : MyTheme.accent,
@@ -1484,20 +1485,8 @@ class _FileManagerViewState extends State<FileManagerView> {
     Entry entry,
     bool isLocal,
   ) {
-    final isCtrlDown =
-        RawKeyboard.instance.keysPressed.contains(
-          LogicalKeyboardKey.controlLeft,
-        ) ||
-        RawKeyboard.instance.keysPressed.contains(
-          LogicalKeyboardKey.controlRight,
-        );
-    final isShiftDown =
-        RawKeyboard.instance.keysPressed.contains(
-          LogicalKeyboardKey.shiftLeft,
-        ) ||
-        RawKeyboard.instance.keysPressed.contains(
-          LogicalKeyboardKey.shiftRight,
-        );
+    final isCtrlDown = HardwareKeyboard.instance.isControlPressed;
+    final isShiftDown = HardwareKeyboard.instance.isShiftPressed;
     if (isCtrlDown) {
       if (selectedItems.items.contains(entry)) {
         selectedItems.remove(entry);
@@ -1789,7 +1778,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           content: TextButton(
             child: buildWindowsThisPC(context),
             style: ButtonStyle(
-              minimumSize: MaterialStateProperty.all(Size(0, 0)),
+              minimumSize: WidgetStatePropertyAll(Size(0, 0)),
             ),
             onPressed: () => onPressed(['/']),
           ).marginSymmetric(horizontal: 4),
@@ -1803,7 +1792,7 @@ class _FileManagerViewState extends State<FileManagerView> {
             content: TextButton(
               child: Text(e.value),
               style: ButtonStyle(
-                minimumSize: MaterialStateProperty.all(Size(0, 0)),
+                minimumSize: WidgetStatePropertyAll(Size(0, 0)),
               ),
               onPressed: () => onPressed(list.sublist(0, e.key + 1)),
             ).marginSymmetric(horizontal: 4),

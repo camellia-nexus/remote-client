@@ -6,6 +6,8 @@ import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_home_page.dart';
 import 'package:camellia_remote_app/mobile/widgets/dialog.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -30,7 +32,7 @@ class ServerPage extends StatefulWidget implements PageShape {
       ? [const ServerAccessMenuButton()]
       : [];
 
-  ServerPage({Key? key}) : super(key: key);
+  ServerPage({super.key});
 
   @override
   State<StatefulWidget> createState() => _ServerPageState();
@@ -274,7 +276,7 @@ void checkService() async {
 }
 
 class ServiceNotRunningNotification extends StatelessWidget {
-  ServiceNotRunningNotification({Key? key}) : super(key: key);
+  const ServiceNotRunningNotification({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -295,10 +297,11 @@ class ServiceNotRunningNotification extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          FilledButton.icon(
+          GlassButton(
+            variant: GlassButtonVariant.primary,
             icon: const Icon(Icons.play_arrow_rounded),
             onPressed: serverModel.toggleService,
-            label: Text(translate("Start service")),
+            child: Text(translate("Start service")),
           ),
         ],
       ),
@@ -306,39 +309,47 @@ class ServiceNotRunningNotification extends StatelessWidget {
   }
 }
 
-class ServerInfo extends StatelessWidget {
-  final model = gFFI.serverModel;
+class ServerInfo extends StatefulWidget {
+  const ServerInfo({super.key});
 
-  ServerInfo({Key? key}) : super(key: key);
+  @override
+  State<ServerInfo> createState() => _ServerInfoState();
+}
+
+class _ServerInfoState extends State<ServerInfo> {
+  final model = gFFI.serverModel;
+  bool _passwordVisible = false;
+  double _refreshTurns = 0.0;
+
+  void _copyToClipboard(String value) {
+    HapticFeedback.lightImpact();
+    Clipboard.setData(ClipboardData(text: value));
+    showToast(translate('Copied'));
+  }
 
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-
-    void copyToClipboard(String value) {
-      Clipboard.setData(ClipboardData(text: value));
-      showToast(translate('Copied'));
-    }
+    final glass = CamelliaGlassTokens.of(context);
 
     Widget connectionState() {
       if (serverModel.connectStatus == -1) {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('not_ready_status'),
-          color: AppVisual.tone(context, AppTone.danger),
+          statusColor: glass.statusAlert,
           icon: Icons.error_outline_rounded,
         );
       } else if (serverModel.connectStatus == 0) {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('connecting_status'),
-          color: AppVisual.tone(context, AppTone.info),
+          statusColor: glass.statusConnecting,
           icon: Icons.sync_rounded,
-          busy: true,
         );
       } else {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('Ready'),
-          color: AppVisual.tone(context, AppTone.success),
-          icon: Icons.check_circle_outline_rounded,
+          statusColor: glass.statusOnline,
+          icon: Icons.verified_user_rounded,
         );
       }
     }
@@ -346,6 +357,10 @@ class ServerInfo extends StatelessWidget {
     final showOneTime =
         serverModel.approveMode != 'click' &&
         serverModel.verificationMethod != kUsePermanentPassword;
+    final idText = model.serverId.value.text;
+    final passText = model.serverPasswd.value.text;
+    final maskedPass = passText.isEmpty ? '-' : '•' * passText.length;
+
     return PaddingCard(
       title: translate('Your Device'),
       titleIcon: Icon(
@@ -355,18 +370,41 @@ class ServerInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(alignment: Alignment.centerLeft, child: connectionState()),
+          Row(
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: connectionState(),
+                ),
+              ),
+              if (idText.trim().isNotEmpty)
+                GlassIconButton(
+                  icon: Icons.share_rounded,
+                  tooltip: translate('Copy to clipboard'),
+                  size: 36,
+                  iconSize: 18,
+                  onPressed: () {
+                    final combined = showOneTime && passText.trim().isNotEmpty
+                        ? '${translate('ID')}: ${idText.trim()}\n${translate('Password')}: ${passText.trim()}'
+                        : idText.trim();
+                    _copyToClipboard(combined);
+                  },
+                ),
+            ],
+          ),
           const SizedBox(height: 14),
           _CredentialRow(
             icon: Icons.fingerprint_rounded,
             label: translate('ID'),
-            value: model.serverId.value.text,
+            value: idText,
             actions: [
-              IconButton(
+              GlassIconButton(
                 tooltip: translate('Copy to clipboard'),
-                icon: const Icon(Icons.copy_outlined),
-                onPressed: () =>
-                    copyToClipboard(model.serverId.value.text.trim()),
+                icon: Icons.copy_rounded,
+                size: 36,
+                iconSize: 18,
+                onPressed: () => _copyToClipboard(idText.trim()),
               ),
             ],
           ),
@@ -374,20 +412,51 @@ class ServerInfo extends StatelessWidget {
           _CredentialRow(
             icon: Icons.key_rounded,
             label: translate('One-time Password'),
-            value: showOneTime ? model.serverPasswd.value.text : '-',
+            value: showOneTime
+                ? (_passwordVisible ? passText : maskedPass)
+                : '-',
             tone: AppTone.warning,
             actions: showOneTime
                 ? [
-                    IconButton(
-                      tooltip: translate('Refresh'),
-                      icon: const Icon(Icons.refresh_rounded),
-                      onPressed: bind.mainUpdateTemporaryPassword,
+                    GlassIconButton(
+                      tooltip: _passwordVisible
+                          ? translate('Hide')
+                          : translate('Show'),
+                      icon: _passwordVisible
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      size: 36,
+                      iconSize: 18,
+                      onPressed: () {
+                        setState(() => _passwordVisible = !_passwordVisible);
+                      },
                     ),
-                    IconButton(
+                    const SizedBox(width: 6),
+                    AnimatedRotation(
+                      turns: _refreshTurns,
+                      duration: CamelliaMotion.resolve(
+                        context,
+                        const Duration(milliseconds: 420),
+                      ),
+                      curve: CamelliaMotion.springBouncy,
+                      child: GlassIconButton(
+                        tooltip: translate('Refresh'),
+                        icon: Icons.refresh_rounded,
+                        size: 36,
+                        iconSize: 18,
+                        onPressed: () {
+                          setState(() => _refreshTurns += 1.0);
+                          bind.mainUpdateTemporaryPassword();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GlassIconButton(
                       tooltip: translate('Copy to clipboard'),
-                      icon: const Icon(Icons.copy_outlined),
-                      onPressed: () =>
-                          copyToClipboard(model.serverPasswd.value.text.trim()),
+                      icon: Icons.copy_rounded,
+                      size: 36,
+                      iconSize: 18,
+                      onPressed: () => _copyToClipboard(passText.trim()),
                     ),
                   ]
                 : const [],
@@ -416,15 +485,19 @@ class _CredentialRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = AppVisual.tone(context, tone);
-    return AppSurface(
-      color: AppVisual.toneContainer(context, tone),
+    return GlassSurface(
+      layer: CamelliaGlassLayer.floating,
+      showShadow: false,
+      enableBlur: false,
+      tintColor: AppVisual.toneContainer(context, tone),
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         children: [
           SizedBox(
-            width: 38,
-            height: 38,
-            child: Icon(icon, color: color, size: 21),
+            width: 36,
+            height: 36,
+            child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -436,9 +509,12 @@ class _CredentialRow extends StatelessWidget {
                 SelectableText(
                   value,
                   maxLines: 1,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: color,
+                  style: CamelliaTypography.tabular(
+                    Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
+                      color: color,
+                    ),
                   ),
                 ),
               ],
@@ -452,7 +528,7 @@ class _CredentialRow extends StatelessWidget {
 }
 
 class PermissionChecker extends StatefulWidget {
-  const PermissionChecker({Key? key}) : super(key: key);
+  const PermissionChecker({super.key});
 
   @override
   State<PermissionChecker> createState() => _PermissionCheckerState();
@@ -548,9 +624,9 @@ class PermissionRow extends StatelessWidget {
     this.name,
     this.isOk,
     this.onPressed, {
-    Key? key,
+    super.key,
     this.enabled = true,
-  }) : super(key: key);
+  });
 
   final String name;
   final bool isOk;
@@ -570,7 +646,7 @@ class PermissionRow extends StatelessWidget {
 }
 
 class ConnectionManager extends StatelessWidget {
-  const ConnectionManager({Key? key}) : super(key: key);
+  const ConnectionManager({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -747,12 +823,12 @@ class ConnectionManager extends StatelessWidget {
 
 class PaddingCard extends StatelessWidget {
   const PaddingCard({
-    Key? key,
+    super.key,
     required this.child,
     this.title,
     this.titleIcon,
     this.tone,
-  }) : super(key: key);
+  });
 
   final String? title;
   final Icon? titleIcon;
@@ -783,17 +859,19 @@ class PaddingCard extends StatelessWidget {
         ),
       );
     }
+    final glass = CamelliaGlassTokens.of(context);
     return SizedBox(
       width: double.maxFinite,
-      child: AppSurface(
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.floating,
         margin: const EdgeInsets.only(top: 12),
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
         elevated: tone != null,
-        color: tone == null
+        tintColor: tone == null
             ? null
             : Color.alphaBlend(
-                AppVisual.tone(context, tone!).withValues(alpha: 0.035),
-                AppVisual.raisedSurface(context),
+                AppVisual.tone(context, tone!).withValues(alpha: 0.06),
+                glass.floatingTint,
               ),
         child: Column(children: children),
       ),
@@ -803,7 +881,7 @@ class PaddingCard extends StatelessWidget {
 
 class ClientInfo extends StatelessWidget {
   final Client client;
-  ClientInfo(this.client);
+  const ClientInfo(this.client, {super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -831,7 +909,9 @@ class ClientInfo extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       client.peerId,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: CamelliaTypography.tabular(
+                        Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                   ],
                 ),
@@ -903,7 +983,7 @@ void androidChannelInit() {
           }
         case "stop_service":
           {
-            print(
+            debugPrint(
               "stop_service by kotlin, isStart:${gFFI.serverModel.isStart}",
             );
             gFFI.serverModel.stopService();
