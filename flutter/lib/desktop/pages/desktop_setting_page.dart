@@ -743,7 +743,6 @@ class _GeneralState extends State<_General> {
       await MyTheme.changeThemePreference(
         MyTheme.themePreferenceFromString(value),
       );
-      setState(() {});
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
@@ -752,7 +751,6 @@ class _GeneralState extends State<_General> {
       await MyTheme.changeThemeStyle(
         CamelliaThemeStyle.fromString(value),
       );
-      setState(() {});
     }
 
     return Padding(

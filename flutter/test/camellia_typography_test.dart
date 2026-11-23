@@ -104,6 +104,9 @@ void main() {
       expect(CamelliaTypography.systemFontFallbacks, [
         'PingFang SC',
         'Microsoft YaHei',
+        'Noto Sans CJK SC',
+        'Source Han Sans SC',
+        'WenQuanYi Micro Hei',
         'Heiti SC',
         'sans-serif',
       ]);

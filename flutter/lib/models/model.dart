@@ -1413,7 +1413,8 @@ class FfiModel with ChangeNotifier {
     SessionID sessionId,
     bool forceRelay,
   ) {
-    if (parent.target?.closed != false || sessionId != this.sessionId) return;
+    if (sessionId != this.sessionId) return;
+    parent.target?.closed = false;
     resetReconnectRetry();
     resetRestartReconnectState();
     _performReconnect(dialogManager, sessionId, forceRelay);

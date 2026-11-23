@@ -4414,132 +4414,125 @@ connect(
   );
 
   if (isDesktop) {
-    if (desktopType == DesktopType.main) {
-      await connectMainDesktop(
-        id,
-        isFileTransfer: isFileTransfer,
-        isViewCamera: isViewCamera,
-        isTerminal: isTerminal,
-        isTcpTunneling: isTcpTunneling,
-        isRDP: isRDP,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        forceRelay: forceRelay,
-        connToken: connToken,
-        isTerminalRunAsAdmin: isTerminalRunAsAdmin,
-      );
-    } else {
-      await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
-        'id': id,
-        'isFileTransfer': isFileTransfer,
-        'isViewCamera': isViewCamera,
-        'isTerminal': isTerminal,
-        'isTcpTunneling': isTcpTunneling,
-        'isRDP': isRDP,
-        'password': password,
-        'isSharedPassword': isSharedPassword,
-        'forceRelay': forceRelay,
-        'connToken': connToken,
-        'isTerminalRunAsAdmin': isTerminalRunAsAdmin,
-      });
+    try {
+      if (desktopType == DesktopType.main) {
+        await connectMainDesktop(
+          id,
+          isFileTransfer: isFileTransfer,
+          isViewCamera: isViewCamera,
+          isTerminal: isTerminal,
+          isTcpTunneling: isTcpTunneling,
+          isRDP: isRDP,
+          password: password,
+          isSharedPassword: isSharedPassword,
+          forceRelay: forceRelay,
+          connToken: connToken,
+          isTerminalRunAsAdmin: isTerminalRunAsAdmin,
+        );
+      } else {
+        await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
+          'id': id,
+          'isFileTransfer': isFileTransfer,
+          'isViewCamera': isViewCamera,
+          'isTerminal': isTerminal,
+          'isTcpTunneling': isTcpTunneling,
+          'isRDP': isRDP,
+          'password': password,
+          'isSharedPassword': isSharedPassword,
+          'forceRelay': forceRelay,
+          'connToken': connToken,
+          'isTerminalRunAsAdmin': isTerminalRunAsAdmin,
+        });
+      }
+    } catch (e) {
+      stateGlobal.isInMainPage = true;
+      rethrow;
     }
   } else {
-    if (isFileTransfer) {
-      if (isWeb) {
-        Navigator.push(
+    try {
+      Future<dynamic>? pushFuture;
+      if (isFileTransfer) {
+        pushFuture = Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (BuildContext context) =>
-                desktop_file_manager.FileManagerPage(
-                  id: id,
-                  password: password,
-                  isSharedPassword: isSharedPassword,
-                ),
+            builder: (BuildContext context) => isWeb
+                ? desktop_file_manager.FileManagerPage(
+                    id: id,
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                  )
+                : FileManagerPage(
+                    id: id,
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                    forceRelay: forceRelay,
+                  ),
           ),
         );
-      } else {
-        Navigator.push(
+      } else if (isViewCamera) {
+        pushFuture = Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (BuildContext context) => FileManagerPage(
+            builder: (BuildContext context) => isWeb
+                ? desktop_view_camera.ViewCameraPage(
+                    key: ValueKey(id),
+                    id: id,
+                    toolbarState: ToolbarState(),
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                  )
+                : ViewCameraPage(
+                    id: id,
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                    forceRelay: forceRelay,
+                  ),
+          ),
+        );
+      } else if (isTerminal) {
+        pushFuture = Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (BuildContext context) => TerminalPage(
               id: id,
               password: password,
               isSharedPassword: isSharedPassword,
               forceRelay: forceRelay,
-            ),
-          ),
-        );
-      }
-    } else if (isViewCamera) {
-      if (isWeb) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) =>
-                desktop_view_camera.ViewCameraPage(
-                  key: ValueKey(id),
-                  id: id,
-                  toolbarState: ToolbarState(),
-                  password: password,
-                  isSharedPassword: isSharedPassword,
-                ),
-          ),
-        );
-      } else {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) => ViewCameraPage(
-              id: id,
-              password: password,
-              isSharedPassword: isSharedPassword,
-              forceRelay: forceRelay,
-            ),
-          ),
-        );
-      }
-    } else if (isTerminal) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (BuildContext context) => TerminalPage(
-            id: id,
-            password: password,
-            isSharedPassword: isSharedPassword,
-            forceRelay: forceRelay,
-            isTerminalRunAsAdmin: isTerminalRunAsAdmin,
-          ),
-        ),
-      );
-    } else {
-      if (isWeb) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) => desktop_remote.RemotePage(
-              key: ValueKey(id),
-              id: id,
-              toolbarState: ToolbarState(),
-              password: password,
-              isSharedPassword: isSharedPassword,
+              isTerminalRunAsAdmin: isTerminalRunAsAdmin,
             ),
           ),
         );
       } else {
-        Navigator.push(
+        pushFuture = Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (BuildContext context) => RemotePage(
-              id: id,
-              password: password,
-              isSharedPassword: isSharedPassword,
-              forceRelay: forceRelay,
-            ),
+            builder: (BuildContext context) => isWeb
+                ? desktop_remote.RemotePage(
+                    key: ValueKey(id),
+                    id: id,
+                    toolbarState: ToolbarState(),
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                  )
+                : RemotePage(
+                    id: id,
+                    password: password,
+                    isSharedPassword: isSharedPassword,
+                    forceRelay: forceRelay,
+                  ),
           ),
         );
       }
+      stateGlobal.isInMainPage = false;
+      pushFuture.then((_) {
+        stateGlobal.isInMainPage = true;
+      }).catchError((_) {
+        stateGlobal.isInMainPage = true;
+      });
+    } catch (e) {
+      stateGlobal.isInMainPage = true;
+      rethrow;
     }
-    stateGlobal.isInMainPage = false;
   }
 
   FocusScopeNode currentFocus = FocusScope.of(context);

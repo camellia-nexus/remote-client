@@ -301,7 +301,7 @@ class UserModel {
       body = decodeManagementObject(resp, decode_http_response(resp));
     } catch (e) {
       debugPrint("login: jsonDecode resp body failed: ${e.toString()}");
-      if (resp.statusCode != 200) {
+      if (resp.statusCode != 200 && resp.statusCode != 401) {
         BotToast.showText(
           contentColor: Colors.red,
           text: 'HTTP ${resp.statusCode}',

@@ -401,6 +401,11 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
             CamelliaThemePreference.midnight => ThemeMode.dark,
             CamelliaThemePreference.system => MyTheme.currentThemeMode(),
           };
+          final activeTheme = resolvedMode == ThemeMode.light
+              ? MyTheme.lightTheme
+              : (pref == CamelliaThemePreference.midnight
+                  ? MyTheme.midnightTheme
+                  : MyTheme.darkTheme);
           return GetMaterialApp(
             navigatorKey: globalKey,
             debugShowCheckedModeBanner: false,
@@ -424,7 +429,11 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
             builder: (context, child) {
               child = _keepScaleBuilder(context, child);
               child = botToastBuilder(context, child);
-              return child;
+              return AnimatedTheme(
+                data: activeTheme,
+                duration: Duration.zero,
+                child: child,
+              );
             },
           );
         },
@@ -657,6 +666,11 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                 CamelliaThemePreference.midnight => ThemeMode.dark,
                 CamelliaThemePreference.system => MyTheme.currentThemeMode(),
               };
+              final activeTheme = resolvedMode == ThemeMode.light
+                  ? MyTheme.lightTheme
+                  : (pref == CamelliaThemePreference.midnight
+                      ? MyTheme.midnightTheme
+                      : MyTheme.darkTheme);
               return GetMaterialApp(
                 navigatorKey: globalKey,
                 debugShowCheckedModeBanner: false,
@@ -693,11 +707,14 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                             child: child,
                           );
                         }
-                        if (isLinux) {
-                          return buildVirtualWindowFrame(context, child);
-                        } else {
-                          return workaroundWindowBorder(context, child);
-                        }
+                        final framedChild = isLinux
+                            ? buildVirtualWindowFrame(context, child)
+                            : workaroundWindowBorder(context, child);
+                        return AnimatedTheme(
+                          data: activeTheme,
+                          duration: Duration.zero,
+                          child: framedChild,
+                        );
                       },
               );
             },

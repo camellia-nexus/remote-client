@@ -232,6 +232,7 @@ class RustDeskMultiWindowManager {
     Rect? screenRect,
   }) async {
     if (openInTabs) {
+      windows.removeWhere((id) => !_activeWindows.contains(id));
       if (windows.isEmpty) {
         final windowId = await newSessionWindow(
           type,
@@ -242,11 +243,24 @@ class RustDeskMultiWindowManager {
         );
         return MultiWindowCallResult(windowId, null);
       } else {
-        return call(type, methodName, msg);
+        try {
+          return await call(type, methodName, msg);
+        } catch (e) {
+          debugPrint('Failed to invoke method on existing tab window: $e');
+          windows.clear();
+          final windowId = await newSessionWindow(
+            type,
+            remoteId,
+            msg,
+            windows,
+            screenRect != null,
+          );
+          return MultiWindowCallResult(windowId, null);
+        }
       }
     } else {
       if (_inactiveWindows.isNotEmpty) {
-        for (final windowId in windows) {
+        for (final windowId in List<int>.from(windows)) {
           if (_inactiveWindows.contains(windowId)) {
             // Atomically claim inactive window immediately before async awaits
             _inactiveWindows.remove(windowId);
@@ -266,8 +280,8 @@ class RustDeskMultiWindowManager {
               return MultiWindowCallResult(windowId, null);
             } catch (e) {
               debugPrint('Failed to reuse inactive window $windowId: $e');
-              _inactiveWindows.add(windowId);
-              rethrow;
+              windows.remove(windowId);
+              _inactiveWindows.remove(windowId);
             }
           }
         }
@@ -499,22 +513,38 @@ class RustDeskMultiWindowManager {
     if (wnds.isEmpty) {
       return MultiWindowCallResult(kInvalidWindowId, null);
     }
-    for (final windowId in wnds) {
+    for (final windowId in List<int>.from(wnds)) {
       if (_activeWindows.contains(windowId)) {
+        try {
+          final res = await DesktopMultiWindow.invokeMethod(
+            windowId,
+            methodName,
+            args,
+          );
+          return MultiWindowCallResult(windowId, res);
+        } catch (e) {
+          debugPrint('Failed to invokeMethod on active window $windowId: $e');
+          _activeWindows.remove(windowId);
+          wnds.remove(windowId);
+        }
+      }
+    }
+    if (wnds.isNotEmpty) {
+      try {
         final res = await DesktopMultiWindow.invokeMethod(
-          windowId,
+          wnds[0],
           methodName,
           args,
         );
-        return MultiWindowCallResult(windowId, res);
+        return MultiWindowCallResult(wnds[0], res);
+      } catch (e) {
+        debugPrint('Failed to invokeMethod on fallback window ${wnds[0]}: $e');
+        _activeWindows.remove(wnds[0]);
+        wnds.removeAt(0);
+        rethrow;
       }
     }
-    final res = await DesktopMultiWindow.invokeMethod(
-      wnds[0],
-      methodName,
-      args,
-    );
-    return MultiWindowCallResult(wnds[0], res);
+    return MultiWindowCallResult(kInvalidWindowId, null);
   }
 
   List<int> _findWindowsByType(WindowType type) {
@@ -650,7 +680,12 @@ class RustDeskMultiWindowManager {
   Future<void> unregisterActiveWindow(int windowId) async {
     _activeWindows.remove(windowId);
     if (windowId != kMainWindowId) {
-      _inactiveWindows.add(windowId);
+      _inactiveWindows.remove(windowId);
+      _remoteDesktopWindows.remove(windowId);
+      _fileTransferWindows.remove(windowId);
+      _viewCameraWindows.remove(windowId);
+      _portForwardWindows.remove(windowId);
+      _terminalWindows.remove(windowId);
     }
     await _notifyActiveWindow();
   }

@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
+import 'package:camellia_remote_app/models/management_api_contract.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
@@ -506,6 +509,64 @@ class AuthGenerationTracker {
   }
 }
 
+String friendlyAuthErrorMessage(dynamic err) {
+  if (err is ManagementApiException) {
+    if (err.statusCode == 401 ||
+        err.code == 'invalid_credentials' ||
+        err.code == 'unauthorized') {
+      return translate('Invalid account or password');
+    }
+    if (err.statusCode == 403 || err.code == 'forbidden') {
+      return translate('Access denied. Please contact administrator.');
+    }
+    if (err.statusCode == 429 || err.code == 'too_many_requests') {
+      return translate('Too many login attempts. Please try again later.');
+    }
+    if (err.statusCode >= 500) {
+      return translate('Authentication server error. Please try again later.');
+    }
+    return translate(err.message.isNotEmpty ? err.message : 'Login failed');
+  } else if (err is RequestException) {
+    final cause = err.cause.trim();
+    if (cause == 'invalid_credentials' ||
+        cause.contains('password') ||
+        cause.contains('username')) {
+      return translate('Invalid account or password');
+    }
+    return translate(cause);
+  } else if (err is SocketException) {
+    return translate(
+      'Cannot connect to server. Please check your network connection.',
+    );
+  } else if (err is TimeoutException) {
+    return translate(
+      'Connection timed out. Please check your network and try again.',
+    );
+  } else if (err is http.ClientException) {
+    return translate(
+      'Network connection failed. Please check your network or server address.',
+    );
+  } else {
+    final str = err.toString();
+    if (str.contains('SocketException') ||
+        str.contains('Connection refused') ||
+        str.contains('Failed host lookup')) {
+      return translate(
+        'Cannot connect to server. Please check your network connection.',
+      );
+    }
+    if (str.contains('TimeoutException') || str.contains('timed out')) {
+      return translate(
+        'Connection timed out. Please check your network and try again.',
+      );
+    }
+    if (str.contains('401') || str.contains('invalid_credentials')) {
+      return translate('Invalid account or password');
+    }
+    return translate('Login failed. Please check credentials and server status.');
+  }
+}
+
 @visibleForTesting
 Future<bool> handleLoginResponseStatic({
   required LoginResponse resp,
@@ -548,7 +609,7 @@ Future<bool> handleLoginResponseStatic({
         isEmailVerification = false;
       } else {
         if (requestGen == AuthGenerationTracker.currentAuthGen) {
-          onPasswordMsg?.call("Failed, bad tfa type from server");
+          onPasswordMsg?.call(translate("Failed, bad tfa type from server"));
         }
       }
       if (isEmailVerification != null) {
@@ -579,7 +640,7 @@ Future<bool> handleLoginResponseStatic({
       break;
     default:
       if (requestGen == AuthGenerationTracker.currentAuthGen) {
-        onPasswordMsg?.call("Failed, bad response from server");
+        onPasswordMsg?.call(translate("Failed, bad response from server"));
       }
       break;
   }
@@ -700,13 +761,9 @@ Future<bool?> loginDialog() async {
           );
           if (requestGen != AuthGenerationTracker.currentAuthGen) return;
           await handleLoginResponse(resp, true, safeClose, requestGen);
-        } on RequestException catch (err) {
-          if (requestGen == AuthGenerationTracker.currentAuthGen) {
-            passwordMsg = translate(err.cause);
-          }
         } catch (err) {
           if (requestGen == AuthGenerationTracker.currentAuthGen) {
-            passwordMsg = "Unknown Error: $err";
+            passwordMsg = friendlyAuthErrorMessage(err);
           }
         }
         if (requestGen == AuthGenerationTracker.currentAuthGen) {
@@ -838,7 +895,7 @@ Future<bool> handleVerifyResponseStatic({
       break;
     default:
       if (verifyGen == AuthGenerationTracker.currentAuthGen) {
-        onErrorText?.call("Failed, bad response from server");
+        onErrorText?.call(translate("Failed, bad response from server"));
       }
       break;
   }
@@ -907,16 +964,12 @@ Future<bool?> verificationCodeDialog(
               }
               break;
             default:
-              errorText = "Failed, bad response from server";
+              errorText = translate("Failed, bad response from server");
               break;
-          }
-        } on RequestException catch (err) {
-          if (verifyGen == AuthGenerationTracker.currentAuthGen) {
-            errorText = translate(err.cause);
           }
         } catch (err) {
           if (verifyGen == AuthGenerationTracker.currentAuthGen) {
-            errorText = "Unknown Error: $err";
+            errorText = friendlyAuthErrorMessage(err);
           }
         }
 

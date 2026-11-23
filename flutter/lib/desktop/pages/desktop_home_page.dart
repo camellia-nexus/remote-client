@@ -151,37 +151,31 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.build(context);
     final checklistItems = _collectChecklistItems();
     return _buildBlock(
-      child: ListenableBuilder(
-        listenable: Listenable.merge([
-          MyTheme.themeNotifier,
-          MyTheme.themeStyleNotifier,
-        ]),
-        builder: (context, _) => CamelliaDesktopShell(
-          destinations: const [
-            DesktopNavDestination.connect,
-            DesktopNavDestination.settings,
-          ],
-          currentDestination: _currentDestination,
-          onDestinationChanged: (dest) {
-            if (_currentDestination != dest) {
-              setState(() => _currentDestination = dest);
-            }
-          },
-          topBar: DesktopTitleBar(
-            showBrand: false,
-            transparent: true,
-            labels: DesktopTitleBarLabels(
-              minimize: translate('Minimize'),
-              maximize: translate('Maximize'),
-              restore: translate('Restore'),
-              close: translate('Close'),
-            ),
+      child: CamelliaDesktopShell(
+        destinations: const [
+          DesktopNavDestination.connect,
+          DesktopNavDestination.settings,
+        ],
+        currentDestination: _currentDestination,
+        onDestinationChanged: (dest) {
+          if (_currentDestination != dest) {
+            setState(() => _currentDestination = dest);
+          }
+        },
+        topBar: DesktopTitleBar(
+          showBrand: false,
+          transparent: true,
+          labels: DesktopTitleBarLabels(
+            minimize: translate('Minimize'),
+            maximize: translate('Maximize'),
+            restore: translate('Restore'),
+            close: translate('Close'),
           ),
-          connectBuilder: (context) => _buildConnectWorkspace(context),
-          settingsBuilder: (context) => _buildSettingsWorkspace(context),
-          statusWidget: _PassiveRelayStatusPill(svcStopped: svcStopped),
-          warningWidget: _buildSidebarWarningBadge(context, checklistItems),
         ),
+        connectBuilder: (context) => _buildConnectWorkspace(context),
+        settingsBuilder: (context) => _buildSettingsWorkspace(context),
+        statusWidget: _PassiveRelayStatusPill(svcStopped: svcStopped),
+        warningWidget: _buildSidebarWarningBadge(context, checklistItems),
       ),
     );
   }

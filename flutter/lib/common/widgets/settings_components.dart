@@ -254,12 +254,44 @@ class SettingsTile extends AbstractSettingsTile {
         ? settingsTheme.leadingIconsColor
         : settingsTheme.inactiveTitleColor;
 
+    final titleWidget = DefaultTextStyle.merge(
+      style: settingsTheme.tileTextStyle.copyWith(color: titleColor),
+      child: title,
+    );
+
+    final contentWidget = description == null
+        ? ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 54),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: titleWidget),
+              ],
+            ),
+          )
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              titleWidget,
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: DefaultTextStyle.merge(
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: subtitleColor),
+                  child: description!,
+                ),
+              ),
+            ],
+          );
+
     final tile = ListTile(
       enabled: enabled,
       titleAlignment: ListTileTitleAlignment.center,
-      minVerticalPadding: 10,
+      minVerticalPadding: description == null ? 0 : 8,
       minTileHeight: 54,
-      contentPadding: const EdgeInsetsDirectional.fromSTEB(14, 2, 14, 2),
+      contentPadding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 0),
       leading: leading == null
           ? null
           : Container(
@@ -275,21 +307,7 @@ class SettingsTile extends AbstractSettingsTile {
                 child: leading!,
               ),
             ),
-      title: DefaultTextStyle.merge(
-        style: settingsTheme.tileTextStyle.copyWith(color: titleColor),
-        child: title,
-      ),
-      subtitle: description == null
-          ? null
-          : Padding(
-              padding: const EdgeInsets.only(top: 3),
-              child: DefaultTextStyle.merge(
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: subtitleColor),
-                child: description!,
-              ),
-            ),
+      title: contentWidget,
       trailing: _isSwitch
           ? Switch.adaptive(
               value: initialValue!,

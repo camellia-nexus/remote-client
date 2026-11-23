@@ -493,7 +493,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
                   SvcStatus.connecting => (
                     translate('Connecting'),
                     GlassBadgeTone.connecting,
-                    true,
+                    false,
                   ),
                   _ => (translate('Not ready'), GlassBadgeTone.offline, false),
                 };

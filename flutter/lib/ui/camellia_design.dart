@@ -27,6 +27,9 @@ abstract final class CamelliaTypography {
   static const systemFontFallbacks = <String>[
     'PingFang SC',
     'Microsoft YaHei',
+    'Noto Sans CJK SC',
+    'Source Han Sans SC',
+    'WenQuanYi Micro Hei',
     'Heiti SC',
     'sans-serif',
   ];
@@ -723,24 +726,32 @@ abstract final class CamelliaTheme {
               : CamelliaColors.statusAlertLight,
           onError: dark ? CamelliaColors.lightText : Colors.white,
         );
+    final isCjk = fontFamily == CamelliaTypography.simplifiedFamily ||
+        fontFamily == CamelliaTypography.traditionalFamily;
     TextStyle style(
       double size,
       FontWeight weight, {
       double height = 1.35,
       double tracking = 0,
       Color? color,
-    }) => TextStyle(
-      fontFamily: fontFamily,
-      fontFamilyFallback: fontFamilyFallback,
-      fontSize: size,
-      fontWeight: weight,
-      height: height,
-      leadingDistribution: TextLeadingDistribution.even,
-      color: color ?? text,
-      letterSpacing: tracking,
-    );
-    // Apple-inspired scale: bold-but-not-heavy titles with tightened tracking,
-    // regular body text with generous line height.
+    }) {
+      final adjustedTracking = isCjk && tracking < 0 ? 0.0 : tracking;
+      final adjustedWeight = isCjk && weight == FontWeight.w600
+          ? (size >= 14 ? FontWeight.w700 : FontWeight.w500)
+          : weight;
+      return TextStyle(
+        fontFamily: fontFamily,
+        fontFamilyFallback: fontFamilyFallback,
+        fontSize: size,
+        fontWeight: adjustedWeight,
+        height: height,
+        leadingDistribution: TextLeadingDistribution.even,
+        color: color ?? text,
+        letterSpacing: adjustedTracking,
+      );
+    }
+    // Apple-inspired scale: tightened tracking for Latin, clean spacing for CJK,
+    // regular body text with generous line height and normalized CJK weights.
     final textTheme = TextTheme(
       displaySmall: style(32, FontWeight.w700, height: 1.12, tracking: -0.5),
       headlineMedium: style(28, FontWeight.w700, height: 1.18, tracking: -0.4),
