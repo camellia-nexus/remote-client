@@ -17,6 +17,7 @@ import 'package:camellia_remote_app/desktop/screen/desktop_remote_screen.dart';
 import 'package:camellia_remote_app/desktop/screen/desktop_terminal_screen.dart';
 import 'package:camellia_remote_app/desktop/widgets/refresh_wrapper.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -153,19 +154,9 @@ void runMainApp(bool startService) async {
   final startupResult = await initEnv(kAppTypeMain);
   if (!startupResult.isSuccess) {
     debugPrint('Fatal: runMainApp startup transaction failed: ${startupResult.error}');
-    runApp(MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Text(
-              'Camellia Remote Startup Error (${startupResult.stage}):\n${startupResult.error}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.red),
-            ),
-          ),
-        ),
-      ),
+    runApp(StartupErrorFallbackApp(
+      stage: startupResult.stage.name,
+      error: '${startupResult.error}',
     ));
     return;
   }
@@ -217,19 +208,9 @@ void runMobileApp() async {
   final startupResult = await initEnv(kAppTypeMain);
   if (!startupResult.isSuccess) {
     debugPrint('Fatal: runMobileApp startup transaction failed: ${startupResult.error}');
-    runApp(MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Text(
-              'Camellia Remote Startup Error (${startupResult.stage}):\n${startupResult.error}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.red),
-            ),
-          ),
-        ),
-      ),
+    runApp(StartupErrorFallbackApp(
+      stage: startupResult.stage.name,
+      error: '${startupResult.error}',
     ));
     return;
   }
@@ -404,34 +385,151 @@ hideCmWindow({bool isStartup = false}) async {
 
 void _runApp(String title, Widget home, ThemeMode themeMode) {
   final botToastBuilder = BotToastInit();
+  MyTheme.getThemePreference();
   runApp(
     RefreshWrapper(
-      builder: (context) => GetMaterialApp(
-        navigatorKey: globalKey,
-        debugShowCheckedModeBanner: false,
-        title: title,
-        theme: MyTheme.lightTheme,
-        darkTheme: MyTheme.darkTheme,
-        themeMode: themeMode,
-        home: home,
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: supportedLocales,
-        navigatorObservers: [
-          // FirebaseAnalyticsObserver(analytics: analytics),
-          BotToastNavigatorObserver(),
-        ],
-        builder: (context, child) {
-          child = _keepScaleBuilder(context, child);
-          child = botToastBuilder(context, child);
-          return child;
+      builder: (context) => ListenableBuilder(
+        listenable: Listenable.merge([
+          MyTheme.themeNotifier,
+          MyTheme.themeStyleNotifier,
+        ]),
+        builder: (context, _) {
+          final pref = MyTheme.themeNotifier.value;
+          final resolvedMode = switch (pref) {
+            CamelliaThemePreference.light => ThemeMode.light,
+            CamelliaThemePreference.dark ||
+            CamelliaThemePreference.midnight => ThemeMode.dark,
+            CamelliaThemePreference.system => MyTheme.currentThemeMode(),
+          };
+          return GetMaterialApp(
+            navigatorKey: globalKey,
+            debugShowCheckedModeBanner: false,
+            title: title,
+            theme: MyTheme.lightTheme,
+            darkTheme: pref == CamelliaThemePreference.midnight
+                ? MyTheme.midnightTheme
+                : MyTheme.darkTheme,
+            themeMode: resolvedMode,
+            home: home,
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: supportedLocales,
+            navigatorObservers: [
+              // FirebaseAnalyticsObserver(analytics: analytics),
+              BotToastNavigatorObserver(),
+            ],
+            builder: (context, child) {
+              child = _keepScaleBuilder(context, child);
+              child = botToastBuilder(context, child);
+              return child;
+            },
+          );
         },
       ),
     ),
   );
+}
+
+class StartupErrorFallbackApp extends StatelessWidget {
+  const StartupErrorFallbackApp({
+    super.key,
+    required this.stage,
+    required this.error,
+  });
+
+  final String stage;
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFF0F172A),
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Container(
+              margin: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B).withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  width: 1,
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x66000000),
+                    blurRadius: 24,
+                    offset: Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.16),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.error_outline_rounded,
+                      color: Color(0xFFEF4444),
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Camellia Remote Startup Error',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Stage: $stage',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white.withValues(alpha: 0.65),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      error,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 void runInstallPage() async {
@@ -480,7 +578,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.window.onPlatformBrightnessChanged = () {
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged = () {
       final userPreference = MyTheme.getThemeModePreference();
       if (userPreference != ThemeMode.system) return;
       WidgetsBinding.instance.handlePlatformBrightnessChanged();
@@ -546,46 +644,63 @@ class _AppState extends State<App> with WidgetsBindingObserver {
             ChangeNotifierProvider.value(value: gFFI.canvasModel),
             ChangeNotifierProvider.value(value: gFFI.peerTabModel),
           ],
-          child: GetMaterialApp(
-            navigatorKey: globalKey,
-            debugShowCheckedModeBanner: false,
-            title: buildMainAppTitle(bind.mainGetAppNameSync()),
-            theme: MyTheme.lightTheme,
-            darkTheme: MyTheme.darkTheme,
-            themeMode: MyTheme.currentThemeMode(),
-            home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
-            localizationsDelegates: const [
-              GlobalMaterialLocalizations.delegate,
-              GlobalWidgetsLocalizations.delegate,
-              GlobalCupertinoLocalizations.delegate,
-            ],
-            supportedLocales: supportedLocales,
-            navigatorObservers: [
-              // FirebaseAnalyticsObserver(analytics: analytics),
-              BotToastNavigatorObserver(),
-            ],
-            builder: isAndroid
-                ? (context, child) =>
-                      AccessibilityListener(child: child ?? Container())
-                : (context, child) {
-                    child = _keepScaleBuilder(context, child);
-                    child = botToastBuilder(context, child);
-                    if ((isDesktop && desktopType == DesktopType.main) ||
-                        isWebDesktop) {
-                      child = keyListenerBuilder(context, child);
-                    }
-                    if (isWeb) {
-                      child = FocusTraversalGroup(
-                        policy: WidgetOrderTraversalPolicy(),
-                        child: child,
-                      );
-                    }
-                    if (isLinux) {
-                      return buildVirtualWindowFrame(context, child);
-                    } else {
-                      return workaroundWindowBorder(context, child);
-                    }
-                  },
+          child: ListenableBuilder(
+            listenable: Listenable.merge([
+              MyTheme.themeNotifier,
+              MyTheme.themeStyleNotifier,
+            ]),
+            builder: (context, _) {
+              final pref = MyTheme.themeNotifier.value;
+              final resolvedMode = switch (pref) {
+                CamelliaThemePreference.light => ThemeMode.light,
+                CamelliaThemePreference.dark ||
+                CamelliaThemePreference.midnight => ThemeMode.dark,
+                CamelliaThemePreference.system => MyTheme.currentThemeMode(),
+              };
+              return GetMaterialApp(
+                navigatorKey: globalKey,
+                debugShowCheckedModeBanner: false,
+                title: buildMainAppTitle(bind.mainGetAppNameSync()),
+                theme: MyTheme.lightTheme,
+                darkTheme: pref == CamelliaThemePreference.midnight
+                    ? MyTheme.midnightTheme
+                    : MyTheme.darkTheme,
+                themeMode: resolvedMode,
+                home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
+                localizationsDelegates: const [
+                  GlobalMaterialLocalizations.delegate,
+                  GlobalWidgetsLocalizations.delegate,
+                  GlobalCupertinoLocalizations.delegate,
+                ],
+                supportedLocales: supportedLocales,
+                navigatorObservers: [
+                  // FirebaseAnalyticsObserver(analytics: analytics),
+                  BotToastNavigatorObserver(),
+                ],
+                builder: isAndroid
+                    ? (context, child) =>
+                          AccessibilityListener(child: child ?? Container())
+                    : (context, child) {
+                        child = _keepScaleBuilder(context, child);
+                        child = botToastBuilder(context, child);
+                        if ((isDesktop && desktopType == DesktopType.main) ||
+                            isWebDesktop) {
+                          child = keyListenerBuilder(context, child);
+                        }
+                        if (isWeb) {
+                          child = FocusTraversalGroup(
+                            policy: WidgetOrderTraversalPolicy(),
+                            child: child,
+                          );
+                        }
+                        if (isLinux) {
+                          return buildVirtualWindowFrame(context, child);
+                        } else {
+                          return workaroundWindowBorder(context, child);
+                        }
+                      },
+              );
+            },
           ),
         );
       },
@@ -602,7 +717,13 @@ _registerEventHandler() {
     platformFFI.registerEventHandler('theme', 'theme', (evt) async {
       String? dark = evt['dark'];
       if (dark != null) {
-        await MyTheme.changeDarkMode(MyTheme.themeModeFromString(dark));
+        try {
+          final style = bind.mainGetLocalOption(key: 'theme_style');
+          MyTheme.themeStyleNotifier.value = CamelliaThemeStyle.fromString(style);
+        } catch (_) {}
+        await MyTheme.changeThemePreference(
+          MyTheme.themePreferenceFromString(dark),
+        );
       }
     });
     platformFFI.registerEventHandler('language', 'language', (_) async {
@@ -611,6 +732,16 @@ _registerEventHandler() {
   }
   // Register native handlers.
   if (isDesktop) {
+    HardwareKeyboard.instance.addHandler((KeyEvent event) {
+      if (event.logicalKey == LogicalKeyboardKey.shiftLeft) {
+        if (event is KeyDownEvent) {
+          gFFI.peerTabModel.setShiftDown(true);
+        } else if (event is KeyUpEvent) {
+          gFFI.peerTabModel.setShiftDown(false);
+        }
+      }
+      return false;
+    });
     platformFFI.registerEventHandler('native_ui', 'native_ui', (evt) async {
       NativeUiHandler.instance.onEvent(evt);
     });
@@ -629,17 +760,5 @@ _registerEventHandler() {
 }
 
 Widget keyListenerBuilder(BuildContext context, Widget? child) {
-  return RawKeyboardListener(
-    focusNode: FocusNode(),
-    child: child ?? Container(),
-    onKey: (RawKeyEvent event) {
-      if (event.logicalKey == LogicalKeyboardKey.shiftLeft) {
-        if (event is RawKeyDownEvent) {
-          gFFI.peerTabModel.setShiftDown(true);
-        } else if (event is RawKeyUpEvent) {
-          gFFI.peerTabModel.setShiftDown(false);
-        }
-      }
-    },
-  );
+  return child ?? Container();
 }

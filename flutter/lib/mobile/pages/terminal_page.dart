@@ -10,20 +10,22 @@ import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/terminal_model.dart';
 import 'package:camellia_remote_app/mobile/terminal_keyboard_utils.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:xterm/xterm.dart';
 import '../../desktop/pages/terminal_connection_manager.dart';
 import '../../consts.dart';
 
 class TerminalPage extends StatefulWidget {
   const TerminalPage({
-    Key? key,
+    super.key,
     required this.id,
     required this.password,
     required this.isSharedPassword,
     this.forceRelay,
     this.connToken,
     this.isTerminalRunAsAdmin = false,
-  }) : super(key: key);
+  });
   final String id;
   final String? password;
   final bool? forceRelay;
@@ -185,7 +187,7 @@ class _TerminalPageState extends State<TerminalPage>
 
     _keyboardDebounce?.cancel();
     _keyboardDebounce = Timer(const Duration(milliseconds: 20), () {
-      final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+      final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
       setState(() {
         _sysKeyboardHeight = bottomInset;
       });
@@ -252,10 +254,11 @@ class _TerminalPageState extends State<TerminalPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         clientClose(sessionId, _ffi);
-        return false; // Prevent default back behavior
       },
       child: buildBody(),
     );
@@ -382,17 +385,12 @@ class _TerminalPageState extends State<TerminalPage>
         alignment: Alignment.topRight,
         child: Padding(
           padding: const EdgeInsets.only(top: 8, right: 8),
-          child: Material(
-            color: Colors.black.withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(10),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10),
-              onTap: () => clientClose(sessionId, _ffi),
-              child: const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(Icons.close_rounded, size: 18, color: Colors.white),
-              ),
-            ),
+          child: GlassIconButton(
+            icon: CamelliaIcons.close,
+            size: 36,
+            iconSize: 18,
+            tooltip: translate('Close'),
+            onPressed: () => clientClose(sessionId, _ffi),
           ),
         ),
       ),
@@ -404,40 +402,13 @@ class _TerminalPageState extends State<TerminalPage>
       top: 0,
       right: 0,
       child: SafeArea(
-        minimum: const EdgeInsets.only(
-          top: 16, // iOS standard margin
-          right: 16, // iOS standard margin
-        ),
-        child: Semantics(
-          button: true,
-          label: translate('Close'),
-          child: Container(
-            width: 44, // iOS standard tap target size
-            height: 44,
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.5), // Half transparency
-              shape: BoxShape.circle,
-            ),
-            child: Material(
-              color: Colors.transparent,
-              shape: const CircleBorder(),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: () {
-                  clientClose(sessionId, _ffi);
-                },
-                child: Tooltip(
-                  message: translate('Close'),
-                  child: const Icon(
-                    Icons.chevron_left, // iOS-style back arrow
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-              ),
-            ),
-          ),
+        minimum: const EdgeInsets.only(top: 14, right: 14),
+        child: GlassIconButton(
+          icon: CamelliaIcons.close,
+          size: 42,
+          iconSize: 20,
+          tooltip: translate('Close'),
+          onPressed: () => clientClose(sessionId, _ffi),
         ),
       ),
     );
@@ -445,24 +416,25 @@ class _TerminalPageState extends State<TerminalPage>
 
   Widget _buildFloatingKeyboard() {
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 200),
-      left: 0,
-      right: 0,
-      bottom: _sysKeyboardHeight,
-      child: Container(
+      duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
+      curve: CamelliaMotion.springSnappy,
+      left: 6,
+      right: 6,
+      bottom: _sysKeyboardHeight + 6,
+      child: GlassSurface(
         key: _keyboardKey,
-        color: Theme.of(context).scaffoldBackgroundColor,
-        padding: EdgeInsets.zero,
+        layer: CamelliaGlassLayer.modal,
+        elevated: true,
+        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Row 1 follows the latest reviewed PR layout.
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: _buildKeyboardKeyButtons(terminalKeyboardRow1Keys),
             ),
-            // Row 2 ends with the full-width Row3 collapse/expand toggle.
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -471,7 +443,6 @@ class _TerminalPageState extends State<TerminalPage>
                 _buildCollapseButton(),
               ],
             ),
-            // Row 3 restores paging keys and trailing alignment placeholders.
             if (_row3Expanded)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -546,16 +517,23 @@ class _TerminalPageState extends State<TerminalPage>
       label: translate('Show terminal extra keys'),
       toggled: _row3Expanded,
       child: ElevatedButton(
-        onPressed: _toggleRow3Expanded,
-        child: Text(_row3Expanded ? '∧' : '∨'),
+        onPressed: () {
+          HapticFeedback.selectionClick();
+          _toggleRow3Expanded();
+        },
         style: ElevatedButton.styleFrom(
           minimumSize: const Size(terminalKeyboardKeyWidth, 32),
           padding: EdgeInsets.zero,
-          textStyle: const TextStyle(fontSize: 12),
           backgroundColor: Theme.of(
             context,
           ).colorScheme.surfaceContainerHighest,
           foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+        child: Icon(
+          _row3Expanded
+              ? Icons.keyboard_arrow_up_rounded
+              : Icons.keyboard_arrow_down_rounded,
+          size: 18,
         ),
       ),
     );
@@ -593,10 +571,10 @@ class _TerminalPageState extends State<TerminalPage>
           padding: EdgeInsets.zero,
           textStyle: const TextStyle(fontSize: 12),
           backgroundColor: isLocked
-              ? Colors.blue
+              ? Theme.of(context).colorScheme.primary
               : Theme.of(context).colorScheme.surfaceContainerHighest,
           foregroundColor: isLocked
-              ? Colors.white
+              ? Theme.of(context).colorScheme.onPrimary
               : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),

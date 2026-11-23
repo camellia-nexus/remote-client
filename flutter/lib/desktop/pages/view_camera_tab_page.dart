@@ -16,18 +16,17 @@ import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
 import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:bot_toast/bot_toast.dart';
 
 import '../../models/platform_model.dart';
 
 class _MenuTheme {
-  static const Color blueColor = MyTheme.button;
   // kMinInteractiveDimension
-  static const double height = 20.0;
+  static const double height = 34.0;
   static const double dividerHeight = 12.0;
 }
 
@@ -93,7 +92,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         page: ViewCameraPage(
           key: ValueKey(peerId),
           id: peerId!,
-          sessionId: sessionId == null ? null : SessionID(sessionId),
+          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
           tabWindowId: tabWindowId,
           display: display,
           displays: displays?.cast<int>(),
@@ -140,7 +139,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
         tail: const AddButton(),
-        selectedBorderColor: MyTheme.accent,
+        selectedBorderColor: Theme.of(context).colorScheme.primary,
         pageViewBuilder: (pageView) => pageView,
         labelGetter: DesktopTab.tablabelGetter,
         tabBuilder: (key, icon, label, themeConf) => Obx(() {
@@ -179,10 +178,10 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
                 icon,
                 Tooltip(
                   message: '$msgConn\n$msgFingerprint',
-                  child: SvgPicture.asset(
-                    'assets/${connectionType.secure.value}${connectionType.direct.value}.svg',
-                    width: themeConf.iconSize,
-                    height: themeConf.iconSize,
+                  child: CamelliaIcons.securityBadge(
+                    secure: secure,
+                    direct: direct,
+                    size: themeConf.iconSize,
                   ).paddingOnly(right: 5),
                 ),
                 label,
@@ -222,7 +221,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
             Obx(() => Container(
                   decoration: BoxDecoration(
                     border: Border.all(
-                        color: MyTheme.color(context).border!,
+                        color: Theme.of(context).colorScheme.outlineVariant,
                         width: stateGlobal.windowBorderWidth.value),
                   ),
                   child: child,
@@ -318,8 +317,8 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       items: menu
           .map((entry) => entry.build(
               context,
-              const MenuConfig(
-                commonColor: _MenuTheme.blueColor,
+              MenuConfig(
+                commonColor: Theme.of(context).colorScheme.primary,
                 height: _MenuTheme.height,
                 dividerHeight: _MenuTheme.dividerHeight,
               )))
@@ -367,7 +366,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         return false;
       }
     }
-    if (connLength <= 1) {
+    if (connLength <= 0) {
       tabController.clear();
       return true;
     } else {
@@ -432,7 +431,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         page: ViewCameraPage(
           key: ValueKey(id),
           id: id,
-          sessionId: sessionId == null ? null : SessionID(sessionId),
+          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
           tabWindowId: tabWindowId,
           display: display,
           displays: displays?.cast<int>(),

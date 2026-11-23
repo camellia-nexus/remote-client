@@ -636,7 +636,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         return false;
       }
     }
-    if (connLength <= 1) {
+    if (connLength <= 0) {
       await _closeAllTabs();
       return true;
     } else {

@@ -1603,6 +1603,7 @@ async fn post_request_via_tcp_proxy(
     Ok(String::from_utf8_lossy(&resp.body).to_string())
 }
 
+#[allow(dead_code)]
 fn http_proxy_response_to_json(resp: HttpProxyResponse) -> ResultType<String> {
     if !resp.error.is_empty() {
         bail!("TCP proxy returned deprecated text error");
@@ -1630,6 +1631,7 @@ fn http_proxy_response_to_json(resp: HttpProxyResponse) -> ResultType<String> {
     serde_json::to_string(&result).map_err(|e| anyhow!("Failed to serialize response: {}", e))
 }
 
+#[allow(dead_code)]
 fn parse_json_header_entries(header: &str) -> ResultType<Vec<HeaderEntry>> {
     let v: Value = serde_json::from_str(header)?;
     if let Value::Object(obj) = v {
@@ -2851,7 +2853,7 @@ mod tests {
         const MAX_RUNTIME_MS: u128 = 10_000;
         let started = Instant::now();
         for index in 0..ITERATIONS {
-            let mut state = 0x636c_69_2d_66_6669u64.wrapping_add(index as u64);
+            let mut state = 0x0063_6c69_2d66_6669u64.wrapping_add(index as u64);
             let len = (state as usize % (MAX_LEN + 1)).min(MAX_LEN);
             let mut value = String::with_capacity(len);
             for _ in 0..len {

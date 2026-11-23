@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/widgets/audio_input.dart';
@@ -7,12 +6,12 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
 import 'package:camellia_remote_app/models/cm_file_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/platform_channel.dart';
 import 'package:get/get.dart';
-import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../common.dart';
 import '../../common/widgets/chat_page.dart';
@@ -73,6 +72,7 @@ class _DesktopServerPageState extends State<DesktopServerPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final scheme = Theme.of(context).colorScheme;
     return MultiProvider(
       providers: [
         ChangeNotifierProvider.value(value: gFFI.serverModel),
@@ -81,8 +81,8 @@ class _DesktopServerPageState extends State<DesktopServerPage>
       child: Consumer<ServerModel>(
         builder: (context, serverModel, child) {
           final body = Scaffold(
-            backgroundColor: Theme.of(context).colorScheme.surface,
-            body: ConnectionManager(),
+            backgroundColor: Colors.transparent,
+            body: CamelliaBackdrop(child: ConnectionManager()),
           );
           return isLinux
               ? buildVirtualWindowFrame(context, body)
@@ -90,7 +90,7 @@ class _DesktopServerPageState extends State<DesktopServerPage>
                   context,
                   Container(
                     decoration: BoxDecoration(
-                      border: Border.all(color: MyTheme.color(context).border!),
+                      border: Border.all(color: scheme.outlineVariant),
                     ),
                     child: body,
                   ),
@@ -105,6 +105,8 @@ class _DesktopServerPageState extends State<DesktopServerPage>
 }
 
 class ConnectionManager extends StatefulWidget {
+  const ConnectionManager({super.key});
+
   @override
   State<StatefulWidget> createState() => ConnectionManagerState();
 }
@@ -115,12 +117,12 @@ class ConnectionManagerState extends State<ConnectionManager>
   final RxBool _sidePageBlock = false.obs;
 
   ConnectionManagerState() {
-    gFFI.serverModel.tabController.onSelected = (client_id_str) {
+    gFFI.serverModel.tabController.onSelected = (clientIdStr) {
       _cmPageGeneration++;
-      final client_id = int.tryParse(client_id_str);
-      if (client_id != null) {
+      final clientId = int.tryParse(clientIdStr);
+      if (clientId != null) {
         final client = gFFI.serverModel.clients.firstWhereOrNull(
-          (e) => e.id == client_id,
+          (e) => e.id == clientId,
         );
         if (client != null) {
           gFFI.chatModel.changeCurrentKey(MessageKey(client.peerId, client.id));
@@ -167,7 +169,8 @@ class ConnectionManagerState extends State<ConnectionManager>
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-    pointerHandler(PointerEvent e) {
+    final scheme = Theme.of(context).colorScheme;
+    void pointerHandler(PointerEvent e) {
       if (serverModel.cmHiddenTimer != null) {
         serverModel.cmHiddenTimer!.cancel();
         serverModel.cmHiddenTimer = null;
@@ -179,7 +182,16 @@ class ConnectionManagerState extends State<ConnectionManager>
         ? Column(
             children: [
               buildTitleBar(),
-              Expanded(child: Center(child: Text(translate("Waiting")))),
+              Expanded(
+                child: Center(
+                  child: GlassBadge(
+                    label: translate("Waiting"),
+                    tone: GlassBadgeTone.connecting,
+                    showDot: true,
+                    pulse: false,
+                  ),
+                ),
+              ),
             ],
           )
         : Listener(
@@ -192,9 +204,9 @@ class ConnectionManagerState extends State<ConnectionManager>
               showClose: true,
               onWindowCloseButton: handleWindowCloseButton,
               controller: serverModel.tabController,
-              selectedBorderColor: MyTheme.accent,
+              selectedBorderColor: scheme.primary,
               maxLabelWidth: 100,
-              tail: null, //buildScrollJumper(),
+              tail: null,
               tabBuilder: (key, icon, label, themeConf) {
                 final client = serverModel.clients.firstWhereOrNull(
                   (client) => client.id.toString() == key,
@@ -203,8 +215,8 @@ class ConnectionManagerState extends State<ConnectionManager>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Tooltip(
-                      message: key,
-                      waitDuration: Duration(seconds: 1),
+                      message: client?.peerId ?? key,
+                      waitDuration: const Duration(seconds: 1),
                       child: label,
                     ),
                     unreadMessageCountBuilder(
@@ -234,7 +246,7 @@ class ConnectionManagerState extends State<ConnectionManager>
                       borderWidth;
                   final realChatPageWidth =
                       constrains.maxWidth - realClosedWidth;
-                  final row = Row(
+                  return Row(
                     children: [
                       if (constrains.maxWidth >
                           kConnectionManagerWindowSizeClosedChat.width)
@@ -252,22 +264,15 @@ class ConnectionManagerState extends State<ConnectionManager>
                         ),
                       SizedBox(
                         width: realClosedWidth,
-                        child: SizedBox(
-                          width: realClosedWidth,
-                          child: allowRemoteCMModification()
-                              ? pageView
-                              : buildRemoteBlock(
-                                  child: _buildKeyEventBlock(pageView),
-                                  block: _controlPageBlock,
-                                  mask: false,
-                                ),
-                        ),
+                        child: allowRemoteCMModification()
+                            ? pageView
+                            : buildRemoteBlock(
+                                child: _buildKeyEventBlock(pageView),
+                                block: _controlPageBlock,
+                                mask: false,
+                              ),
                       ),
                     ],
-                  );
-                  return Container(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    child: row,
                   );
                 },
               ),
@@ -278,18 +283,20 @@ class ConnectionManagerState extends State<ConnectionManager>
   Widget buildSidePage() {
     final selected = gFFI.serverModel.tabController.state.value.selected;
     if (selected < 0 || selected >= gFFI.serverModel.clients.length) {
-      return Offstage();
+      return const Offstage();
     }
     final clientType = gFFI.serverModel.clients[selected].type_();
     if (clientType == ClientType.file) {
-      return _FileTransferLogPage();
+      return const _FileTransferLogPage();
     } else {
       return ChatPage(type: ChatPageType.desktopCM);
     }
   }
 
   Widget _buildKeyEventBlock(Widget child) {
-    return ExcludeFocus(child: child, excluding: true);
+    return Obx(
+      () => ExcludeFocus(excluding: _controlPageBlock.value, child: child),
+    );
   }
 
   Widget buildTitleBar() {
@@ -301,10 +308,10 @@ class ConnectionManagerState extends State<ConnectionManager>
           const _AppIcon(),
           Expanded(
             child: GestureDetector(
-              onPanStart: (d) {
+              onPanStart: (_) {
                 windowManager.startDragging();
               },
-              child: Container(color: Theme.of(context).colorScheme.surface),
+              child: const ColoredBox(color: Colors.transparent),
             ),
           ),
           const SizedBox(width: 4.0),
@@ -331,7 +338,7 @@ class ConnectionManagerState extends State<ConnectionManager>
   Future<bool> handleWindowCloseButton() async {
     var tabController = gFFI.serverModel.tabController;
     final connLength = tabController.length;
-    if (connLength <= 1) {
+    if (connLength <= 0) {
       windowManager.close();
       return true;
     } else {
@@ -354,26 +361,39 @@ class ConnectionManagerState extends State<ConnectionManager>
 
 Widget buildConnectionCard(Client client) {
   return Consumer<ServerModel>(
-    builder: (context, value, child) => Column(
-      mainAxisAlignment: MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      key: ValueKey(client.id),
-      children: [
-        _CmHeader(client: client),
-        client.type_() == ClientType.file ||
-                client.type_() == ClientType.portForward ||
-                client.type_() == ClientType.terminal ||
-                client.disconnected
-            ? Offstage()
-            : _PrivilegeBoard(client: client),
-        Expanded(
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            child: _CmControlPanel(client: client),
+    builder: (context, value, child) {
+      final showPrivileges =
+          client.type_() != ClientType.file &&
+          client.type_() != ClientType.portForward &&
+          client.type_() != ClientType.terminal &&
+          !client.disconnected;
+
+      return Padding(
+        key: ValueKey(client.id),
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+        child: GlassCard(
+          layer: CamelliaGlassLayer.modal,
+          elevated: true,
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _CmHeader(client: client),
+              const SizedBox(height: 8),
+              Expanded(
+                child: showPrivileges
+                    ? SingleChildScrollView(
+                        child: _PrivilegeBoard(client: client),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              const SizedBox(height: 8),
+              _CmControlPanel(client: client),
+            ],
           ),
         ),
-      ],
-    ).paddingSymmetric(vertical: 4.0, horizontal: 8.0),
+      );
+    },
   );
 }
 
@@ -383,8 +403,8 @@ class _AppIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: EdgeInsets.symmetric(horizontal: 4.0),
-      child: loadIcon(30),
+      margin: const EdgeInsets.symmetric(horizontal: 6.0),
+      child: loadIcon(24),
     );
   }
 }
@@ -394,13 +414,19 @@ class _CloseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      onPressed: () {
-        windowManager.close();
-      },
-      icon: const Icon(IconFont.close, size: 18),
-      splashColor: Colors.transparent,
-      hoverColor: Colors.transparent,
+    final glass = CamelliaGlassTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: GlassIconButton(
+        icon: CamelliaIcons.close,
+        tooltip: translate('Close'),
+        size: 30,
+        iconSize: 16,
+        accentColor: glass.statusAlert,
+        onPressed: () {
+          windowManager.close();
+        },
+      ),
     );
   }
 }
@@ -424,12 +450,11 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(Duration(seconds: 1), (_) {
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (client.authorized && !client.disconnected) {
         _time.value = _time.value + 1;
       }
     });
-    // Call onSelected in post frame callback, since we cannot guarantee that the callback will not call setState.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       gFFI.serverModel.tabController.onSelected?.call(client.id.toString());
     });
@@ -441,121 +466,159 @@ class _CmHeaderState extends State<_CmHeader>
     super.dispose();
   }
 
+  ({String label, IconData icon, GlassBadgeTone tone}) _requestBadgeInfo() {
+    switch (client.type_()) {
+      case ClientType.file:
+        return (
+          label: translate('Files'),
+          icon: CamelliaIcons.transfer,
+          tone: GlassBadgeTone.encrypted,
+        );
+      case ClientType.camera:
+        return (
+          label: translate('Camera'),
+          icon: CamelliaIcons.camera,
+          tone: GlassBadgeTone.brand,
+        );
+      case ClientType.terminal:
+        return (
+          label: translate('Terminal'),
+          icon: CamelliaIcons.terminal,
+          tone: GlassBadgeTone.brand,
+        );
+      case ClientType.portForward:
+        return (
+          label: client.portForward.isNotEmpty
+              ? '${translate('Port Forward')} ${client.portForward}'
+              : translate('Port Forward'),
+          icon: CamelliaIcons.tunnel,
+          tone: GlassBadgeTone.encrypted,
+        );
+      case ClientType.remote:
+        return (
+          label: translate('Desktop'),
+          icon: CamelliaIcons.screen,
+          tone: GlassBadgeTone.brand,
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppVisual.radius),
-        color: Theme.of(context).colorScheme.primary,
-      ),
-      margin: EdgeInsets.symmetric(horizontal: 5.0, vertical: 10.0),
-      padding: EdgeInsets.only(top: 10.0, bottom: 10.0, left: 10.0, right: 5.0),
-      child: Row(
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final badgeInfo = _requestBadgeInfo();
+    final canOpenSide =
+        client.authorized &&
+        (client.type_() == ClientType.remote ||
+            client.type_() == ClientType.file ||
+            client.type_() == ClientType.camera);
+
+    return GlassSurface(
+      layer: CamelliaGlassLayer.floating,
+      borderRadius: BorderRadius.circular(CamelliaRadius.control + 2),
+      showShadow: false,
+      padding: const EdgeInsets.all(10),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildClientAvatar().marginOnly(right: 10.0),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                FittedBox(
-                  child: Text(
-                    client.name,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildClientAvatar(context),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      client.name.isNotEmpty ? client.name : client.peerId,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      ),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                  ),
-                ),
-                FittedBox(
-                  child: Text(
-                    "(${client.peerId})",
-                    style: TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                ),
-                if (client.type_() == ClientType.terminal)
-                  FittedBox(
-                    child: Text(
-                      translate("Terminal"),
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                if (client.type_() == ClientType.file)
-                  FittedBox(
-                    child: Text(
-                      translate("Transfer file"),
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                if (client.type_() == ClientType.camera)
-                  FittedBox(
-                    child: Text(
-                      translate("View camera"),
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                if (client.portForward.isNotEmpty)
-                  FittedBox(
-                    child: Text(
-                      "Port Forward: ${client.portForward}",
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                SizedBox(height: 10.0),
-                FittedBox(
-                  child: Row(
-                    children: [
-                      Text(
-                        client.authorized
-                            ? client.disconnected
-                                  ? translate("Disconnected")
-                                  : translate("Connected")
-                            : "${translate("Request access to your device")}...",
-                        style: TextStyle(color: Colors.white),
-                      ).marginOnly(right: 8.0),
-                      if (client.authorized)
-                        Obx(
-                          () => Text(
-                            formatDurationToTime(
-                              Duration(seconds: _time.value),
-                            ),
-                            style: TextStyle(color: Colors.white),
-                          ),
+                    const SizedBox(height: 2),
+                    Text(
+                      client.peerId,
+                      style: CamelliaTypography.tabular(
+                        theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
                         ),
-                    ],
-                  ),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (canOpenSide) ...[
+                const SizedBox(width: 6),
+                GlassIconButton(
+                  icon: client.type_() == ClientType.file
+                      ? CamelliaIcons.transfer
+                      : CamelliaIcons.chat,
+                  tooltip: client.type_() == ClientType.file
+                      ? translate('Transfer file')
+                      : translate('Chat'),
+                  size: 34,
+                  iconSize: 17,
+                  onPressed: () => checkClickTime(client.id, () {
+                    if (client.type_() == ClientType.file) {
+                      gFFI.chatModel.toggleCMFilePage();
+                    } else {
+                      gFFI.chatModel.toggleCMChatPage(
+                        MessageKey(client.peerId, client.id),
+                      );
+                    }
+                  }),
                 ),
               ],
-            ),
+            ],
           ),
-          Offstage(
-            offstage:
-                !client.authorized ||
-                (client.type_() != ClientType.remote &&
-                    client.type_() != ClientType.file &&
-                    client.type_() != ClientType.camera),
-            child: IconButton(
-              onPressed: () => checkClickTime(client.id, () {
-                if (client.type_() == ClientType.file) {
-                  gFFI.chatModel.toggleCMFilePage();
-                } else {
-                  gFFI.chatModel.toggleCMChatPage(
-                    MessageKey(client.peerId, client.id),
-                  );
-                }
-              }),
-              icon: SvgPicture.asset(
-                client.type_() == ClientType.file
-                    ? 'assets/file_transfer.svg'
-                    : 'assets/chat2.svg',
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              GlassBadge(
+                label: badgeInfo.label,
+                icon: badgeInfo.icon,
+                tone: badgeInfo.tone,
+                compact: true,
               ),
-              splashRadius: kDesktopIconButtonSplashRadius,
-            ),
+              if (client.authorized && !client.disconnected)
+                Obx(
+                  () => GlassBadge(
+                    label:
+                        '${translate("Connected")} · ${formatDurationToTime(Duration(seconds: _time.value))}',
+                    tone: GlassBadgeTone.online,
+                    showDot: true,
+                    pulse: false,
+                    tabularNums: true,
+                    compact: true,
+                  ),
+                )
+              else if (client.authorized && client.disconnected)
+                GlassBadge(
+                  label: translate("Disconnected"),
+                  tone: GlassBadgeTone.offline,
+                  showDot: true,
+                  compact: true,
+                )
+              else
+                GlassBadge(
+                  label: translate("Request access to your device"),
+                  tone: GlassBadgeTone.connecting,
+                  showDot: true,
+                  pulse: false,
+                  compact: true,
+                ),
+            ],
           ),
         ],
       ),
@@ -565,35 +628,60 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   bool get wantKeepAlive => true;
 
-  Widget _buildClientAvatar() {
+  Widget _buildClientAvatar(BuildContext context) {
     return buildAvatarWidget(
           avatar: client.avatar,
-          size: 70,
-          borderRadius: 15,
-          fallback: _buildInitialAvatar(),
+          size: 46,
+          borderRadius: 12,
+          fallback: _buildInitialAvatar(context),
         ) ??
-        _buildInitialAvatar();
+        _buildInitialAvatar(context);
   }
 
-  Widget _buildInitialAvatar() {
+  Widget _buildInitialAvatar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final initial = client.name.trim().isNotEmpty
+        ? client.name.trim()[0].toUpperCase()
+        : '?';
     return Container(
-      width: 70,
-      height: 70,
+      width: 46,
+      height: 46,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: str2color(client.name),
-        borderRadius: BorderRadius.circular(15.0),
+        color: scheme.primaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: scheme.primary.withValues(alpha: 0.35),
+          width: 1,
+        ),
       ),
       child: Text(
-        client.name.isNotEmpty ? client.name[0] : '?',
-        style: TextStyle(
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
-          fontSize: 55,
+        initial,
+        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: scheme.onPrimaryContainer,
         ),
       ),
     );
   }
+}
+
+class _PermissionItem {
+  const _PermissionItem({
+    required this.name,
+    required this.label,
+    required this.tooltip,
+    required this.icon,
+    required this.enabled,
+    required this.onToggle,
+  });
+
+  final String name;
+  final String label;
+  final String tooltip;
+  final IconData icon;
+  final bool enabled;
+  final ValueChanged<bool> onToggle;
 }
 
 class _PrivilegeBoard extends StatefulWidget {
@@ -606,37 +694,212 @@ class _PrivilegeBoard extends StatefulWidget {
 }
 
 class _PrivilegeBoardState extends State<_PrivilegeBoard> {
-  late final client = widget.client;
-  Widget buildPermissionIcon(
+  Client get client => widget.client;
+
+  void _togglePermission(
+    String permName,
     bool enabled,
-    IconData iconData,
-    Function(bool)? onTap,
-    String tooltipText, {
-    required bool canModify,
-  }) {
-    return Tooltip(
-      message: "$tooltipText: ${enabled ? "ON" : "OFF"}",
-      waitDuration: Duration.zero,
-      child: Container(
-        decoration: BoxDecoration(
-          color: enabled
-              ? (canModify
-                    ? MyTheme.accent
-                    : MyTheme.accent.withValues(alpha: 0.6))
-              : AppVisual.subduedText(context).withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(AppVisual.compactRadius),
+    VoidCallback applyLocal,
+  ) {
+    bind.cmSwitchPermission(
+      connId: client.id,
+      name: permName,
+      enabled: enabled,
+    );
+    setState(applyLocal);
+  }
+
+  List<_PermissionItem> _buildPermissions() {
+    if (client.type_() == ClientType.camera) {
+      return [
+        _PermissionItem(
+          name: 'audio',
+          label: translate('Audio'),
+          tooltip: translate('Enable audio'),
+          icon: CamelliaIcons.audio,
+          enabled: client.audio,
+          onToggle: (v) => _togglePermission('audio', v, () => client.audio = v),
         ),
-        padding: EdgeInsets.all(8.0),
-        child: InkWell(
-          onTap: canModify
-              ? () => checkClickTime(
-                  widget.client.id,
-                  () => onTap?.call(!enabled),
-                )
-              : null,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [Expanded(child: Icon(iconData, color: Colors.white))],
+        _PermissionItem(
+          name: 'recording',
+          label: translate('Recording'),
+          tooltip: translate('Enable recording session'),
+          icon: CamelliaIcons.record,
+          enabled: client.recording,
+          onToggle: (v) =>
+              _togglePermission('recording', v, () => client.recording = v),
+        ),
+      ];
+    }
+
+    return [
+      _PermissionItem(
+        name: 'keyboard',
+        label: translate('Keyboard & Mouse'),
+        tooltip: translate('Enable keyboard/mouse'),
+        icon: CamelliaIcons.keyboard,
+        enabled: client.keyboard,
+        onToggle: (v) =>
+            _togglePermission('keyboard', v, () => client.keyboard = v),
+      ),
+      _PermissionItem(
+        name: 'clipboard',
+        label: translate('Clipboard'),
+        tooltip: translate('Enable clipboard'),
+        icon: CamelliaIcons.clipboard,
+        enabled: client.clipboard,
+        onToggle: (v) =>
+            _togglePermission('clipboard', v, () => client.clipboard = v),
+      ),
+      _PermissionItem(
+        name: 'audio',
+        label: translate('Audio'),
+        tooltip: translate('Enable audio'),
+        icon: CamelliaIcons.audio,
+        enabled: client.audio,
+        onToggle: (v) => _togglePermission('audio', v, () => client.audio = v),
+      ),
+      _PermissionItem(
+        name: 'file',
+        label: translate('File Copy'),
+        tooltip: translate('Enable file copy and paste'),
+        icon: CamelliaIcons.transfer,
+        enabled: client.file,
+        onToggle: (v) => _togglePermission('file', v, () => client.file = v),
+      ),
+      _PermissionItem(
+        name: 'restart',
+        label: translate('Restart'),
+        tooltip: translate('Enable remote restart'),
+        icon: Icons.restart_alt_rounded,
+        enabled: client.restart,
+        onToggle: (v) =>
+            _togglePermission('restart', v, () => client.restart = v),
+      ),
+      _PermissionItem(
+        name: 'recording',
+        label: translate('Recording'),
+        tooltip: translate('Enable recording session'),
+        icon: CamelliaIcons.record,
+        enabled: client.recording,
+        onToggle: (v) =>
+            _togglePermission('recording', v, () => client.recording = v),
+      ),
+      if (isWindows)
+        _PermissionItem(
+          name: 'block_input',
+          label: translate('Block Input'),
+          tooltip: translate('Enable blocking user input'),
+          icon: Icons.block_rounded,
+          enabled: client.blockInput,
+          onToggle: (v) =>
+              _togglePermission('block_input', v, () => client.blockInput = v),
+        ),
+      if (bind.mainSupportedPrivacyModeImpls() != '[]')
+        _PermissionItem(
+          name: 'privacy_mode',
+          label: translate('Privacy Mode'),
+          tooltip: translate('Enable privacy mode'),
+          icon: CamelliaIcons.privacy,
+          enabled: client.privacyMode,
+          onToggle: (v) => _togglePermission(
+            'privacy_mode',
+            v,
+            () => client.privacyMode = v,
+          ),
+        ),
+    ];
+  }
+
+  Widget _buildPermissionChip(
+    BuildContext context,
+    _PermissionItem item, {
+    required bool canModify,
+    required double width,
+  }) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark ? scheme.secondary : scheme.primary;
+    final active = item.enabled;
+
+    final bg = active
+        ? accent.withValues(alpha: dark ? 0.22 : 0.13)
+        : scheme.surfaceContainer.withValues(alpha: 0.6);
+    final borderColor = active
+        ? accent.withValues(alpha: dark ? 0.55 : 0.42)
+        : scheme.outlineVariant.withValues(alpha: 0.72);
+    final fgColor = active ? scheme.onSurface : scheme.onSurfaceVariant;
+
+    return Tooltip(
+      message: '${item.tooltip}: ${active ? "ON" : "OFF"}',
+      waitDuration: const Duration(milliseconds: 250),
+      child: SizedBox(
+        width: width,
+        child: Semantics(
+          toggled: active,
+          enabled: canModify,
+          label: item.tooltip,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(CamelliaRadius.control),
+              hoverColor: glass.hoverOverlay,
+              onTap: canModify
+                  ? () => checkClickTime(
+                      client.id,
+                      () => item.onToggle(!item.enabled),
+                    )
+                  : null,
+              child: AnimatedContainer(
+                duration: CamelliaMotion.resolve(
+                  context,
+                  CamelliaMotion.feedback,
+                ),
+                curve: CamelliaMotion.standard,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                  border: Border.all(color: borderColor, width: 1),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      item.icon,
+                      size: 16,
+                      color: active ? accent : scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        item.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: fgColor,
+                          fontWeight: active
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Container(
+                      width: 6.5,
+                      height: 6.5,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: active
+                            ? glass.statusOnline
+                            : scheme.outlineVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -645,213 +908,59 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
 
   @override
   Widget build(BuildContext context) {
-    final crossAxisCount = 4;
-    final spacing = 10.0;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final canModifyPermission =
         bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
         'N';
-    return Container(
-      width: double.infinity,
-      height: 160.0,
-      margin: EdgeInsets.all(5.0),
-      padding: EdgeInsets.all(5.0),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppVisual.radius),
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: AppVisual.border(context)),
-        boxShadow: AppVisual.shadow(context),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Text(
-            translate("Permissions"),
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
-          ).marginOnly(left: 4.0, bottom: 8.0),
-          Expanded(
-            child: GridView.count(
-              crossAxisCount: crossAxisCount,
-              padding: EdgeInsets.symmetric(horizontal: spacing),
-              mainAxisSpacing: spacing,
-              crossAxisSpacing: spacing,
-              children: client.type_() == ClientType.camera
-                  ? [
-                      buildPermissionIcon(
-                        client.audio,
-                        Icons.volume_up_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "audio",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.audio = enabled;
-                          });
-                        },
-                        translate('Enable audio'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.recording,
-                        Icons.videocam_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "recording",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.recording = enabled;
-                          });
-                        },
-                        translate('Enable recording session'),
-                        canModify: canModifyPermission,
-                      ),
-                    ]
-                  : [
-                      buildPermissionIcon(
-                        client.keyboard,
-                        Icons.keyboard,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "keyboard",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.keyboard = enabled;
-                          });
-                        },
-                        translate('Enable keyboard/mouse'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.clipboard,
-                        Icons.assignment_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "clipboard",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.clipboard = enabled;
-                          });
-                        },
-                        translate('Enable clipboard'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.audio,
-                        Icons.volume_up_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "audio",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.audio = enabled;
-                          });
-                        },
-                        translate('Enable audio'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.file,
-                        Icons.upload_file_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "file",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.file = enabled;
-                          });
-                        },
-                        translate('Enable file copy and paste'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.restart,
-                        Icons.restart_alt_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "restart",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.restart = enabled;
-                          });
-                        },
-                        translate('Enable remote restart'),
-                        canModify: canModifyPermission,
-                      ),
-                      buildPermissionIcon(
-                        client.recording,
-                        Icons.videocam_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                            connId: client.id,
-                            name: "recording",
-                            enabled: enabled,
-                          );
-                          setState(() {
-                            client.recording = enabled;
-                          });
-                        },
-                        translate('Enable recording session'),
-                        canModify: canModifyPermission,
-                      ),
-                      // only windows support block input
-                      if (isWindows)
-                        buildPermissionIcon(
-                          client.blockInput,
-                          Icons.block,
-                          (enabled) {
-                            bind.cmSwitchPermission(
-                              connId: client.id,
-                              name: "block_input",
-                              enabled: enabled,
-                            );
-                            setState(() {
-                              client.blockInput = enabled;
-                            });
-                          },
-                          translate('Enable blocking user input'),
-                          canModify: canModifyPermission,
-                        ),
-                      if (bind.mainSupportedPrivacyModeImpls() != '[]')
-                        buildPermissionIcon(
-                          client.privacyMode,
-                          Icons.visibility_off,
-                          (enabled) {
-                            bind.cmSwitchPermission(
-                              connId: client.id,
-                              name: "privacy_mode",
-                              enabled: enabled,
-                            );
-                            setState(() {
-                              client.privacyMode = enabled;
-                            });
-                          },
-                          translate('Enable privacy mode'),
-                          canModify: canModifyPermission,
-                        ),
-                    ],
-            ),
+    final items = _buildPermissions();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 2, bottom: 6),
+          child: Row(
+            children: [
+              Icon(CamelliaIcons.shield, size: 14, color: scheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                translate("Permissions"),
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const spacing = 6.0;
+            final tileWidth = ((constraints.maxWidth - spacing) / 2).clamp(
+              80.0,
+              400.0,
+            );
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final item in items)
+                  _buildPermissionChip(
+                    context,
+                    item,
+                    canModify: canModifyPermission,
+                    width: tileWidth,
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }
-
-const double buttonBottomMargin = 8;
 
 class _CmControlPanel extends StatelessWidget {
   final Client client;
@@ -862,209 +971,232 @@ class _CmControlPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return client.authorized
         ? client.disconnected
-              ? buildDisconnected(context)
-              : buildAuthorized(context)
-        : buildUnAuthorized(context);
+              ? _buildDisconnected(context)
+              : _buildAuthorized(context)
+        : _buildUnAuthorized(context);
   }
 
-  buildAuthorized(BuildContext context) {
+  Future<void> _showAudioDeviceMenu(
+    BuildContext context,
+    TapDownDetails details,
+  ) async {
+    final devicesInfo = await AudioInput.getDevicesInfo(true, true);
+    final List<String> devices = devicesInfo['devices'] as List<String>;
+    if (devices.isEmpty) {
+      msgBox(
+        gFFI.sessionId,
+        'custom-nocancel-info',
+        'Prompt',
+        'no_audio_input_device_tip',
+        '',
+        gFFI.dialogManager,
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
+    final String currentDevice = devicesInfo['current'] as String;
+    final x = details.globalPosition.dx;
+    final y = details.globalPosition.dy;
+    final position = RelativeRect.fromLTRB(x, y, x, y);
+    await showMenu<String>(
+      context: context,
+      position: position,
+      items: devices
+          .map(
+            (d) => PopupMenuItem<String>(
+              value: d,
+              height: 36,
+              onTap: () => AudioInput.setDevice(d, true, true),
+              child: Row(
+                children: [
+                  if (d == currentDevice)
+                    Icon(
+                      CamelliaIcons.check,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.primary,
+                    )
+                  else
+                    const SizedBox(width: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      d,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  Widget _buildAuthorized(BuildContext context) {
     final bool canElevate = bind.cmCanElevate();
     final model = Provider.of<ServerModel>(context);
     final showElevation =
         canElevate &&
         model.showElevation &&
         client.type_() == ClientType.remote;
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Offstage(
-          offstage: !client.inVoiceCall,
-          child: Row(
-            children: [
-              Expanded(
-                child: buildButton(
-                  context,
-                  color: MyTheme.accent,
-                  onClick: null,
-                  onTapDown: (details) async {
-                    final devicesInfo = await AudioInput.getDevicesInfo(
-                      true,
-                      true,
-                    );
-                    List<String> devices =
-                        devicesInfo['devices'] as List<String>;
-                    if (devices.isEmpty) {
-                      msgBox(
-                        gFFI.sessionId,
-                        'custom-nocancel-info',
-                        'Prompt',
-                        'no_audio_input_device_tip',
-                        '',
-                        gFFI.dialogManager,
-                      );
-                      return;
-                    }
 
-                    String currentDevice = devicesInfo['current'] as String;
-                    final x = details.globalPosition.dx;
-                    final y = details.globalPosition.dy;
-                    final position = RelativeRect.fromLTRB(x, y, x, y);
-                    showMenu(
-                      context: context,
-                      position: position,
-                      items: devices
-                          .map(
-                            (d) => PopupMenuItem<String>(
-                              value: d,
-                              height: 18,
-                              padding: EdgeInsets.zero,
-                              onTap: () => AudioInput.setDevice(d, true, true),
-                              child: IgnorePointer(
-                                child: RadioMenuButton(
-                                  value: d,
-                                  groupValue: currentDevice,
-                                  onChanged: (v) {
-                                    if (v != null)
-                                      AudioInput.setDevice(v, true, true);
-                                  },
-                                  child: Container(
-                                    child: Text(
-                                      d,
-                                      overflow: TextOverflow.ellipsis,
-                                      maxLines: 1,
-                                    ),
-                                    constraints: BoxConstraints(
-                                      maxWidth:
-                                          kConnectionManagerWindowSizeClosedChat
-                                              .width -
-                                          80,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    );
-                  },
-                  icon: Icon(Icons.call_rounded, color: Colors.white, size: 14),
-                  text: "Audio input",
-                  textColor: Colors.white,
-                ),
-              ),
-              Expanded(
-                child: buildButton(
-                  context,
-                  color: AppVisual.tone(context, AppTone.danger),
-                  onClick: () => closeVoiceCall(),
-                  icon: Icon(
-                    Icons.call_end_rounded,
-                    color: Colors.white,
-                    size: 14,
-                  ),
-                  text: "Stop voice call",
-                  textColor: Colors.white,
-                ),
-              ),
-            ],
-          ),
-        ),
-        Offstage(
-          offstage: !client.incomingVoiceCall,
-          child: Row(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (client.inVoiceCall) ...[
+          Row(
             children: [
               Expanded(
-                child: buildButton(
-                  context,
-                  color: MyTheme.accent,
-                  onClick: () => handleVoiceCall(true),
-                  icon: Icon(Icons.call_rounded, color: Colors.white, size: 14),
-                  text: "Accept",
-                  textColor: Colors.white,
+                child: GestureDetector(
+                  onTapDown: (details) => checkClickTime(
+                    client.id,
+                    () => _showAudioDeviceMenu(context, details),
+                  ),
+                  child: GlassButton(
+                    variant: GlassButtonVariant.secondary,
+                    minHeight: 40,
+                    expand: true,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    icon: const Icon(CamelliaIcons.voiceCall, size: 16),
+                    onPressed: () {},
+                    child: Text(
+                      translate("Audio input"),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ),
               ),
+              const SizedBox(width: 6),
               Expanded(
-                child: buildButton(
-                  context,
-                  color: Colors.red,
-                  onClick: () => handleVoiceCall(false),
-                  icon: Icon(
-                    Icons.phone_disabled_rounded,
-                    color: Colors.white,
-                    size: 14,
+                child: GlassButton(
+                  variant: GlassButtonVariant.danger,
+                  minHeight: 40,
+                  expand: true,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
                   ),
-                  text: "Dismiss",
-                  textColor: Colors.white,
+                  icon: const Icon(CamelliaIcons.endCall, size: 16),
+                  onPressed: () =>
+                      checkClickTime(client.id, () => closeVoiceCall()),
+                  child: Text(
+                    translate("Stop voice call"),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ],
           ),
-        ),
-        Offstage(
-          offstage: !client.fromSwitch,
-          child: buildButton(
-            context,
-            color: Colors.purple,
-            onClick: () => handleSwitchBack(context),
-            icon: Icon(Icons.reply, color: Colors.white),
-            text: "Switch Sides",
-            textColor: Colors.white,
+          const SizedBox(height: 6),
+        ],
+        if (client.incomingVoiceCall) ...[
+          Row(
+            children: [
+              Expanded(
+                child: GlassButton(
+                  variant: GlassButtonVariant.primary,
+                  minHeight: 40,
+                  expand: true,
+                  icon: const Icon(CamelliaIcons.voiceCall, size: 16),
+                  onPressed: () =>
+                      checkClickTime(client.id, () => handleVoiceCall(true)),
+                  child: Text(
+                    translate("Accept"),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: GlassButton(
+                  variant: GlassButtonVariant.danger,
+                  minHeight: 40,
+                  expand: true,
+                  icon: const Icon(CamelliaIcons.endCall, size: 16),
+                  onPressed: () =>
+                      checkClickTime(client.id, () => handleVoiceCall(false)),
+                  child: Text(
+                    translate("Dismiss"),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-        Offstage(
-          offstage: !showElevation,
-          child: buildButton(
-            context,
-            color: MyTheme.accent,
-            onClick: () {
+          const SizedBox(height: 6),
+        ],
+        if (client.fromSwitch) ...[
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 40,
+            expand: true,
+            icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+            onPressed: () =>
+                checkClickTime(client.id, () => handleSwitchBack(context)),
+            child: Text(
+              translate("Switch Sides"),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
+        if (showElevation) ...[
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 40,
+            expand: true,
+            icon: const Icon(CamelliaIcons.shield, size: 16),
+            onPressed: () => checkClickTime(client.id, () {
               handleElevate(context);
               windowManager.minimize();
-            },
-            icon: Icon(Icons.security_rounded, color: Colors.white, size: 14),
-            text: 'Elevate',
-            textColor: Colors.white,
-          ),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: buildButton(
-                context,
-                color: Colors.redAccent,
-                onClick: handleDisconnect,
-                text: 'Disconnect',
-                icon: Icon(
-                  Icons.link_off_rounded,
-                  color: Colors.white,
-                  size: 14,
-                ),
-                textColor: Colors.white,
-              ),
+            }),
+            child: Text(
+              translate('Elevate'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ],
-        ),
-      ],
-    ).marginOnly(bottom: buttonBottomMargin);
-  }
-
-  buildDisconnected(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Expanded(
-          child: buildButton(
-            context,
-            color: MyTheme.accent,
-            onClick: handleClose,
-            text: 'Close',
-            textColor: Colors.white,
+          ),
+          const SizedBox(height: 6),
+        ],
+        GlassButton(
+          variant: GlassButtonVariant.danger,
+          minHeight: 44,
+          expand: true,
+          icon: const Icon(Icons.link_off_rounded, size: 17),
+          onPressed: () => checkClickTime(client.id, handleDisconnect),
+          child: Text(
+            translate('Disconnect'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
-    ).marginOnly(bottom: buttonBottomMargin);
+    );
   }
 
-  buildUnAuthorized(BuildContext context) {
+  Widget _buildDisconnected(BuildContext context) {
+    return GlassButton(
+      variant: GlassButtonVariant.secondary,
+      minHeight: 44,
+      expand: true,
+      icon: const Icon(CamelliaIcons.close, size: 17),
+      onPressed: handleClose,
+      child: Text(translate('Close')),
+    );
+  }
+
+  Widget _buildUnAuthorized(BuildContext context) {
     final bool canElevate = bind.cmCanElevate();
     final model = Provider.of<ServerModel>(context);
     final showElevation =
@@ -1072,122 +1204,104 @@ class _CmControlPanel extends StatelessWidget {
         model.showElevation &&
         client.type_() == ClientType.remote;
     final showAccept = model.approveMode != 'password';
+    final canModifyPermission =
+        bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
+        'N';
+    final showViewOnly =
+        showAccept &&
+        canModifyPermission &&
+        client.type_() == ClientType.remote;
+
     return Column(
-      mainAxisAlignment: MainAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Offstage(
-          offstage: !showElevation || !showAccept,
-          child: buildButton(
-            context,
-            color: Colors.green[700],
-            onClick: () {
+        if (showElevation && showAccept) ...[
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 40,
+            expand: true,
+            tooltip: translate('accept_and_elevate_btn_tooltip'),
+            icon: const Icon(CamelliaIcons.shield, size: 16),
+            onPressed: () => checkClickTime(client.id, () {
               handleAccept(context);
               handleElevate(context);
               windowManager.minimize();
-            },
-            text: 'Accept and Elevate',
-            icon: Icon(Icons.security_rounded, color: Colors.white, size: 14),
-            textColor: Colors.white,
-            tooltip: 'accept_and_elevate_btn_tooltip',
+            }),
+            child: Text(
+              translate('Accept and Elevate'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (showAccept)
+          const SizedBox(height: 6),
+        ],
+        if (showAccept) ...[
+          Row(
+            children: [
               Expanded(
-                child: Column(
-                  children: [
-                    buildButton(
-                      context,
-                      color: MyTheme.accent,
-                      onClick: () {
-                        handleAccept(context);
-                        windowManager.minimize();
-                      },
-                      text: 'Accept',
-                      textColor: Colors.white,
-                    ),
-                  ],
+                child: GlassButton(
+                  variant: GlassButtonVariant.primary,
+                  minHeight: 44,
+                  expand: true,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 10,
+                  ),
+                  icon: const Icon(CamelliaIcons.check, size: 17),
+                  onPressed: () => checkClickTime(client.id, () {
+                    handleAccept(context);
+                    windowManager.minimize();
+                  }),
+                  child: Text(
+                    translate('Accept'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
-            Expanded(
-              child: buildButton(
-                context,
-                color: Colors.transparent,
-                border: Border.all(color: Colors.grey),
-                onClick: handleDisconnect,
-                text: 'Cancel',
-                textColor: null,
-              ),
-            ),
-          ],
+              if (showViewOnly) ...[
+                const SizedBox(width: 6),
+                Expanded(
+                  child: GlassButton(
+                    variant: GlassButtonVariant.secondary,
+                    minHeight: 44,
+                    expand: true,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    icon: const Icon(CamelliaIcons.eye, size: 17),
+                    onPressed: () => checkClickTime(client.id, () {
+                      handleAcceptViewOnly(context);
+                      windowManager.minimize();
+                    }),
+                    child: Text(
+                      translate('View Only'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+        ],
+        GlassButton(
+          variant: GlassButtonVariant.danger,
+          minHeight: 44,
+          expand: true,
+          icon: const Icon(CamelliaIcons.close, size: 17),
+          onPressed: () => checkClickTime(client.id, handleDisconnect),
+          child: Text(
+            translate('Decline'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ],
-    ).marginOnly(bottom: buttonBottomMargin);
-  }
-
-  Widget buildButton(
-    BuildContext context, {
-    required Color? color,
-    GestureTapCallback? onClick,
-    Widget? icon,
-    BoxBorder? border,
-    required String text,
-    required Color? textColor,
-    String? tooltip,
-    GestureTapDownCallback? onTapDown,
-  }) {
-    assert(!(onClick == null && onTapDown == null));
-    Widget textWidget;
-    if (icon != null) {
-      textWidget = Text(
-        translate(text),
-        style: TextStyle(color: textColor),
-        textAlign: TextAlign.center,
-      );
-    } else {
-      textWidget = Expanded(
-        child: Text(
-          translate(text),
-          style: TextStyle(color: textColor),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
-    final borderRadius = BorderRadius.circular(10.0);
-    final btn = Container(
-      height: 28,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: borderRadius,
-        border: border,
-      ),
-      child: InkWell(
-        borderRadius: borderRadius,
-        onTap: () {
-          if (onClick == null) return;
-          checkClickTime(client.id, onClick);
-        },
-        onTapDown: (details) {
-          if (onTapDown == null) return;
-          checkClickTime(client.id, () {
-            onTapDown.call(details);
-          });
-        },
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Offstage(offstage: icon == null, child: icon).marginOnly(right: 5),
-            textWidget,
-          ],
-        ),
-      ),
     );
-    return (tooltip != null
-            ? Tooltip(message: translate(tooltip), child: btn)
-            : btn)
-        .marginAll(4);
   }
 
   void handleDisconnect() {
@@ -1195,6 +1309,17 @@ class _CmControlPanel extends StatelessWidget {
   }
 
   void handleAccept(BuildContext context) {
+    final model = Provider.of<ServerModel>(context, listen: false);
+    model.sendLoginResponse(client, true);
+  }
+
+  void handleAcceptViewOnly(BuildContext context) {
+    bind.cmSwitchPermission(
+      connId: client.id,
+      name: "keyboard",
+      enabled: false,
+    );
+    client.keyboard = false;
     final model = Provider.of<ServerModel>(context, listen: false);
     model.sendLoginResponse(client, true);
   }
@@ -1264,208 +1389,236 @@ bool allowRemoteCMModification() {
 }
 
 class _FileTransferLogPage extends StatefulWidget {
-  _FileTransferLogPage({Key? key}) : super(key: key);
+  const _FileTransferLogPage({Key? key}) : super(key: key);
 
   @override
   State<_FileTransferLogPage> createState() => __FileTransferLogPageState();
 }
 
 class __FileTransferLogPageState extends State<_FileTransferLogPage> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return statusList();
   }
 
-  Widget generateCard(Widget child) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.all(Radius.circular(15.0)),
+  Widget _actionBadge(BuildContext context, CmFileLog item) {
+    final scheme = Theme.of(context).colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    final ({IconData icon, String label, Color color}) info = switch (item.action) {
+      CmFileAction.none => (
+        icon: CamelliaIcons.transfer,
+        label: '',
+        color: scheme.onSurfaceVariant,
       ),
-      child: child,
+      CmFileAction.remoteToLocal => (
+        icon: CamelliaIcons.upload,
+        label: translate('Send'),
+        color: scheme.primary,
+      ),
+      CmFileAction.localToRemote => (
+        icon: CamelliaIcons.download,
+        label: translate('Receive'),
+        color: glass.statusEncrypted,
+      ),
+      CmFileAction.remove => (
+        icon: CamelliaIcons.trash,
+        label: translate('Delete'),
+        color: glass.statusAlert,
+      ),
+      CmFileAction.createDir => (
+        icon: CamelliaIcons.folderNew,
+        label: translate('Create Folder'),
+        color: glass.statusOnline,
+      ),
+      CmFileAction.rename => (
+        icon: CamelliaIcons.edit,
+        label: translate('Rename'),
+        color: scheme.primary,
+      ),
+    };
+
+    return Container(
+      width: 56,
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      decoration: BoxDecoration(
+        color: info.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(info.icon, size: 18, color: info.color),
+          if (info.label.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              info.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: info.color,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
-  iconLabel(CmFileLog item) {
-    switch (item.action) {
-      case CmFileAction.none:
-        return Container();
-      case CmFileAction.localToRemote:
-      case CmFileAction.remoteToLocal:
-        return Column(
-          children: [
-            Transform.rotate(
-              angle: item.action == CmFileAction.remoteToLocal ? 0 : pi,
-              child: SvgPicture.asset(
-                "assets/arrow.svg",
-                colorFilter: svgColor(Theme.of(context).tabBarTheme.labelColor),
+  Widget statusList() {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 6, 4, 8),
+      child: Obx(() {
+        final jobTable = gFFI.cmFileModel.currentJobTable;
+        if (jobTable.isEmpty) {
+          return GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      CamelliaIcons.transfer,
+                      size: 38,
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.65),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      translate("No transfers in progress"),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            Text(
-              item.action == CmFileAction.remoteToLocal
-                  ? translate('Send')
-                  : translate('Receive'),
-            ),
-          ],
-        );
-      case CmFileAction.remove:
-        return Column(
-          children: [
-            Icon(Icons.delete, color: Theme.of(context).tabBarTheme.labelColor),
-            Text(translate('Delete')),
-          ],
-        );
-      case CmFileAction.createDir:
-        return Column(
-          children: [
-            Icon(
-              Icons.create_new_folder,
-              color: Theme.of(context).tabBarTheme.labelColor,
-            ),
-            Text(translate('Create Folder')),
-          ],
-        );
-      case CmFileAction.rename:
-        return Column(
-          children: [
-            Icon(
-              Icons.drive_file_move_outlined,
-              color: Theme.of(context).tabBarTheme.labelColor,
-            ),
-            Text(translate('Rename')),
-          ],
-        );
-    }
-  }
+          );
+        }
 
-  Widget statusList() {
-    return PreferredSize(
-      preferredSize: const Size(200, double.infinity),
-      child: Container(
-        padding: const EdgeInsets.all(12.0),
-        child: Obx(() {
-          final jobTable = gFFI.cmFileModel.currentJobTable;
-          statusListView(List<CmFileLog> jobs) => ListView.builder(
-            controller: ScrollController(),
-            itemBuilder: (BuildContext context, int index) {
-              final item = jobs[index];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 5),
-                child: generateCard(
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            width: 50,
-                            child: iconLabel(item),
-                          ).paddingOnly(left: 15),
-                          const SizedBox(width: 16.0),
-                          Expanded(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item.fileName,
-                                ).paddingSymmetric(vertical: 10),
-                                if (item.totalSize > 0)
-                                  Text(
-                                    '${translate("Total")} ${readableFileSize(item.totalSize.toDouble())}',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: MyTheme.darkGray,
-                                    ),
+        return ListView.separated(
+          controller: _scrollController,
+          itemCount: jobTable.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (BuildContext context, int index) {
+            final item = jobTable[index];
+            final progress = item.totalSize > 0
+                ? (item.finishedSize / item.totalSize).clamp(0.0, 1.0)
+                : 0.0;
+            final pct = (progress * 100).toStringAsFixed(0);
+
+            return GlassSurface(
+              layer: CamelliaGlassLayer.floating,
+              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _actionBadge(context, item),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.fileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 2,
+                          children: [
+                            if (item.totalSize > 0)
+                              Text(
+                                '${translate("Total")} ${readableFileSize(item.totalSize.toDouble())}',
+                                style: CamelliaTypography.tabular(
+                                  theme.textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
                                   ),
-                                if (item.totalSize > 0)
-                                  Offstage(
-                                    offstage: item.state != JobState.inProgress,
-                                    child: Text(
-                                      '${translate("Speed")} ${readableFileSize(item.speed)}/s',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: MyTheme.darkGray,
-                                      ),
-                                    ),
+                                ),
+                              ),
+                            if (item.totalSize > 0 &&
+                                item.state == JobState.inProgress)
+                              Text(
+                                '${translate("Speed")} ${readableFileSize(item.speed)}/s',
+                                style: CamelliaTypography.tabular(
+                                  theme.textTheme.bodySmall?.copyWith(
+                                    color: scheme.primary,
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                Offstage(
-                                  offstage:
-                                      !(item.isTransfer() &&
-                                          item.state != JobState.inProgress),
-                                  child: Text(
-                                    translate(item.display()),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: MyTheme.darkGray,
+                                ),
+                              ),
+                            if (item.isTransfer() &&
+                                item.state != JobState.inProgress)
+                              Text(
+                                translate(item.display()),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                          ],
+                        ),
+                        if (item.totalSize > 0 &&
+                            item.state == JobState.inProgress) ...[
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(
+                                    CamelliaRadius.pill,
+                                  ),
+                                  child: LinearProgressIndicator(
+                                    value: progress,
+                                    minHeight: 7,
+                                    backgroundColor:
+                                        scheme.surfaceContainerHighest,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      scheme.primary,
                                     ),
                                   ),
                                 ),
-                                if (item.totalSize > 0)
-                                  Offstage(
-                                    offstage: item.state != JobState.inProgress,
-                                    child: LinearPercentIndicator(
-                                      padding: EdgeInsets.only(right: 15),
-                                      animateFromLastPercent: true,
-                                      center: Text(
-                                        '${(item.finishedSize / item.totalSize * 100).toStringAsFixed(0)}%',
-                                      ),
-                                      barRadius: Radius.circular(15),
-                                      percent:
-                                          item.finishedSize / item.totalSize,
-                                      progressColor: MyTheme.accent,
-                                      backgroundColor: Theme.of(
-                                        context,
-                                      ).hoverColor,
-                                      lineHeight: kDesktopFileTransferRowHeight,
-                                    ).paddingSymmetric(vertical: 15),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '$pct%',
+                                style: CamelliaTypography.tabular(
+                                  theme.textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSurface,
+                                    fontWeight: FontWeight.w700,
                                   ),
-                              ],
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [],
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                    ],
-                  ).paddingSymmetric(vertical: 10),
-                ),
-              );
-            },
-            itemCount: jobTable.length,
-          );
-
-          return jobTable.isEmpty
-              ? generateCard(
-                  Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SvgPicture.asset(
-                          "assets/transfer.svg",
-                          colorFilter: svgColor(
-                            Theme.of(context).tabBarTheme.labelColor,
-                          ),
-                          height: 40,
-                        ).paddingOnly(bottom: 10),
-                        Text(
-                          translate("No transfers in progress"),
-                          textAlign: TextAlign.center,
-                          textScaler: TextScaler.linear(1.20),
-                          style: TextStyle(
-                            color: Theme.of(context).tabBarTheme.labelColor,
-                          ),
-                        ),
                       ],
                     ),
                   ),
-                )
-              : statusListView(jobTable);
-        }),
-      ),
+                ],
+              ),
+            );
+          },
+        );
+      }),
     );
   }
 }

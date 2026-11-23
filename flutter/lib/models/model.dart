@@ -35,7 +35,6 @@ import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/http_service.dart' as http;
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 import 'package:window_manager/window_manager.dart';
@@ -43,6 +42,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:vector_math/vector_math.dart' show Vector2;
 
 import '../common.dart';
+import '../ui/glass_components.dart';
 import '../utils/image.dart' as img;
 import '../common/widgets/dialog.dart';
 import 'input_model.dart';
@@ -358,12 +358,10 @@ class FfiModel with ChangeNotifier {
     if (secure == null || direct == null) {
       return null;
     } else {
-      final icon =
-          '${secure == true ? 'secure' : 'insecure'}${direct == true ? '' : '_relay'}';
-      final iconWidget = SvgPicture.asset(
-        'assets/$icon.svg',
-        width: 48,
-        height: 48,
+      final iconWidget = CamelliaIcons.securityBadge(
+        secure: secure!,
+        direct: direct!,
+        size: 42,
       );
       String connectionText = getConnectionText(
         secure!,
@@ -374,10 +372,10 @@ class FfiModel with ChangeNotifier {
         mainAxisSize: MainAxisSize.min,
         children: [
           iconWidget,
-          SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text(
             connectionText,
-            style: TextStyle(fontSize: 12),
+            style: const TextStyle(fontSize: 12),
             textAlign: TextAlign.center,
           ),
         ],
@@ -761,10 +759,12 @@ class FfiModel with ChangeNotifier {
           Row(
             children: [
               Obx(
-                () => Radio<String>(
-                  value: kValuePrinterIncomingJobDefault,
+                () => RadioGroup<String>(
                   groupValue: defaultOrSelectedGroupValue.value,
                   onChanged: onRatioChanged,
+                  child: const Radio<String>(
+                    value: kValuePrinterIncomingJobDefault,
+                  ),
                 ),
               ),
               GestureDetector(
@@ -778,10 +778,12 @@ class FfiModel with ChangeNotifier {
               Row(
                 children: [
                   Obx(
-                    () => Radio<String>(
-                      value: kValuePrinterIncomingJobSelected,
+                    () => RadioGroup<String>(
                       groupValue: defaultOrSelectedGroupValue.value,
                       onChanged: onRatioChanged,
+                      child: const Radio<String>(
+                        value: kValuePrinterIncomingJobSelected,
+                      ),
                     ),
                   ),
                   GestureDetector(
@@ -796,19 +798,30 @@ class FfiModel with ChangeNotifier {
                 width: 500,
                 child: ListView.builder(
                   itemBuilder: (context, index) {
-                    return Obx(
-                      () => GestureDetector(
+                    return Obx(() {
+                      final scheme = Theme.of(context).colorScheme;
+                      final isSelected =
+                          selectedPrinterName.value == printerNames[index];
+                      final isEnabled =
+                          defaultOrSelectedGroupValue.value ==
+                          kValuePrinterIncomingJobSelected;
+                      return GestureDetector(
                         child: Container(
                           decoration: BoxDecoration(
-                            color:
-                                selectedPrinterName.value == printerNames[index]
-                                ? (defaultOrSelectedGroupValue.value ==
-                                          kValuePrinterIncomingJobSelected
-                                      ? MyTheme.button
-                                      : MyTheme.button.withValues(alpha: 0.5))
-                                : Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.all(
-                              Radius.circular(5.0),
+                            color: isSelected
+                                ? (isEnabled
+                                      ? scheme.primaryContainer
+                                      : scheme.primaryContainer.withValues(
+                                          alpha: 0.5,
+                                        ))
+                                : scheme.surfaceContainerLow,
+                            borderRadius: const BorderRadius.all(
+                              Radius.circular(8.0),
+                            ),
+                            border: Border.all(
+                              color: isSelected
+                                  ? scheme.primary.withValues(alpha: 0.45)
+                                  : Colors.transparent,
                             ),
                           ),
                           key: ValueKey(printerNames[index]),
@@ -819,20 +832,23 @@ class FfiModel with ChangeNotifier {
                               padding: const EdgeInsets.only(left: 10.0),
                               child: Text(
                                 printerNames[index],
-                                style: TextStyle(fontSize: 14),
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isSelected
+                                      ? scheme.onPrimaryContainer
+                                      : scheme.onSurface,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                        onTap:
-                            defaultOrSelectedGroupValue.value ==
-                                kValuePrinterIncomingJobSelected
+                        onTap: isEnabled
                             ? () {
                                 selectedPrinterName.value = printerNames[index];
                               }
                             : null,
-                      ),
-                    );
+                      );
+                    });
                   },
                   itemCount: printerNames.length,
                 ),
@@ -1117,6 +1133,12 @@ class FfiModel with ChangeNotifier {
       wrongPasswordDialog(sessionId, dialogManager, type, title, text);
     } else if (type == 'input-2fa') {
       enter2FaDialog(sessionId, dialogManager);
+    } else if (type == 're-input-2fa') {
+      enter2FaDialog(
+        sessionId,
+        dialogManager,
+        errorText: translate('Verification code error'),
+      );
     } else if (type == 'input-password') {
       enterPasswordDialog(sessionId, dialogManager);
     } else if (type == 'session-login' || type == 'session-re-login') {
@@ -1247,19 +1269,16 @@ class FfiModel with ChangeNotifier {
       );
     } else {
       if (type.contains('error')) {
-        BotToast.showText(
-          contentColor: Colors.red,
-          text: translate(text),
-          duration: duration,
-          clickClose: true,
-          onlyOne: true,
+        showToast(
+          translate(text),
+          timeout: duration,
+          tone: AppTone.danger,
         );
       } else {
-        BotToast.showText(
-          text: translate(text),
-          duration: duration,
-          clickClose: true,
-          onlyOne: true,
+        showToast(
+          translate(text),
+          timeout: duration,
+          tone: AppTone.info,
         );
       }
     }
@@ -1457,10 +1476,6 @@ class FfiModel with ChangeNotifier {
         close();
       }
 
-      final style = ElevatedButton.styleFrom(
-        backgroundColor: Colors.green[700],
-      );
-
       return CustomAlertDialog(
         title: null,
         content: msgboxContent(type, title, text2),
@@ -1470,7 +1485,7 @@ class FfiModel with ChangeNotifier {
             dialogButton(
               'Connect via relay',
               onPressed: () => reconnect(dialogManager, sessionId, true),
-              buttonStyle: style,
+              tone: AppTone.success,
               isOutline: true,
             ),
           dialogButton(
@@ -1481,7 +1496,7 @@ class FfiModel with ChangeNotifier {
             dialogButton(
               'Connect via relay',
               onPressed: () => reconnect(dialogManager, sessionId, true),
-              buttonStyle: style,
+              tone: AppTone.success,
             ),
         ],
         onCancel: onClose,
@@ -2806,7 +2821,8 @@ class CanvasModel with ChangeNotifier {
       isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
 
   Size getSize() {
-    final mediaData = MediaQueryData.fromView(ui.window);
+    final mediaData =
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first);
     final size = mediaData.size;
     // If minimized, w or h may be negative here.
     double w = size.width - leftToEdge - rightToEdge;
@@ -2847,7 +2863,12 @@ class CanvasModel with ChangeNotifier {
   double getAdjustY() {
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
-    return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
+    return max(
+        bottom -
+            MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+                .padding
+                .top,
+        0);
   }
 
   void updateSize([Size? size]) => _size = size ?? getSize();
@@ -2908,7 +2929,8 @@ class CanvasModel with ChangeNotifier {
       }
     }
 
-    _devicePixelRatio = devicePixelRatio ?? ui.window.devicePixelRatio;
+    _devicePixelRatio = devicePixelRatio ??
+        ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
     if (kIgnoreDpi) {
       if (style == kRemoteViewStyleOriginal) {
         _scale = 1.0 / _devicePixelRatio;
@@ -3243,7 +3265,8 @@ class CanvasModel with ChangeNotifier {
   // For reset canvas to the last view style
   reset() {
     _scale = _lastViewStyle.scale;
-    _devicePixelRatio = ui.window.devicePixelRatio;
+    _devicePixelRatio =
+        ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
     if (kIgnoreDpi && _lastViewStyle.style == kRemoteViewStyleOriginal) {
       _scale = 1.0 / _devicePixelRatio;
     }
@@ -3660,9 +3683,9 @@ class CursorModel with ChangeNotifier {
   // remote physical display coordinate
   // For update pan (mobile), onOneFingerPanStart, onOneFingerPanUpdate, onHoldDragUpdate
   Rect getVisibleRect() {
-    final size =
-        parent.target?.canvasModel.getSize() ??
-        MediaQueryData.fromView(ui.window).size;
+    final size = parent.target?.canvasModel.getSize() ??
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+            .size;
     final xoffset = parent.target?.canvasModel.x ?? 0;
     final yoffset = parent.target?.canvasModel.y ?? 0;
     final scale = parent.target?.canvasModel.scale ?? 1;
@@ -3678,9 +3701,9 @@ class CursorModel with ChangeNotifier {
     // See `getVisibleRect()`
     // _x = _displayOriginX - xoffset / scale + size.width / scale * 0.5;
     // _y = _displayOriginY - yoffset / scale + size.height / scale * 0.5;
-    final size =
-        parent.target?.canvasModel.getSize() ??
-        MediaQueryData.fromView(ui.window).size;
+    final size = parent.target?.canvasModel.getSize() ??
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+            .size;
     final xoffset = (_displayOriginX - _x) * scale + size.width * 0.5;
     final yoffset = (_displayOriginY - _y) * scale + size.height * 0.5;
     return Offset(xoffset, yoffset);

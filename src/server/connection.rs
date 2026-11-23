@@ -3927,16 +3927,15 @@ impl Connection {
                 }
                 return true;
             } else if self.is_recent_session(false) {
-                if desktop_error.is_none() {
+                if let Some(err) = desktop_error {
+                    self.send_login_error(err).await;
+                } else {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
                     if !self.send_logon_response_and_keep_alive().await {
                         return false;
                     }
                     self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
-                } else {
-                    self.send_login_error(desktop_error.expect("desktop error"))
-                        .await;
                 }
             } else if lr.password.is_empty() {
                 if desktop_error.is_none() {
@@ -3970,16 +3969,15 @@ impl Connection {
                     }
                 } else {
                     self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
-                    if desktop_error.is_none() {
+                    if let Some(err) = desktop_error {
+                        self.send_login_error(err).await;
+                    } else {
                         #[cfg(target_os = "linux")]
                         self.linux_headless_handle.wait_desktop_cm_ready().await;
                         if !self.send_logon_response_and_keep_alive().await {
                             return false;
                         }
                         self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
-                    } else {
-                        self.send_login_error(desktop_error.expect("desktop error"))
-                            .await;
                     }
                 }
             }

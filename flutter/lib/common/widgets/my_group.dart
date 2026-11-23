@@ -191,7 +191,7 @@ class _MyGroupState extends State<MyGroup> {
               ? _buildDeviceGroupItem(deviceGroupItems[index])
               : _buildUserItem(userItems[index - deviceGroupItems.length],
                   displayNameCount));
-      var maxHeight = max(MediaQuery.of(context).size.height / 6, 100.0);
+      var maxHeight = max(MediaQuery.sizeOf(context).height / 6, 100.0);
       return Obx(() => stateGlobal.isPortrait.isFalse
           ? listView(false)
           : LimitedBox(maxHeight: maxHeight, child: listView(true)));

@@ -1,26 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:camellia_remote_app/consts.dart';
-import 'package:flutter_svg/flutter_svg.dart';
+import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 
 import '../../common.dart';
 
 typedef KBChosenCallback = Future<bool> Function(String);
 
 const double _kImageMarginVertical = 6.0;
-const double _kImageMarginHorizontal = 10.0;
-const double _kImageBoarderWidth = 4.0;
-const double _kImagePaddingWidth = 4.0;
-const Color _kImageBorderColor = Color.fromARGB(125, 202, 247, 2);
-const double _kBorderRadius = 6.0;
+const double _kImageMarginHorizontal = 8.0;
+const double _kImagePaddingWidth = 10.0;
 const String _kKBLayoutTypeISO = 'ISO';
 const String _kKBLayoutTypeNotISO = 'Not ISO';
-
-const _kKBLayoutImageMap = {
-  _kKBLayoutTypeISO: 'kb_layout_iso',
-  _kKBLayoutTypeNotISO: 'kb_layout_not_iso',
-};
 
 class _KBImage extends StatelessWidget {
   final String kbLayoutType;
@@ -35,28 +29,40 @@ class _KBImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    final isIso = kbLayoutType == _kKBLayoutTypeISO;
+    final previewWidth = (imageWidth -
+            _kImageMarginHorizontal * 2 -
+            _kImagePaddingWidth * 2 -
+            4)
+        .clamp(80.0, 220.0);
+    final previewHeight = (previewWidth * 0.44).clamp(52.0, 88.0);
+
     return Obx(() {
-      return Container(
+      final selected = chosenType.value == kbLayoutType;
+      return AnimatedContainer(
+        duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+        curve: CamelliaMotion.standard,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(_kBorderRadius),
+          color: selected
+              ? scheme.primary.withValues(alpha: 0.14)
+              : glass.floatingTint,
+          borderRadius: BorderRadius.circular(CamelliaRadius.surface),
           border: Border.all(
-            color: chosenType.value == kbLayoutType
-                ? _kImageBorderColor
-                : Colors.transparent,
-            width: _kImageBoarderWidth,
+            color: selected ? scheme.primary : scheme.outlineVariant,
+            width: selected ? 2.0 : 1.0,
           ),
         ),
-        margin: EdgeInsets.symmetric(
+        margin: const EdgeInsets.symmetric(
           horizontal: _kImageMarginHorizontal,
           vertical: _kImageMarginVertical,
         ),
-        padding: EdgeInsets.all(_kImagePaddingWidth),
-        child: SvgPicture.asset(
-          'assets/${_kKBLayoutImageMap[kbLayoutType] ?? ""}.svg',
-          width: imageWidth -
-              _kImageMarginHorizontal * 2 -
-              _kImagePaddingWidth * 2 -
-              _kImageBoarderWidth * 2,
+        padding: const EdgeInsets.all(_kImagePaddingWidth),
+        child: CamelliaIcons.keyboardLayoutPreview(
+          isIso: isIso,
+          width: previewWidth,
+          height: previewHeight,
         ),
       );
     });
@@ -78,7 +84,8 @@ class _KBChooser extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    onChanged(String? v) async {
+    final theme = Theme.of(context);
+    Future<void> onChanged(String? v) async {
       if (v != null) {
         if (await cb(v)) {
           chosenType.value = v;
@@ -86,36 +93,39 @@ class _KBChooser extends StatelessWidget {
       }
     }
 
-    return Column(
-      children: [
-        TextButton(
-          onPressed: () {
-            onChanged(kbLayoutType);
-          },
-          child: _KBImage(
+    return InkWell(
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+      onTap: () => onChanged(kbLayoutType),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _KBImage(
             kbLayoutType: kbLayoutType,
             imageWidth: imageWidth,
             chosenType: chosenType,
           ),
-          style: TextButton.styleFrom(padding: EdgeInsets.zero),
-        ),
-        TextButton(
-          child: Row(
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Obx(() => Radio(
-                    splashRadius: 0,
+              Obx(
+                () => RadioGroup<String>(
+                  groupValue: chosenType.value,
+                  onChanged: onChanged,
+                  child: Radio<String>(
                     value: kbLayoutType,
-                    groupValue: chosenType.value,
-                    onChanged: onChanged,
-                  )),
-              Text(kbLayoutType),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ),
+              Text(
+                kbLayoutType,
+                style: theme.textTheme.labelLarge,
+              ),
             ],
           ),
-          onPressed: () {
-            onChanged(kbLayoutType);
-          },
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -126,7 +136,7 @@ class KBLayoutTypeChooser extends StatelessWidget {
   final double height;
   final double dividerWidth;
   final KBChosenCallback cb;
-  KBLayoutTypeChooser({
+  const KBLayoutTypeChooser({
     Key? key,
     required this.chosenType,
     required this.width,
@@ -143,21 +153,28 @@ class KBLayoutTypeChooser extends StatelessWidget {
       height: height,
       child: Center(
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _KBChooser(
-              kbLayoutType: _kKBLayoutTypeISO,
-              imageWidth: imageWidth,
-              chosenType: chosenType,
-              cb: cb,
+            Expanded(
+              child: _KBChooser(
+                kbLayoutType: _kKBLayoutTypeISO,
+                imageWidth: imageWidth,
+                chosenType: chosenType,
+                cb: cb,
+              ),
             ),
             VerticalDivider(
               width: dividerWidth * 2,
+              indent: 14,
+              endIndent: 14,
             ),
-            _KBChooser(
-              kbLayoutType: _kKBLayoutTypeNotISO,
-              imageWidth: imageWidth,
-              chosenType: chosenType,
-              cb: cb,
+            Expanded(
+              child: _KBChooser(
+                kbLayoutType: _kKBLayoutTypeNotISO,
+                imageWidth: imageWidth,
+                chosenType: chosenType,
+                cb: cb,
+              ),
             ),
           ],
         ),
@@ -206,18 +223,24 @@ showKBLayoutTypeChooser(
 ) {
   dialogManager.show((setState, close, context) {
     return CustomAlertDialog(
-      title:
-          Text('${translate('Select local keyboard type')} ($localPlatform)'),
+      title: ModernDialogHeader(
+        title: translate('Select local keyboard type'),
+        subtitle: localPlatform,
+        icon: CamelliaIcons.keyboard,
+        tone: AppTone.brand,
+        onClose: close,
+      ),
       content: KBLayoutTypeChooser(
-          chosenType: KBLayoutType,
-          width: 360,
-          height: 200,
-          dividerWidth: 4.0,
-          cb: (String v) async {
-            await bind.setLocalKbLayoutType(kbLayoutType: v);
-            KBLayoutType.value = bind.getLocalKbLayoutType();
-            return v == KBLayoutType.value;
-          }),
+        chosenType: KBLayoutType,
+        width: 360,
+        height: 172,
+        dividerWidth: 6.0,
+        cb: (String v) async {
+          await bind.setLocalKbLayoutType(kbLayoutType: v);
+          KBLayoutType.value = bind.getLocalKbLayoutType();
+          return v == KBLayoutType.value;
+        },
+      ),
       actions: [dialogButton('Close', onPressed: close)],
       onCancel: close,
     );

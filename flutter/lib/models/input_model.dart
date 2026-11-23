@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/foundation.dart';
 import 'dart:ui' as ui;
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -171,110 +170,6 @@ class PointerEventToRust {
   }
 }
 
-class ToReleaseRawKeys {
-  RawKeyEvent? lastLShiftKeyEvent;
-  RawKeyEvent? lastRShiftKeyEvent;
-  RawKeyEvent? lastLCtrlKeyEvent;
-  RawKeyEvent? lastRCtrlKeyEvent;
-  RawKeyEvent? lastLAltKeyEvent;
-  RawKeyEvent? lastRAltKeyEvent;
-  RawKeyEvent? lastLCommandKeyEvent;
-  RawKeyEvent? lastRCommandKeyEvent;
-  RawKeyEvent? lastSuperKeyEvent;
-
-  reset() {
-    lastLShiftKeyEvent = null;
-    lastRShiftKeyEvent = null;
-    lastLCtrlKeyEvent = null;
-    lastRCtrlKeyEvent = null;
-    lastLAltKeyEvent = null;
-    lastRAltKeyEvent = null;
-    lastLCommandKeyEvent = null;
-    lastRCommandKeyEvent = null;
-    lastSuperKeyEvent = null;
-  }
-
-  updateKeyDown(LogicalKeyboardKey logicKey, RawKeyDownEvent e) {
-    if (e.isAltPressed) {
-      if (logicKey == LogicalKeyboardKey.altLeft) {
-        lastLAltKeyEvent = e;
-      } else if (logicKey == LogicalKeyboardKey.altRight) {
-        lastRAltKeyEvent = e;
-      }
-    } else if (e.isControlPressed) {
-      if (logicKey == LogicalKeyboardKey.controlLeft) {
-        lastLCtrlKeyEvent = e;
-      } else if (logicKey == LogicalKeyboardKey.controlRight) {
-        lastRCtrlKeyEvent = e;
-      }
-    } else if (e.isShiftPressed) {
-      if (logicKey == LogicalKeyboardKey.shiftLeft) {
-        lastLShiftKeyEvent = e;
-      } else if (logicKey == LogicalKeyboardKey.shiftRight) {
-        lastRShiftKeyEvent = e;
-      }
-    } else if (e.isMetaPressed) {
-      if (logicKey == LogicalKeyboardKey.metaLeft) {
-        lastLCommandKeyEvent = e;
-      } else if (logicKey == LogicalKeyboardKey.metaRight) {
-        lastRCommandKeyEvent = e;
-      } else if (logicKey == LogicalKeyboardKey.superKey) {
-        lastSuperKeyEvent = e;
-      }
-    }
-  }
-
-  updateKeyUp(LogicalKeyboardKey logicKey, RawKeyUpEvent e) {
-    if (e.isAltPressed) {
-      if (logicKey == LogicalKeyboardKey.altLeft) {
-        lastLAltKeyEvent = null;
-      } else if (logicKey == LogicalKeyboardKey.altRight) {
-        lastRAltKeyEvent = null;
-      }
-    } else if (e.isControlPressed) {
-      if (logicKey == LogicalKeyboardKey.controlLeft) {
-        lastLCtrlKeyEvent = null;
-      } else if (logicKey == LogicalKeyboardKey.controlRight) {
-        lastRCtrlKeyEvent = null;
-      }
-    } else if (e.isShiftPressed) {
-      if (logicKey == LogicalKeyboardKey.shiftLeft) {
-        lastLShiftKeyEvent = null;
-      } else if (logicKey == LogicalKeyboardKey.shiftRight) {
-        lastRShiftKeyEvent = null;
-      }
-    } else if (e.isMetaPressed) {
-      if (logicKey == LogicalKeyboardKey.metaLeft) {
-        lastLCommandKeyEvent = null;
-      } else if (logicKey == LogicalKeyboardKey.metaRight) {
-        lastRCommandKeyEvent = null;
-      } else if (logicKey == LogicalKeyboardKey.superKey) {
-        lastSuperKeyEvent = null;
-      }
-    }
-  }
-
-  release(KeyEventResult Function(RawKeyEvent e) handleRawKeyEvent) {
-    for (final key in [
-      lastLShiftKeyEvent,
-      lastRShiftKeyEvent,
-      lastLCtrlKeyEvent,
-      lastRCtrlKeyEvent,
-      lastLAltKeyEvent,
-      lastRAltKeyEvent,
-      lastLCommandKeyEvent,
-      lastRCommandKeyEvent,
-      lastSuperKeyEvent,
-    ]) {
-      if (key != null) {
-        handleRawKeyEvent(
-          RawKeyUpEvent(data: key.data, character: key.character),
-        );
-      }
-    }
-  }
-}
-
 class ToReleaseKeys {
   KeyEvent? lastLShiftKeyEvent;
   KeyEvent? lastRShiftKeyEvent;
@@ -411,7 +306,6 @@ class InputModel {
   var alt = false;
   var command = false;
 
-  final ToReleaseRawKeys toReleaseRawKeys = ToReleaseRawKeys();
   final ToReleaseKeys toReleaseKeys = ToReleaseKeys();
 
   bool _disposed = false;
@@ -539,13 +433,6 @@ class InputModel {
       ch,
       HardwareKeyboard.instance.isShiftPressed,
     );
-  }
-
-  // RawKeyEvent version of _getIosCapsFromCharacter.
-  bool _getIosCapsFromRawCharacter(RawKeyEvent e) {
-    if (!isIOS) return false;
-    final ch = e.character;
-    return _getIosCapsFromCharacterImpl(ch, e.isShiftPressed);
   }
 
   // Shared implementation for inferring CapsLock state from character.
@@ -732,113 +619,6 @@ class InputModel {
     }
   }
 
-  // Safe: this only re-dispatches synthesized Shift key-up events.
-  // The raw key-up path clears the tracked Shift state so this does not loop.
-  void _releaseTrackedRawShiftKeyEventIfNeeded() {
-    final leftShift = toReleaseRawKeys.lastLShiftKeyEvent;
-    final rightShift = toReleaseRawKeys.lastRShiftKeyEvent;
-    if (leftShift != null) {
-      handleRawKeyEvent(
-        RawKeyUpEvent(data: leftShift.data, character: leftShift.character),
-      );
-    }
-    if (rightShift != null) {
-      handleRawKeyEvent(
-        RawKeyUpEvent(data: rightShift.data, character: rightShift.character),
-      );
-    }
-  }
-
-  KeyEventResult handleRawKeyEvent(RawKeyEvent e) {
-    final isRelease = e is RawKeyUpEvent;
-    final canControl =
-        parent.target?.ffiModel.effectiveControlPolicy.canControlRemote ??
-        false;
-    if (!canControl && !isRelease) return KeyEventResult.handled;
-    if (isViewCamera) return KeyEventResult.handled;
-    if (!isInputSourceFlutter) {
-      if (isDesktop) {
-        return KeyEventResult.handled;
-      } else if (isWeb) {
-        return KeyEventResult.ignored;
-      }
-    }
-
-    if (_relativeMouse.handleRawKeyEvent(e)) {
-      return KeyEventResult.handled;
-    }
-
-    bool iosCapsLock = false;
-    if (isIOS && e is RawKeyDownEvent) {
-      iosCapsLock = _getIosCapsFromRawCharacter(e);
-    }
-
-    final key = e.logicalKey;
-    if (e is RawKeyDownEvent) {
-      if (!e.repeat) {
-        if (e.isAltPressed && !alt) {
-          alt = true;
-        } else if (e.isControlPressed && !ctrl) {
-          ctrl = true;
-        } else if (e.isShiftPressed && !shift) {
-          shift = true;
-        } else if (e.isMetaPressed && !command) {
-          command = true;
-        }
-      }
-      toReleaseRawKeys.updateKeyDown(key, e);
-    }
-    if (e is RawKeyUpEvent) {
-      if (key == LogicalKeyboardKey.altLeft ||
-          key == LogicalKeyboardKey.altRight) {
-        alt = false;
-      } else if (key == LogicalKeyboardKey.controlLeft ||
-          key == LogicalKeyboardKey.controlRight) {
-        ctrl = false;
-      } else if (key == LogicalKeyboardKey.shiftRight ||
-          key == LogicalKeyboardKey.shiftLeft) {
-        shift = false;
-      } else if (key == LogicalKeyboardKey.metaLeft ||
-          key == LogicalKeyboardKey.metaRight ||
-          key == LogicalKeyboardKey.superKey) {
-        command = false;
-      }
-
-      toReleaseRawKeys.updateKeyUp(key, e);
-    }
-
-    // On some mobile soft-keyboard paths, Flutter may leave cached Shift state
-    // set even though the current raw key event is not shifted anymore.
-    if (e is RawKeyDownEvent &&
-        shouldReleaseStaleMobileShift(
-          isMobile: isMobile,
-          cachedShiftPressed: shift,
-          actualShiftPressed: e.isShiftPressed,
-          logicalKey: e.logicalKey,
-          hasTrackedShiftKeyDown:
-              toReleaseRawKeys.lastLShiftKeyEvent != null ||
-              toReleaseRawKeys.lastRShiftKeyEvent != null,
-        )) {
-      if (kDebugMode) {
-        debugPrint(
-          'input: releasing stale mobile Shift before replaying tracked raw '
-          'key-up (logicalKey=${e.logicalKey.keyLabel}, '
-          'actualShiftPressed=${e.isShiftPressed}, cachedShiftPressed=$shift)',
-        );
-      }
-      _releaseTrackedRawShiftKeyEventIfNeeded();
-    }
-
-    // * Currently mobile does not enable map mode
-    if ((isDesktop || isWebDesktop) && keyboardMode == kKeyMapMode) {
-      mapKeyboardModeRaw(e, iosCapsLock);
-    } else {
-      legacyKeyboardModeRaw(e);
-    }
-
-    return KeyEventResult.handled;
-  }
-
   KeyEventResult handleKeyEvent(KeyEvent e) {
     final isRelease = e is KeyUpEvent;
     final canControl =
@@ -967,45 +747,6 @@ class InputModel {
     );
   }
 
-  void mapKeyboardModeRaw(RawKeyEvent e, bool iosCapsLock) {
-    int positionCode = -1;
-    int platformCode = -1;
-    bool down;
-
-    if (e.data is RawKeyEventDataMacOs) {
-      RawKeyEventDataMacOs newData = e.data as RawKeyEventDataMacOs;
-      positionCode = newData.keyCode;
-      platformCode = newData.keyCode;
-    } else if (e.data is RawKeyEventDataWindows) {
-      RawKeyEventDataWindows newData = e.data as RawKeyEventDataWindows;
-      positionCode = newData.scanCode;
-      platformCode = newData.keyCode;
-    } else if (e.data is RawKeyEventDataLinux) {
-      RawKeyEventDataLinux newData = e.data as RawKeyEventDataLinux;
-      // scanCode and keyCode of RawKeyEventDataLinux are incorrect.
-      // 1. scanCode means keycode
-      // 2. keyCode means keysym
-      positionCode = newData.scanCode;
-      platformCode = newData.keyCode;
-    } else if (e.data is RawKeyEventDataAndroid) {
-      RawKeyEventDataAndroid newData = e.data as RawKeyEventDataAndroid;
-      positionCode = newData.scanCode + 8;
-      platformCode = newData.keyCode;
-    } else {}
-
-    if (e is RawKeyDownEvent) {
-      down = true;
-    } else {
-      down = false;
-    }
-    final keyName = isWeb
-        ? (physicalKeyMap[e.physicalKey.usbHidUsage] ??
-              logicalKeyMap[e.logicalKey.keyId] ??
-              e.logicalKey.keyLabel)
-        : (e.character ?? '');
-    inputRawKey(keyName, platformCode, positionCode, down, iosCapsLock);
-  }
-
   /// Send raw Key Event
   void inputRawKey(
     String name,
@@ -1023,28 +764,6 @@ class InputModel {
       lockModes: lockModes,
       downOrUp: down,
     );
-  }
-
-  void legacyKeyboardModeRaw(RawKeyEvent e) {
-    if (e is RawKeyDownEvent) {
-      if (e.repeat) {
-        sendRawKey(e, press: true);
-      } else {
-        sendRawKey(e, down: true);
-      }
-    }
-    if (e is RawKeyUpEvent) {
-      sendRawKey(e);
-    }
-  }
-
-  void sendRawKey(RawKeyEvent e, {bool? down, bool? press}) {
-    // for maximum compatibility
-    final label =
-        physicalKeyMap[e.physicalKey.usbHidUsage] ??
-        logicalKeyMap[e.logicalKey.keyId] ??
-        e.logicalKey.keyLabel;
-    inputKey(label, down: down, press: press ?? false);
   }
 
   void legacyKeyboardMode(KeyEvent e) {
@@ -1194,7 +913,6 @@ class InputModel {
 
   void enterOrLeave(bool enter) {
     toReleaseKeys.release(handleKeyEvent);
-    toReleaseRawKeys.release(handleRawKeyEvent);
     _pointerMovedAfterEnter = false;
     _pointerInsideImage = enter;
     _lastWheelTsUs = 0;
@@ -1338,6 +1056,10 @@ class InputModel {
 
   void onWindowBlur() {
     _relativeMouse.onWindowBlur();
+    enterOrLeave(false);
+    sendMouse('up', MouseButtons.left);
+    sendMouse('up', MouseButtons.right);
+    sendMouse('up', MouseButtons.wheel);
   }
 
   void onWindowFocus() {

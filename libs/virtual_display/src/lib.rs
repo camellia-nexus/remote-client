@@ -49,6 +49,7 @@ pub type PlugInMonitor = fn(u32, u32, u32) -> ResultType<()>;
 pub type PlugOutMonitor = fn(u32) -> ResultType<()>;
 pub type UpdateMonitorModes = fn(u32, u32, PMonitorMode) -> ResultType<()>;
 
+#[allow(dead_code)]
 struct LibWrapper {
     _lib: Option<Library>,
     is_versioned_c_abi: bool,

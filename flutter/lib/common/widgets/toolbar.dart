@@ -11,22 +11,14 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/widgets/remote_toolbar.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:get/get.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 bool isEditOsPassword = false;
 const String kPeerOptionAllowWaylandKeyboard = 'allow-wayland-keyboard';
-const String kWaylandKeyboardIssueUrl =
-    'https://github.com/rustdesk/rustdesk/issues/14586';
 final Set<String> _waylandKeyboardPromptSuppressedConnectionIds = <String>{};
-
-Future<bool> openWaylandKeyboardIssueUrl() {
-  return launchUrl(
-    Uri.parse(kWaylandKeyboardIssueUrl),
-    mode: LaunchMode.externalApplication,
-  );
-}
 
 bool isWaylandKeyboardPromptSuppressedForConnection(String connectionId) {
   return _waylandKeyboardPromptSuppressedConnectionIds.contains(connectionId);
@@ -58,19 +50,10 @@ bool shouldShowWaylandKeyboardPrompt({
 }
 
 Widget waylandKeyboardScopeChip(BuildContext context, String text) {
-  final colorScheme = Theme.of(context).colorScheme;
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: colorScheme.primary.withValues(alpha: 0.35)),
-    ),
-    child: Text(
-      text,
-      style: Theme.of(
-        context,
-      ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
-    ),
+  return GlassBadge(
+    label: text,
+    tone: GlassBadgeTone.brand,
+    compact: true,
   );
 }
 
@@ -110,7 +93,7 @@ class TTextMenu {
     if (trailingIcon != null) {
       return Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [child, trailingIcon!],
+        children: [Flexible(child: child), trailingIcon!],
       );
     } else {
       return child;
@@ -258,17 +241,20 @@ void showWaylandKeyboardInputWarningDialog({
       }
 
       return CustomAlertDialog(
-        title: null,
+        title: ModernDialogHeader.warning(
+          title: translate('wayland-keyboard-input-disabled-tip'),
+          icon: CamelliaIcons.keyboard,
+          onClose: consentInProgress ? null : cancel,
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            msgboxContent(
-              '',
-              'wayland-keyboard-input-disabled-tip',
-              'wayland-keyboard-input-consent-tip',
+            Text(
+              translate('wayland-keyboard-input-consent-tip'),
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
-            SizedBox(height: isMobile ? 2 : 6),
+            SizedBox(height: isMobile ? 8 : 10),
             if (isMobile) ...[
               Text(
                 translate('wayland-keyboard-input-applies-to-tip'),
@@ -291,37 +277,6 @@ void showWaylandKeyboardInputWarningDialog({
                 ],
               ).marginOnly(bottom: 10),
             ],
-            TextButton(
-              onPressed: consentInProgress
-                  ? null
-                  : () async {
-                      try {
-                        final opened = await openWaylandKeyboardIssueUrl();
-                        if (!opened) {
-                          // Opening this optional help link almost never fails in
-                          // normal desktop environments. Keep the result handled
-                          // for review hygiene, but avoid a low-value user toast.
-                          debugPrint(
-                            'Failed to open Wayland keyboard issue URL',
-                          );
-                        }
-                      } catch (e) {
-                        debugPrint(
-                          'Failed to open Wayland keyboard issue URL: $e',
-                        );
-                      }
-                    },
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.blue,
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                translate('Why this happens'),
-                style: const TextStyle(decoration: TextDecoration.underline),
-              ),
-            ).marginOnly(bottom: 6),
             CheckboxListTile(
               value: remember,
               dense: true,
@@ -361,6 +316,23 @@ void showWaylandKeyboardInputWarningDialog({
   unawaited(dialogFuture.whenComplete(() => dialogClosed = true));
 }
 
+Widget _controlActionLabel(
+  BuildContext context,
+  IconData icon,
+  Widget label, {
+  Color? iconColor,
+}) {
+  final scheme = Theme.of(context).colorScheme;
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 17, color: iconColor ?? scheme.primary),
+      const SizedBox(width: 9),
+      Flexible(child: label),
+    ],
+  );
+}
+
 List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   final ffiModel = ffi.ffiModel;
   final pi = ffiModel.pi;
@@ -368,55 +340,81 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   final sessionId = ffi.sessionId;
   final isDefaultConn = ffi.connType == ConnType.defaultConn;
   final isWaylandPeer = pi.platform == kPeerPlatformLinux && pi.isWayland;
+  final scheme = Theme.of(context).colorScheme;
+  final glass = CamelliaGlassTokens.of(context);
 
-  List<TTextMenu> v = [];
+  final shortcuts = <TTextMenu>[];
+  final tools = <TTextMenu>[];
+  final session = <TTextMenu>[];
   final policy = ffiModel.effectiveControlPolicy;
-  // elevation
-  if (policy.canRequestElevation && ffi.elevationModel.showRequestMenu) {
-    v.add(
+
+  // --- Shortcuts group ---
+  if (policy.canCtrlAltDel) {
+    shortcuts.add(
       TTextMenu(
-        child: Text(translate('Request Elevation')),
-        onPressed: () =>
-            showRequestElevationDialog(sessionId, ffi.dialogManager),
-      ),
-    );
-  }
-  // osAccount / osPassword
-  if (policy.canSendOsPassword) {
-    v.add(
-      TTextMenu(
-        child: Row(
-          children: [
-            Text(translate(pi.isHeadless ? 'OS Account' : 'OS Password')),
-          ],
-        ),
-        trailingIcon: Transform.scale(
-          scale: (isDesktop || isWebDesktop) ? 0.8 : 1,
-          child: IconButton(
-            onPressed: () {
-              if (isMobile && Navigator.canPop(context)) {
-                Navigator.pop(context);
-              }
-              if (pi.isHeadless) {
-                showSetOSAccount(sessionId, ffi.dialogManager);
-              } else {
-                handleOsPasswordEditIcon(sessionId, ffi.dialogManager);
-              }
-            },
-            icon: Icon(Icons.edit, color: isMobile ? MyTheme.accent : null),
+        child: _controlActionLabel(
+          context,
+          Icons.keyboard_command_key_rounded,
+          Text(
+            translate("Insert Ctrl + Alt + Del"),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
-        onPressed: () => pi.isHeadless
-            ? showSetOSAccount(sessionId, ffi.dialogManager)
-            : handleOsPasswordAction(sessionId, ffi.dialogManager),
+        onPressed: () => bind.sessionCtrlAltDel(sessionId: sessionId),
       ),
     );
   }
-  // paste
-  if (policy.canSendClipboardKeystrokes) {
-    v.add(
+  if (policy.canLockScreen) {
+    shortcuts.add(
       TTextMenu(
-        child: Text(translate('Send clipboard keystrokes')),
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.lock,
+          Text(
+            translate('Insert Lock'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () => bind.sessionLockScreen(sessionId: sessionId),
+      ),
+    );
+  }
+  if (isDefaultConn &&
+      perms['restart'] != false &&
+      (pi.platform == kPeerPlatformLinux ||
+          pi.platform == kPeerPlatformWindows ||
+          pi.platform == kPeerPlatformMacOS)) {
+    shortcuts.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.restart_alt_rounded,
+          Text(
+            translate('Restart remote device'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          iconColor: glass.statusHighLatency,
+        ),
+        onPressed: () =>
+            showRestartRemoteDevice(pi, id, sessionId, ffi.dialogManager),
+      ),
+    );
+  }
+  if (policy.canSendClipboardKeystrokes) {
+    shortcuts.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.paste,
+          Text(
+            translate('Send clipboard keystrokes'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         onPressed: () async {
           Future<void> sendClipboardKeystrokes() async {
             ClipboardData? data = await Clipboard.getData(Clipboard.kTextPlain);
@@ -457,9 +455,18 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
           isWaylandKeyboardPromptSuppressedForConnection(
             sessionId.toString(),
           ))) {
-    v.add(
+    shortcuts.add(
       TTextMenu(
-        child: Text(translate('wayland-keyboard-input-reset-choice-tip')),
+        child: _controlActionLabel(
+          context,
+          Icons.keyboard_hide_rounded,
+          Text(
+            translate('wayland-keyboard-input-reset-choice-tip'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          iconColor: scheme.onSurfaceVariant,
+        ),
         onPressed: () async {
           var persistedCleared = false;
           try {
@@ -487,18 +494,8 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       ),
     );
   }
-  // reset canvas
-  if (isDefaultConn && isMobile) {
-    v.add(
-      TTextMenu(
-        child: Text(translate('Reset canvas')),
-        onPressed: () => ffi.cursorModel.reset(),
-      ),
-    );
-  }
 
-  // https://github.com/rustdesk/rustdesk/pull/9731
-  // Does not work for connection established by "accept".
+  // --- Tools group ---
   connectWithToken({
     bool isFileTransfer = false,
     bool isViewCamera = false,
@@ -518,172 +515,63 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   }
 
   if (isDefaultConn && isDesktop) {
-    v.add(
+    tools.add(
       TTextMenu(
-        child: Text(translate('Transfer file')),
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.transfer,
+          Text(
+            translate('Transfer file'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         onPressed: () => connectWithToken(isFileTransfer: true),
       ),
     );
-    v.add(
+    tools.add(
       TTextMenu(
-        child: Text(translate('View camera')),
-        onPressed: () => connectWithToken(isViewCamera: true),
-      ),
-    );
-    v.add(
-      TTextMenu(
-        child: Text('${translate('Terminal')} (beta)'),
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.terminal,
+          Text(
+            translate('Terminal'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         onPressed: () => connectWithToken(isTerminal: true),
       ),
     );
-    v.add(
+    tools.add(
       TTextMenu(
-        child: Text(translate('TCP tunneling')),
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.tunnel,
+          Text(
+            translate('TCP tunneling'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         onPressed: () => connectWithToken(isTcpTunneling: true),
       ),
     );
-  }
-  // note
-  if (isDefaultConn && !bind.isDisableAccount()) {
-    v.add(
+    tools.add(
       TTextMenu(
-        child: Text(translate('Note')),
-        onPressed: () async {
-          bool isLogin = bind
-              .mainGetLocalOption(key: 'access_token')
-              .isNotEmpty;
-          if (!isLogin) {
-            final res = await loginDialog();
-            if (res != true) return;
-            // Desktop: send message to main window to refresh login status
-            // Web: login is required before connection, so no need to refresh
-            // Mobile: same isolate, no need to send message
-            if (isDesktop) {
-              rustDeskWinManager.call(
-                WindowType.Main,
-                kWindowRefreshCurrentUser,
-                "",
-              );
-            }
-          }
-          showAuditDialog(ffi);
-        },
-      ),
-    );
-  }
-  // divider
-  if (isDefaultConn && (isDesktop || isWebDesktop)) {
-    v.add(TTextMenu(child: Offstage(), onPressed: () {}, divider: true));
-  }
-  // ctrlAltDel
-  if (policy.canCtrlAltDel) {
-    v.add(
-      TTextMenu(
-        child: Text('${translate("Insert Ctrl + Alt + Del")}'),
-        onPressed: () => bind.sessionCtrlAltDel(sessionId: sessionId),
-      ),
-    );
-  }
-  // restart
-  if (isDefaultConn &&
-      perms['restart'] != false &&
-      (pi.platform == kPeerPlatformLinux ||
-          pi.platform == kPeerPlatformWindows ||
-          pi.platform == kPeerPlatformMacOS)) {
-    v.add(
-      TTextMenu(
-        child: Text(translate('Restart remote device')),
-        onPressed: () =>
-            showRestartRemoteDevice(pi, id, sessionId, ffi.dialogManager),
-      ),
-    );
-  }
-  // insertLock
-  if (policy.canLockScreen) {
-    v.add(
-      TTextMenu(
-        child: Text(translate('Insert Lock')),
-        onPressed: () => bind.sessionLockScreen(sessionId: sessionId),
-      ),
-    );
-  }
-  // blockUserInput
-  if (policy.canBlockUserInput) {
-    v.add(
-      TTextMenu(
-        child: Obx(
-          () => Text(
-            translate(
-              '${BlockInputState.find(id).value ? 'Unb' : 'B'}lock user input',
-            ),
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.camera,
+          Text(
+            translate('View camera'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
-        onPressed: () {
-          RxBool blockInput = BlockInputState.find(id);
-          bind.sessionToggleOption(
-            sessionId: sessionId,
-            value: '${blockInput.value ? 'un' : ''}block-input',
-          );
-          blockInput.value = !blockInput.value;
-        },
+        onPressed: () => connectWithToken(isViewCamera: true),
       ),
     );
   }
-  // switchSides
-  if (policy.canSwitchSides &&
-      isDesktop &&
-      bind.peerGetSessionsCount(id: id, connType: ffi.connType.index) == 1) {
-    v.add(
-      TTextMenu(
-        child: Text(translate('Switch Sides')),
-        onPressed: () =>
-            showConfirmSwitchSidesDialog(sessionId, id, ffi.dialogManager),
-      ),
-    );
-  }
-  // refresh
-  if (pi.version.isNotEmpty) {
-    v.add(
-      TTextMenu(
-        child: Text(translate('Refresh')),
-        onPressed: () => sessionRefreshVideo(sessionId, pi),
-      ),
-    );
-  }
-  // record
-  if (!(isDesktop || isWeb) &&
-      bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&
-      (ffi.recordingModel.start || (perms["recording"] != false))) {
-    v.add(
-      TTextMenu(
-        child: Row(
-          children: [
-            Text(
-              translate(
-                ffi.recordingModel.start
-                    ? 'Stop session recording'
-                    : 'Start session recording',
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.only(left: 12),
-              child: Icon(
-                ffi.recordingModel.start
-                    ? Icons.pause_circle_filled
-                    : Icons.videocam_outlined,
-                color: MyTheme.accent,
-              ),
-            ),
-          ],
-        ),
-        onPressed: () => ffi.recordingModel.toggle(),
-      ),
-    );
-  }
-
-  // to-do:
-  // 1. Web desktop
-  // 2. Mobile, copy the image to the clipboard
   if ((isDefaultConn || ffi.connType == ConnType.viewCamera) && isDesktop) {
     final isScreenshotSupported = bind.sessionGetCommonSync(
       sessionId: sessionId,
@@ -691,12 +579,18 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       param: '',
     );
     if ('true' == isScreenshotSupported) {
-      v.add(
+      tools.add(
         TTextMenu(
-          child: Text(
-            ffi.ffiModel.timerScreenshot != null
-                ? '${translate('Taking screenshot')} ...'
-                : translate('Take screenshot'),
+          child: _controlActionLabel(
+            context,
+            Icons.screenshot_monitor_rounded,
+            Text(
+              ffi.ffiModel.timerScreenshot != null
+                  ? '${translate('Taking screenshot')} ...'
+                  : translate('Take screenshot'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           onPressed: ffi.ffiModel.timerScreenshot != null
               ? null
@@ -716,7 +610,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
                       display: pi.currentDisplay,
                     );
                     ffi.ffiModel.timerScreenshot = Timer(
-                      Duration(seconds: 30),
+                      const Duration(seconds: 30),
                       () {
                         ffi.ffiModel.timerScreenshot = null;
                       },
@@ -727,15 +621,229 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       );
     }
   }
-  // fingerprint
-  if (!(isDesktop || isWebDesktop)) {
-    v.add(
+
+  // --- Session group ---
+  if (policy.canRequestElevation && ffi.elevationModel.showRequestMenu) {
+    session.add(
       TTextMenu(
-        child: Text(translate('Copy Fingerprint')),
+        child: _controlActionLabel(
+          context,
+          Icons.admin_panel_settings_rounded,
+          Text(
+            translate('Request Elevation'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () =>
+            showRequestElevationDialog(sessionId, ffi.dialogManager),
+      ),
+    );
+  }
+  if (policy.canSendOsPassword) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.password_rounded,
+          Text(
+            translate(pi.isHeadless ? 'OS Account' : 'OS Password'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        trailingIcon: IconButton(
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+          onPressed: () {
+            if (isMobile && Navigator.canPop(context)) {
+              Navigator.pop(context);
+            }
+            if (pi.isHeadless) {
+              showSetOSAccount(sessionId, ffi.dialogManager);
+            } else {
+              handleOsPasswordEditIcon(sessionId, ffi.dialogManager);
+            }
+          },
+          icon: Icon(
+            CamelliaIcons.edit,
+            size: 16,
+            color: scheme.primary,
+          ),
+        ),
+        onPressed: () => pi.isHeadless
+            ? showSetOSAccount(sessionId, ffi.dialogManager)
+            : handleOsPasswordAction(sessionId, ffi.dialogManager),
+      ),
+    );
+  }
+  if (isDefaultConn && !bind.isDisableAccount()) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.edit_note_rounded,
+          Text(
+            translate('Note'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () async {
+          bool isLogin = bind
+              .mainGetLocalOption(key: 'access_token')
+              .isNotEmpty;
+          if (!isLogin) {
+            final res = await loginDialog();
+            if (res != true) return;
+            if (isDesktop) {
+              rustDeskWinManager.call(
+                WindowType.Main,
+                kWindowRefreshCurrentUser,
+                "",
+              );
+            }
+          }
+          showAuditDialog(ffi);
+        },
+      ),
+    );
+  }
+  if (policy.canBlockUserInput) {
+    session.add(
+      TTextMenu(
+        child: Obx(() {
+          final blocked = BlockInputState.find(id).value;
+          return _controlActionLabel(
+            context,
+            Icons.block_rounded,
+            Text(
+              translate('${blocked ? 'Unb' : 'B'}lock user input'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            iconColor: blocked ? glass.statusAlert : scheme.primary,
+          );
+        }),
+        onPressed: () {
+          RxBool blockInput = BlockInputState.find(id);
+          bind.sessionToggleOption(
+            sessionId: sessionId,
+            value: '${blockInput.value ? 'un' : ''}block-input',
+          );
+          blockInput.value = !blockInput.value;
+        },
+      ),
+    );
+  }
+  if (policy.canSwitchSides &&
+      isDesktop &&
+      bind.peerGetSessionsCount(id: id, connType: ffi.connType.index) == 1) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.swap_horiz_rounded,
+          Text(
+            translate('Switch Sides'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () =>
+            showConfirmSwitchSidesDialog(sessionId, id, ffi.dialogManager),
+      ),
+    );
+  }
+  if (pi.version.isNotEmpty) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          CamelliaIcons.refresh,
+          Text(
+            translate('Refresh'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () => sessionRefreshVideo(sessionId, pi),
+      ),
+    );
+  }
+  if (isDefaultConn && isMobile) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.center_focus_strong_rounded,
+          Text(
+            translate('Reset canvas'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        onPressed: () => ffi.cursorModel.reset(),
+      ),
+    );
+  }
+  if (!(isDesktop || isWeb) &&
+      bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&
+      (ffi.recordingModel.start || (perms["recording"] != false))) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          ffi.recordingModel.start
+              ? Icons.stop_circle_rounded
+              : CamelliaIcons.record,
+          Text(
+            translate(
+              ffi.recordingModel.start
+                  ? 'Stop session recording'
+                  : 'Start session recording',
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          iconColor: ffi.recordingModel.start
+              ? glass.statusAlert
+              : scheme.primary,
+        ),
+        onPressed: () => ffi.recordingModel.toggle(),
+      ),
+    );
+  }
+  if (!(isDesktop || isWebDesktop)) {
+    session.add(
+      TTextMenu(
+        child: _controlActionLabel(
+          context,
+          Icons.fingerprint_rounded,
+          Text(
+            translate('Copy Fingerprint'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
         onPressed: () => onCopyFingerprint(FingerprintState.find(id).value),
       ),
     );
   }
+
+  final List<TTextMenu> v = [];
+  void appendGroup(List<TTextMenu> group) {
+    if (group.isEmpty) return;
+    if (v.isNotEmpty && (isDesktop || isWebDesktop)) {
+      v.add(TTextMenu(child: const Offstage(), onPressed: () {}, divider: true));
+    }
+    v.addAll(group);
+  }
+
+  appendGroup(shortcuts);
+  appendGroup(tools);
+  appendGroup(session);
   return v;
 }
 
@@ -1160,7 +1268,8 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
   }
 
   final privacyModeState = PrivacyModeState.find(id);
-  if (pi.isSupportMultiDisplay &&
+  if (!isDesktop &&
+      pi.isSupportMultiDisplay &&
       (privacyModeState.isEmpty ||
           allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value)) &&
       pi.displaysCount.value > 1 &&

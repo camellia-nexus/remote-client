@@ -1,4 +1,3 @@
-import 'package:bot_toast/bot_toast.dart';
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/formatter/id_formatter.dart';
@@ -12,6 +11,8 @@ import 'package:camellia_remote_app/models/ab_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import 'package:get/get.dart';
@@ -37,6 +38,13 @@ class AddressBook extends StatefulWidget {
 class _AddressBookState extends State<AddressBook> {
   var menuPos = RelativeRect.fill;
   final _tagsMenuController = MenuController();
+  final _abSearchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _abSearchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Obx(() {
@@ -128,30 +136,31 @@ class _AddressBookState extends State<AddressBook> {
   Widget _buildAddressBookContent() {
     return Column(
       children: [
-        Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: Theme.of(context).colorScheme.outlineVariant,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+          child: GlassSurface(
+            layer: CamelliaGlassLayer.floating,
+            showShadow: false,
+            enableBlur: false,
+            borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: SizedBox(
+              height: 42,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 220),
+                      child: _buildAbDropdown(),
+                    ),
+                  ),
+                  const Spacer(),
+                  if (!hideAbTagsPanel.value) _buildTagsMenuButton(),
+                  const SizedBox(width: 6),
+                  _buildAbPermission(),
+                ],
               ),
             ),
-          ),
-          child: Row(
-            children: [
-              Flexible(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 208),
-                  child: _buildAbDropdown(),
-                ),
-              ),
-              const Spacer(),
-              if (!hideAbTagsPanel.value) _buildTagsMenuButton(),
-              const SizedBox(width: 4),
-              _buildAbPermission(),
-            ],
           ),
         ),
         const SizedBox(height: 8),
@@ -368,7 +377,7 @@ class _AddressBookState extends State<AddressBook> {
     final items = names
         .map((e) => DropdownItem(value: e, height: 36, child: buildItem(e)))
         .toList();
-    final TextEditingController textEditingController = TextEditingController();
+    final TextEditingController textEditingController = _abSearchController;
 
     final isOptFixed = isOptionFixed(kOptionCurrentAbName);
     return DropdownButton2<String>(
@@ -624,7 +633,11 @@ class _AddressBookState extends State<AddressBook> {
       }
 
       return CustomAlertDialog(
-        title: Text(translate("Add ID")),
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.addressBook,
+          title: translate("Add ID"),
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -635,7 +648,10 @@ class _AddressBookState extends State<AddressBook> {
                     children: [
                       Text(
                         '*',
-                        style: TextStyle(color: Colors.red, fontSize: 14),
+                        style: TextStyle(
+                          color: CamelliaGlassTokens.of(context).statusAlert,
+                          fontSize: 14,
+                        ),
                       ),
                       Text('ID', style: style),
                     ],
@@ -643,6 +659,9 @@ class _AddressBookState extends State<AddressBook> {
                   input: Obx(
                     () => TextField(
                       controller: idController,
+                      style: CamelliaTypography.tabular(
+                        Theme.of(context).textTheme.bodyMedium,
+                      ),
                       inputFormatters: [IDTextInputFormatter()],
                       decoration: InputDecoration(
                         labelText: stateGlobal.isPortrait.isFalse
@@ -681,9 +700,11 @@ class _AddressBookState extends State<AddressBook> {
                           suffixIcon: IconButton(
                             icon: Icon(
                               passwordVisible
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color: MyTheme.lightTheme.primaryColor,
+                                  ? CamelliaIcons.eye
+                                  : CamelliaIcons.eyeOff,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
                             onPressed: () {
                               setState(() {
@@ -744,10 +765,16 @@ class _AddressBookState extends State<AddressBook> {
             if (!gFFI.abModel.current.isPersonal())
               Row(
                 children: [
-                  Icon(Icons.info, color: Colors.amber).marginOnly(right: 4),
-                  Text(
-                    translate('share_warning_tip'),
-                    style: TextStyle(fontSize: 12),
+                  Icon(
+                    Icons.info_outline_rounded,
+                    size: 16,
+                    color: CamelliaGlassTokens.of(context).statusHighLatency,
+                  ).marginOnly(right: 6),
+                  Expanded(
+                    child: Text(
+                      translate('share_warning_tip'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 ],
               ).marginSymmetric(vertical: 10),
@@ -784,10 +811,7 @@ class _AddressBookState extends State<AddressBook> {
           field = tags.join(',');
           for (var t in [kUntagged, translate(kUntagged)]) {
             if (tags.contains(t)) {
-              BotToast.showText(
-                contentColor: Colors.red,
-                text: 'Tag name cannot be "$t"',
-              );
+              showToast('Tag name cannot be "$t"');
               isInProgress = false;
               return;
             }
@@ -799,7 +823,11 @@ class _AddressBookState extends State<AddressBook> {
       }
 
       return CustomAlertDialog(
-        title: Text(translate("Add Tag")),
+        title: ModernDialogHeader(
+          icon: Icons.label_outline_rounded,
+          title: translate("Add Tag"),
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -971,7 +999,7 @@ class AddressBookTag extends StatelessWidget {
           },
         );
       }),
-      getEntry(translate(translate('Change Color')), () async {
+      getEntry(translate('Change Color'), () async {
         final model = gFFI.abModel;
         Color oldColor = model.getCurrentAbTagColor(name);
         Color newColor = await showColorPickerDialog(

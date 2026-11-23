@@ -1992,7 +1992,7 @@ impl<T: InvokeUiSession> FileManager for Session<T> {}
 #[async_trait]
 impl<T: InvokeUiSession> Interface for Session<T> {
     fn get_lch(&self) -> Arc<RwLock<LoginConfigHandler>> {
-        return self.lc.clone();
+        self.lc.clone()
     }
 
     fn send(&self, data: Data) {

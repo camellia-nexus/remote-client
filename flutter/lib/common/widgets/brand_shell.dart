@@ -46,6 +46,21 @@ class _CamelliaBrandPainter extends CustomPainter {
     required this.progress,
   });
 
+  static const _rearStart = Color(PortalMarkSpec.rearGradientStartArgb);
+  static const _rearEnd = Color(PortalMarkSpec.rearGradientEndArgb);
+  static const _frontStart = Color(PortalMarkSpec.frontGradientStartArgb);
+  static const _frontEnd = Color(PortalMarkSpec.frontGradientEndArgb);
+  static const _connectorStart = Color(
+    PortalMarkSpec.connectorGradientStartArgb,
+  );
+  static const _connectorEnd = Color(PortalMarkSpec.connectorGradientEndArgb);
+  static const _lightPlateStart = Color(PortalMarkSpec.lightPlateStartArgb);
+  static const _lightPlateEnd = Color(PortalMarkSpec.lightPlateEndArgb);
+  static const _lightPlateBorder = Color(PortalMarkSpec.lightPlateBorderArgb);
+  static const _darkPlateStart = Color(PortalMarkSpec.darkPlateStartArgb);
+  static const _darkPlateEnd = Color(PortalMarkSpec.darkPlateEndArgb);
+  static const _darkPlateBorder = Color(PortalMarkSpec.darkPlateBorderArgb);
+
   final Brightness brightness;
   final bool withPlate;
   final bool monochrome;
@@ -56,29 +71,67 @@ class _CamelliaBrandPainter extends CustomPainter {
     final side = math.min(size.width, size.height);
     final origin = Offset((size.width - side) / 2, (size.height - side) / 2);
     final dark = brightness == Brightness.dark;
-    final plate = dark
-        ? CamelliaColors.portalPlateDark
-        : CamelliaColors.portalPlateLight;
-    final plateBorder = dark
-        ? CamelliaColors.portalPlateBorderDark
-        : CamelliaColors.portalPlateBorderLight;
     final ink = dark ? Colors.white : CamelliaColors.lightText;
     final easedProgress = Curves.easeOutCubic.transform(
       progress.clamp(0, 1).toDouble(),
     );
 
     if (withPlate) {
+      final outerRect = Rect.fromLTWH(origin.dx, origin.dy, side, side);
       final plateRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(origin.dx, origin.dy, side, side),
+        outerRect,
         Radius.circular(side * PortalMarkSpec.plateRadius),
       );
-      canvas.drawRRect(plateRect, Paint()..color = plate);
+      final plateStart = dark ? _darkPlateStart : _lightPlateStart;
+      final plateEnd = dark ? _darkPlateEnd : _lightPlateEnd;
+      final plateBorder = dark ? _darkPlateBorder : _lightPlateBorder;
+
       canvas.drawRRect(
-        plateRect.deflate(math.max(1, side * 0.025)),
+        plateRect,
         Paint()
-          ..color = plateBorder
+          ..shader = LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [plateStart, plateEnd],
+          ).createShader(outerRect),
+      );
+
+      // Apple Liquid Glass luminous top-surface specular highlight.
+      canvas.save();
+      canvas.clipRRect(plateRect);
+      canvas.drawRect(
+        Rect.fromLTWH(origin.dx, origin.dy, side, side * 0.52),
+        Paint()
+          ..shader =
+              LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.white.withValues(alpha: dark ? 0.16 : 0.68),
+                  Colors.white.withValues(alpha: dark ? 0.03 : 0.14),
+                  Colors.white.withValues(alpha: 0),
+                ],
+                stops: const [0.0, 0.45, 1.0],
+              ).createShader(
+                Rect.fromLTWH(origin.dx, origin.dy, side, side * 0.52),
+              ),
+      );
+      canvas.restore();
+
+      final strokeWidth = math.max(1.0, side * 0.024);
+      canvas.drawRRect(
+        plateRect.deflate(strokeWidth / 2),
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white.withValues(alpha: dark ? 0.34 : 0.90),
+              plateBorder.withValues(alpha: dark ? 0.92 : 0.94),
+            ],
+          ).createShader(outerRect)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1, side * 0.025),
+          ..strokeWidth = strokeWidth,
       );
     }
 
@@ -109,27 +162,49 @@ class _CamelliaBrandPainter extends CustomPainter {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [start, end],
-      ).createShader(rect.outerRect)
-      ..color = start.withValues(alpha: easedProgress);
+      ).createShader(rect.outerRect);
+
+    Paint specularHighlightPaint(RRect rect) =>
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white.withValues(alpha: 0.32 * easedProgress),
+              Colors.white.withValues(alpha: 0.06 * easedProgress),
+              Colors.white.withValues(alpha: 0),
+            ],
+            stops: const [0.0, 0.42, 1.0],
+          ).createShader(rect.outerRect);
 
     final rear = scaledRect(PortalMarkSpec.rearScreen, rearOffset);
     final rearCutout = scaledRect(PortalMarkSpec.rearCutout, rearOffset);
     final front = scaledRect(PortalMarkSpec.frontScreen, frontOffset);
     final frontCutout = scaledRect(PortalMarkSpec.frontCutout, frontOffset);
+    final rearFrame = Path.combine(
+      PathOperation.difference,
+      Path()..addRRect(rear),
+      Path()..addRRect(rearCutout),
+    );
+    final frontFrame = Path.combine(
+      PathOperation.difference,
+      Path()..addRRect(front),
+      Path()..addRRect(frontCutout),
+    );
+
     canvas.drawPath(
-      Path.combine(
-        PathOperation.difference,
-        Path()..addRRect(rear),
-        Path()..addRRect(rearCutout),
-      ),
+      rearFrame,
       monochrome
           ? (Paint()..color = ink.withValues(alpha: easedProgress))
           : gradientPaint(
               rear,
-              CamelliaColors.portalBlue.withValues(alpha: easedProgress),
-              CamelliaColors.aqua.withValues(alpha: easedProgress),
+              _rearStart.withValues(alpha: easedProgress),
+              _rearEnd.withValues(alpha: easedProgress),
             ),
     );
+    if (!monochrome) {
+      canvas.drawPath(rearFrame, specularHighlightPaint(rear));
+    }
 
     final connectorStart =
         contentOrigin +
@@ -150,32 +225,33 @@ class _CamelliaBrandPainter extends CustomPainter {
         ..shader = monochrome
             ? null
             : LinearGradient(
-                colors: const [
-                  CamelliaColors.portalGlow,
-                  CamelliaColors.portalIndigo,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  _connectorStart.withValues(alpha: easedProgress),
+                  _connectorEnd.withValues(alpha: easedProgress),
                 ],
               ).createShader(Rect.fromPoints(connectorStart, connectorEnd))
         ..color = monochrome
             ? ink.withValues(alpha: easedProgress)
-            : CamelliaColors.portalGlow.withValues(alpha: easedProgress)
+            : _connectorStart.withValues(alpha: easedProgress)
         ..strokeWidth = contentSide * PortalMarkSpec.connectorWidth
         ..strokeCap = StrokeCap.round,
     );
 
     canvas.drawPath(
-      Path.combine(
-        PathOperation.difference,
-        Path()..addRRect(front),
-        Path()..addRRect(frontCutout),
-      ),
+      frontFrame,
       monochrome
           ? (Paint()..color = ink.withValues(alpha: easedProgress))
           : gradientPaint(
               front,
-              CamelliaColors.portalIndigo.withValues(alpha: easedProgress),
-              CamelliaColors.orchid.withValues(alpha: easedProgress),
+              _frontStart.withValues(alpha: easedProgress),
+              _frontEnd.withValues(alpha: easedProgress),
             ),
     );
+    if (!monochrome) {
+      canvas.drawPath(frontFrame, specularHighlightPaint(front));
+    }
   }
 
   @override

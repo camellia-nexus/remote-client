@@ -1151,6 +1151,10 @@ class JobController {
         }
         if (speed != null && speed.isFinite) {
           job.speed = speed;
+          job.speedHistory.add(speed);
+          if (job.speedHistory.length > 20) {
+            job.speedHistory.removeAt(0);
+          }
         }
         if (finishedSize != null && finishedSize.isFinite) {
           final transferred = math.max(0, finishedSize.round());
@@ -1420,6 +1424,16 @@ class JobController {
         actId: currJobId,
         isRemote: isRemote,
       );
+    }
+  }
+
+  void pauseJob(int jobId) {
+    final jobIndex = getJob(jobId);
+    if (jobIndex != -1) {
+      final job = jobTable[jobIndex];
+      bind.sessionCancelJob(sessionId: sessionId, actId: job.id);
+      job.state = JobState.paused;
+      jobTable.refresh();
     }
   }
 
@@ -1903,6 +1917,7 @@ class JobProgress {
   var id = 0;
   var fileNum = 0;
   var speed = 0.0;
+  final List<double> speedHistory = <double>[];
   var finishedSize = 0;
   var totalSize = 0;
   var fileCount = 0;
@@ -1917,6 +1932,17 @@ class JobProgress {
   var showHidden = false;
   var err = "";
   int lastTransferredSize = 0;
+
+  String get speedText {
+    if (speed <= 0) return '';
+    if (speed >= 1024 * 1024) {
+      return '${(speed / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+    } else if (speed >= 1024) {
+      return '${(speed / 1024).toStringAsFixed(1)} KB/s';
+    } else {
+      return '${speed.toStringAsFixed(0)} B/s';
+    }
+  }
 
   int get effectiveFinishedSize {
     if (state == JobState.done && totalSize > 0) {
@@ -1952,6 +1978,7 @@ class JobProgress {
     id = 0;
     fileNum = 0;
     speed = 0;
+    speedHistory.clear();
     finishedSize = 0;
     totalSize = 0;
     jobName = "";

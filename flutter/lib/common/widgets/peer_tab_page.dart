@@ -3,21 +3,23 @@ import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/address_book.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/common/widgets/my_group.dart';
-import 'package:camellia_remote_app/common/widgets/peers_view.dart';
 import 'package:camellia_remote_app/common/widgets/peer_card.dart';
+import 'package:camellia_remote_app/common/widgets/peers_view.dart';
 import 'package:camellia_remote_app/consts.dart';
-import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
+import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/ab_model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
-import 'package:camellia_remote_app/ui/device_workspace_controls.dart';
-
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/device_workspace_controls.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -150,24 +152,15 @@ class _PeerTabPageState extends State<PeerTabPage>
     _ensureTabLoaded(model.currentTab);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final categoryLayout = deviceCategoryLayoutForWidth(
-          constraints.maxWidth,
-        );
-        final contentWidth = categoryLayout == DeviceCategoryLayout.rail
-            ? constraints.maxWidth - 64
-            : constraints.maxWidth;
-        final content = Column(
+        final contentWidth = constraints.maxWidth;
+        return Column(
           textBaseline: TextBaseline.ideographic,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (categoryLayout != DeviceCategoryLayout.rail) ...[
-              visibleContextMenuListener(
-                _createCategoryControl(context, categoryLayout),
-              ),
-              const SizedBox(height: 8),
-            ],
+            visibleContextMenuListener(_buildCategoryPillBar(context)),
+            const SizedBox(height: 10),
             AnimatedSwitcher(
-              duration: const Duration(milliseconds: 180),
+              duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
               child: model.multiSelectionMode
                   ? ConstrainedBox(
                       key: const ValueKey('peer-multi-selection'),
@@ -182,29 +175,21 @@ class _PeerTabPageState extends State<PeerTabPage>
             _createPeersView(),
           ],
         );
-        if (categoryLayout != DeviceCategoryLayout.rail) return content;
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            visibleContextMenuListener(_createCategoryRail(context)),
-            const SizedBox(width: 12),
-            Expanded(child: content),
-          ],
-        );
       },
     );
   }
 
-  Widget _createCategoryControl(
-    BuildContext context,
-    DeviceCategoryLayout layout,
-  ) {
+  /// Unified horizontal labeled Glass Pill Tabs replacing the legacy 52px
+  /// vertical category rail.
+  Widget _buildCategoryPillBar(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
     final tabs = model.visibleEnabledOrderedIndexs;
     if (tabs.isEmpty) return const SizedBox.shrink();
     final selected = tabs.contains(model.currentTab)
         ? model.currentTab
         : tabs.first;
+    final fixed = isOptionFixed(kOptionPeerTabIndex);
+
     Future<void> select(int tab) async {
       await handleTabSelection(tab);
       await bind.setLocalFlutterOption(
@@ -213,124 +198,23 @@ class _PeerTabPageState extends State<PeerTabPage>
       );
     }
 
-    if (layout == DeviceCategoryLayout.selector) {
-      return SizedBox(
-        height: 44,
-        child: DropdownButtonFormField<int>(
-          key: ValueKey<int>(selected),
-          initialValue: selected,
-          isExpanded: true,
-          decoration: InputDecoration(
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-            prefixIcon: Icon(model.tabIcon(selected), size: 19),
-          ),
-          items: [
-            for (final tab in tabs)
-              DropdownMenuItem<int>(
-                value: tab,
-                child: Text(
-                  model.tabTooltip(tab),
-                  overflow: TextOverflow.ellipsis,
-                ),
+    return SizedBox(
+      height: 40,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (var i = 0; i < tabs.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              _GlassCategoryPillTab(
+                icon: model.tabIcon(tabs[i]),
+                label: model.tabTooltip(tabs[i]),
+                tooltip: model.tabTooltip(tabs[i]),
+                selected: tabs[i] == selected,
+                onTap: fixed ? null : () => select(tabs[i]),
               ),
+            ],
           ],
-          onChanged: isOptionFixed(kOptionPeerTabIndex)
-              ? null
-              : (tab) {
-                  if (tab != null) select(tab);
-                },
-        ),
-      );
-    }
-    return SizedBox(
-      height: 44,
-      child: Row(
-        children: [
-          for (final tab in tabs)
-            Padding(
-              padding: const EdgeInsetsDirectional.only(end: 4),
-              child: _categoryButton(
-                context,
-                tab: tab,
-                selected: tab == selected,
-                onPressed: isOptionFixed(kOptionPeerTabIndex)
-                    ? null
-                    : () => select(tab),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _createCategoryRail(BuildContext context) {
-    final model = Provider.of<PeerTabModel>(context);
-    final tabs = model.visibleEnabledOrderedIndexs;
-    return SizedBox(
-      width: 52,
-      child: Column(
-        children: [
-          for (final tab in tabs)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: _categoryButton(
-                context,
-                tab: tab,
-                selected: tab == model.currentTab,
-                onPressed: isOptionFixed(kOptionPeerTabIndex)
-                    ? null
-                    : () async {
-                        await handleTabSelection(tab);
-                        await bind.setLocalFlutterOption(
-                          k: kOptionPeerTabIndex,
-                          v: tab.toString(),
-                        );
-                      },
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _categoryButton(
-    BuildContext context, {
-    required int tab,
-    required bool selected,
-    required VoidCallback? onPressed,
-  }) {
-    final model = Provider.of<PeerTabModel>(context, listen: false);
-    final theme = Theme.of(context);
-    final label = model.tabTooltip(tab);
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: Tooltip(
-        message: label,
-        child: Material(
-          color: selected
-              ? theme.colorScheme.primaryContainer
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          child: InkWell(
-            onTap: onPressed,
-            borderRadius: BorderRadius.circular(10),
-            child: SizedBox(
-              width: 44,
-              height: 44,
-              child: Center(
-                child: Icon(
-                  model.tabIcon(tab),
-                  size: 20,
-                  color: selected
-                      ? theme.colorScheme.onPrimaryContainer
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -345,7 +229,7 @@ class _PeerTabPageState extends State<PeerTabPage>
           children: [
             _hoverAction(
               context: context,
-              child: const Icon(Icons.search_rounded, size: 19),
+              child: const Icon(CamelliaIcons.search, size: 19),
               onTap: () => setState(() => _compactSearchOpen = true),
               toolTip: translate('Search ID'),
             ),
@@ -368,11 +252,11 @@ class _PeerTabPageState extends State<PeerTabPage>
                 peerSearchText.value = '';
                 setState(() => _compactSearchOpen = false);
               },
-              icon: const Icon(Icons.arrow_back_rounded),
+              icon: const Icon(CamelliaIcons.arrowBack),
             ),
           AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOutCubic,
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+            curve: CamelliaMotion.enter,
             width: width < 520
                 ? (width - 48).clamp(0, width).toDouble()
                 : deviceSearchWidth(width, focused: _searchFocused),
@@ -385,7 +269,7 @@ class _PeerTabPageState extends State<PeerTabPage>
             ),
           ),
           if (width >= 520) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: 10),
             const Spacer(),
             ...actions,
           ],
@@ -399,13 +283,13 @@ class _PeerTabPageState extends State<PeerTabPage>
     Widget child;
     if (model.visibleEnabledOrderedIndexs.isEmpty) {
       child = visibleContextMenuListener(
-        Row(children: [Expanded(child: InkWell())]),
+        const Row(children: [Expanded(child: InkWell())]),
       );
     } else {
       if (model.visibleEnabledOrderedIndexs.contains(model.currentTab)) {
         child = entries[model.currentTab].widget;
       } else {
-        debugPrint("should not happen! currentTab not in visibleIndexs");
+        debugPrint('should not happen! currentTab not in visibleIndexs');
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && model.visibleEnabledOrderedIndexs.isNotEmpty) {
             model.setCurrentTab(model.visibleEnabledOrderedIndexs.first);
@@ -416,7 +300,7 @@ class _PeerTabPageState extends State<PeerTabPage>
     }
     return Expanded(
       child: Padding(
-        padding: EdgeInsets.only(top: (isDesktop || isWebDesktop) ? 8.0 : 6.0),
+        padding: EdgeInsets.only(top: (isDesktop || isWebDesktop) ? 10.0 : 8.0),
         child: child,
       ),
     );
@@ -424,7 +308,7 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget _createRefresh() {
     final model = Provider.of<PeerTabModel>(context, listen: false);
-    final textColor = Theme.of(context).textTheme.titleLarge?.color;
+    final iconColor = Theme.of(context).colorScheme.onSurfaceVariant;
     final loading = switch (PeerTabIndex.values[model.currentTab]) {
       PeerTabIndex.ab => gFFI.abModel.currentAbLoading,
       PeerTabIndex.group => gFFI.groupModel.groupLoading,
@@ -435,16 +319,16 @@ class _PeerTabPageState extends State<PeerTabPage>
       child: RefreshWidget(
         onPressed: () => _loadTab(model.currentTab),
         spinning: loading,
-        child: RotatedBox(
-          quarterTurns: 2,
-          child: Icon(Icons.refresh, size: 18, color: textColor),
-        ),
+        child: Icon(CamelliaIcons.refresh, size: 19, color: iconColor),
       ),
     );
   }
 
   Widget _createPeerViewTypeSwitch(BuildContext context) {
-    return PeerViewDropdown();
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 4),
+      child: PeerViewDropdown(),
+    );
   }
 
   Widget _createMultiSelection() {
@@ -536,7 +420,7 @@ class _PeerTabPageState extends State<PeerTabPage>
     final model = Provider.of<PeerTabModel>(context);
     final menu = List<MenuEntrySwitchSync>.empty(growable: true);
     for (int i = 0; i < model.orders.length; i++) {
-      int tabIndex = model.orders[i];
+      final int tabIndex = model.orders[i];
       if (tabIndex < 0 || tabIndex >= PeerTabModel.maxTabCount) continue;
       if (!model.isEnabled[tabIndex]) continue;
       menu.add(
@@ -546,8 +430,6 @@ class _PeerTabPageState extends State<PeerTabPage>
           currentValue: model.isVisibleEnabled[tabIndex],
           setter: (show) async {
             model.setTabVisible(tabIndex, show);
-            // Do not hide the current menu (checkbox)
-            // cancelFunc();
           },
           enabled: (!isOptVisiableFixed).obs,
         ),
@@ -558,8 +440,8 @@ class _PeerTabPageState extends State<PeerTabPage>
           .map(
             (entry) => entry.build(
               context,
-              const MenuConfig(
-                commonColor: MyTheme.accent,
+              MenuConfig(
+                commonColor: Theme.of(context).colorScheme.primary,
                 height: 20.0,
                 dividerHeight: 12.0,
               ),
@@ -598,9 +480,10 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget deleteSelection() {
     final model = Provider.of<PeerTabModel>(context);
+    final glass = CamelliaGlassTokens.of(context);
     final currentTab = model.currentTab;
     if (currentTab == PeerTabIndex.group.index) {
-      return Offstage();
+      return const Offstage();
     }
     return _hoverAction(
       context: context,
@@ -613,7 +496,7 @@ class _PeerTabPageState extends State<PeerTabPage>
         final selectedSnapshot = List<Peer>.from(model.selectedPeers);
         if (selectedSnapshot.isEmpty) return;
 
-        onSubmit() async {
+        Future<bool> onSubmit() async {
           if (model.currentTab != targetTab) {
             gFFI.peerTabModel.setMultiSelectionMode(false);
             return false;
@@ -621,21 +504,21 @@ class _PeerTabPageState extends State<PeerTabPage>
           final peers = selectedSnapshot;
           switch (targetTab) {
             case 0:
-              for (var p in peers) {
+              for (final p in peers) {
                 await bind.mainRemovePeer(id: p.id);
               }
               bind.mainLoadRecentPeers();
               break;
             case 1:
               final favs = (await bind.mainGetFav()).toList();
-              peers.map((p) {
+              for (final p in peers) {
                 favs.remove(p.id);
-              }).toList();
+              }
               await bind.mainStoreFav(favs: favs);
               bind.mainLoadFavPeers();
               break;
             case 2:
-              for (var p in peers) {
+              for (final p in peers) {
                 await bind.mainRemoveDiscovered(id: p.id);
               }
               bind.mainLoadLanPeers();
@@ -664,22 +547,21 @@ class _PeerTabPageState extends State<PeerTabPage>
 
         deleteConfirmDialog(onSubmit, translate('Delete'));
       },
-      child: Icon(Icons.delete, color: Colors.red),
+      child: Icon(CamelliaIcons.trash, size: 19, color: glass.statusAlert),
     );
   }
 
   Widget addSelectionToFav() {
     final model = Provider.of<PeerTabModel>(context);
     return Offstage(
-      offstage:
-          model.currentTab != PeerTabIndex.recent.index, // show based on recent
+      offstage: model.currentTab != PeerTabIndex.recent.index,
       child: _hoverAction(
         context: context,
         toolTip: translate('Add to Favorites'),
         onTap: () async {
           final peers = List<Peer>.from(model.selectedPeers);
           final favs = (await bind.mainGetFav()).toList();
-          for (var p in peers) {
+          for (final p in peers) {
             if (!favs.contains(p.id)) {
               favs.add(p.id);
             }
@@ -688,7 +570,7 @@ class _PeerTabPageState extends State<PeerTabPage>
           model.setMultiSelectionMode(false);
           showToast(translate('Successful'));
         },
-        child: Icon(PeerTabModel.icons[PeerTabIndex.fav.index]),
+        child: Icon(PeerTabModel.icons[PeerTabIndex.fav.index], size: 19),
       ).marginOnly(left: !(isDesktop || isWebDesktop) ? 11 : 6),
     );
   }
@@ -709,7 +591,7 @@ class _PeerTabPageState extends State<PeerTabPage>
           addPeersToAbDialog(peers);
           model.setMultiSelectionMode(false);
         },
-        child: Icon(PeerTabModel.icons[PeerTabIndex.ab.index]),
+        child: Icon(PeerTabModel.icons[PeerTabIndex.ab.index], size: 19),
       ).marginOnly(left: !(isDesktop || isWebDesktop) ? 11 : 6),
     );
   }
@@ -741,15 +623,23 @@ class _PeerTabPageState extends State<PeerTabPage>
             }
           });
         },
-        child: Icon(Icons.tag),
+        child: const Icon(Icons.tag_rounded, size: 19),
       ).marginOnly(left: !(isDesktop || isWebDesktop) ? 11 : 6),
     );
   }
 
   Widget selectionCount(int count) {
-    return Align(
-      alignment: Alignment.center,
-      child: Text('$count ${translate('Selected')}'),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Align(
+        alignment: Alignment.center,
+        child: Text(
+          '$count ${translate('Selected')}',
+          style: CamelliaTypography.tabular(
+            Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+      ),
     );
   }
 
@@ -763,7 +653,7 @@ class _PeerTabPageState extends State<PeerTabPage>
         onTap: () {
           model.selectAll();
         },
-        child: Icon(Icons.select_all),
+        child: const Icon(Icons.select_all_rounded, size: 19),
       ).marginOnly(left: 6),
     );
   }
@@ -776,7 +666,7 @@ class _PeerTabPageState extends State<PeerTabPage>
       onTap: () {
         model.setMultiSelectionMode(false);
       },
-      child: Icon(Icons.clear),
+      child: const Icon(CamelliaIcons.close, size: 19),
     ).marginOnly(left: 6);
   }
 
@@ -785,11 +675,11 @@ class _PeerTabPageState extends State<PeerTabPage>
       context: context,
       toolTip: translate('Toggle Tags'),
       hoverableWhenfalse: hideAbTagsPanel,
-      child: Icon(Icons.tag_rounded, size: 18),
+      child: const Icon(Icons.tag_rounded, size: 18),
       onTap: () async {
         await bind.mainSetLocalOption(
           key: kOptionHideAbTagsPanel,
-          value: hideAbTagsPanel.value ? defaultOptionNo : "Y",
+          value: hideAbTagsPanel.value ? defaultOptionNo : 'Y',
         );
         hideAbTagsPanel.value = !hideAbTagsPanel.value;
       },
@@ -802,14 +692,170 @@ class _PeerTabPageState extends State<PeerTabPage>
       _createRefresh(),
       if (model.currentTabCachedPeers.isNotEmpty) _createMultiSelection(),
       _createPeerViewTypeSwitch(context),
-      if (model.currentTab != PeerTabIndex.recent.index) PeerSortDropdown(),
+      if (model.currentTab != PeerTabIndex.recent.index)
+        const PeerSortDropdown(),
       if (model.currentTab == PeerTabIndex.ab.index) _toggleTags(),
     ];
   }
 }
 
+class _GlassCategoryPillTab extends StatefulWidget {
+  const _GlassCategoryPillTab({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  State<_GlassCategoryPillTab> createState() => _GlassCategoryPillTabState();
+}
+
+class _GlassCategoryPillTabState extends State<_GlassCategoryPillTab> {
+  bool _hovered = false;
+  bool _pressed = false;
+  bool _focused = false;
+
+  bool get _enabled => widget.onTap != null;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final activeAccent = dark ? scheme.secondary : scheme.primary;
+    final radius = BorderRadius.circular(CamelliaRadius.pill);
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
+
+    final bg = widget.selected
+        ? activeAccent.withValues(alpha: dark ? 0.22 : 0.13)
+        : (_hovered && _enabled
+              ? Color.alphaBlend(glass.hoverOverlay, glass.floatingTint)
+              : glass.floatingTint.withValues(alpha: dark ? 0.56 : 0.72));
+    final fg = widget.selected
+        ? (dark ? scheme.onSurface : activeAccent)
+        : (_hovered ? scheme.onSurface : scheme.onSurfaceVariant);
+
+    return Semantics(
+      button: true,
+      selected: widget.selected,
+      enabled: _enabled,
+      label: widget.label,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: FocusableActionDetector(
+          enabled: _enabled,
+          mouseCursor: _enabled
+              ? SystemMouseCursors.click
+              : SystemMouseCursors.basic,
+          onShowHoverHighlight: (v) {
+            if (mounted) {
+              setState(() {
+                _hovered = v;
+                if (!v) _pressed = false;
+              });
+            }
+          },
+          onShowFocusHighlight: (v) {
+            if (mounted) setState(() => _focused = v);
+          },
+          actions: <Type, Action<Intent>>{
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                if (_enabled) {
+                  HapticFeedback.selectionClick();
+                  widget.onTap?.call();
+                }
+                return null;
+              },
+            ),
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: _enabled ? (_) => setState(() => _pressed = true) : null,
+            onTapUp: _enabled ? (_) => setState(() => _pressed = false) : null,
+            onTapCancel: _enabled
+                ? () => setState(() => _pressed = false)
+                : null,
+            onTap: _enabled
+                ? () {
+                    HapticFeedback.selectionClick();
+                    widget.onTap?.call();
+                  }
+                : null,
+            child: AnimatedScale(
+              scale: (!_enabled || reduceMotion)
+                  ? 1.0
+                  : (_pressed ? 0.97 : 1.0),
+              duration: CamelliaMotion.resolve(
+                context,
+                CamelliaMotion.feedback,
+              ),
+              curve: CamelliaMotion.springSnappy,
+              child: AnimatedContainer(
+                duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
+                curve: CamelliaMotion.springSnappy,
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 13),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: radius,
+                  boxShadow: _focused
+                      ? [
+                          BoxShadow(
+                            color: glass.focusGlow
+                                .withValues(alpha: dark ? 0.25 : 0.18),
+                            blurRadius: 8,
+                            spreadRadius: 0.5,
+                          ),
+                        ]
+                      : const [],
+                ),
+                child: CustomPaint(
+                  foregroundPainter: SpecularEdgePainter(
+                    borderRadius: radius,
+                    topColor: Colors.transparent,
+                    bottomColor: Colors.transparent,
+                    strokeWidth: 0.0,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(widget.icon, size: 16, color: fg),
+                      const SizedBox(width: 7),
+                      Text(
+                        widget.label,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: fg,
+                          fontWeight: widget.selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class PeerSearchBar extends StatefulWidget {
-  const PeerSearchBar({Key? key, this.onFocusChanged}) : super(key: key);
+  const PeerSearchBar({super.key, this.onFocusChanged});
 
   final ValueChanged<bool>? onFocusChanged;
 
@@ -819,7 +865,6 @@ class PeerSearchBar extends StatefulWidget {
 
 class _PeerSearchBarState extends State<PeerSearchBar> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'peer-search');
-  bool _focused = false;
 
   @override
   void initState() {
@@ -830,7 +875,6 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
 
   void _handleFocusChanged() {
     if (!mounted) return;
-    setState(() => _focused = _focusNode.hasFocus);
     widget.onFocusChanged?.call(_focusNode.hasFocus);
   }
 
@@ -848,73 +892,25 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final radius = BorderRadius.circular(10);
-    return SizedBox(
-      height: 44,
-      child: TextField(
-        controller: peerSearchTextController,
-        focusNode: _focusNode,
-        textInputAction: TextInputAction.search,
-        onChanged: (searchText) => peerSearchText.value = searchText,
-        decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: theme.colorScheme.surfaceContainer.withValues(alpha: 0.72),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 10,
-          ),
-          hintText: translate('Search ID'),
-          prefixIcon: Icon(
-            Icons.search_rounded,
-            size: 18,
-            color: _focused
-                ? theme.colorScheme.primary
-                : theme.colorScheme.onSurfaceVariant,
-          ),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 40,
-            minHeight: 40,
-          ),
-          suffixIcon: peerSearchTextController.text.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: translate('Clear'),
-                  onPressed: () {
-                    peerSearchTextController.clear();
-                    peerSearchText.value = '';
-                    _focusNode.requestFocus();
-                  },
-                  icon: const Icon(Icons.close_rounded),
-                ),
-          suffixIconConstraints: const BoxConstraints(
-            minWidth: 40,
-            minHeight: 40,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide(
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.7),
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide(
-              color: theme.colorScheme.primary,
-              width: 1.4,
-            ),
-          ),
-        ),
-      ).workaroundFreezeLinuxMint(),
-    );
+    return GlassInput(
+      controller: peerSearchTextController,
+      focusNode: _focusNode,
+      minHeight: 40,
+      prefixIcon: CamelliaIcons.search,
+      hintText: translate('Search ID'),
+      textInputAction: TextInputAction.search,
+      showClearButton: true,
+      onChanged: (searchText) => peerSearchText.value = searchText,
+      onClear: () {
+        peerSearchText.value = '';
+        _focusNode.requestFocus();
+      },
+    ).workaroundFreezeLinuxMint();
   }
 }
 
+/// 1-click frosted [GlassSegmentedControl] (`Grid | List`) replacing the
+/// legacy 2-click `PopupMenuButton` view switcher.
 class PeerViewDropdown extends StatefulWidget {
   const PeerViewDropdown({super.key});
 
@@ -923,43 +919,48 @@ class PeerViewDropdown extends StatefulWidget {
 }
 
 class _PeerViewDropdownState extends State<PeerViewDropdown> {
-  IconData _icon(PeerUiType type) => switch (type) {
-    PeerUiType.grid => Icons.grid_view_rounded,
-    PeerUiType.tile => Icons.view_agenda_rounded,
-    PeerUiType.list => Icons.view_list_rounded,
-  };
-
-  String _label(PeerUiType type) => translate(switch (type) {
-    PeerUiType.grid => 'Big tiles',
-    PeerUiType.tile => 'Small tiles',
-    PeerUiType.list => 'List',
-  });
+  Future<void> _selectView(PeerUiType value) async {
+    if (isOptionFixed(kOptionPeerCardUiType)) return;
+    peerCardUiType.value = value;
+    await bind.setLocalFlutterOption(
+      k: kOptionPeerCardUiType,
+      v: value.index.toString(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Obx(
-      () => DeviceOptionMenuButton<PeerUiType>(
-        tooltip: translate('Change view'),
-        icon: _icon(peerCardUiType.value),
-        enabled: !isOptionFixed(kOptionPeerCardUiType),
-        selectedValue: peerCardUiType.value,
-        options: [
-          for (final type in PeerUiType.values)
-            DeviceOptionMenuItem<PeerUiType>(
-              value: type,
-              label: _label(type),
-              icon: _icon(type),
-            ),
-        ],
-        onSelected: (value) async {
-          peerCardUiType.value = value;
-          await bind.setLocalFlutterOption(
-            k: kOptionPeerCardUiType,
-            v: value.index.toString(),
-          );
-        },
-      ),
-    );
+    final fixed = isOptionFixed(kOptionPeerCardUiType);
+    return Obx(() {
+      final active = peerCardUiType.value == PeerUiType.list
+          ? PeerUiType.list
+          : PeerUiType.grid;
+      return IgnorePointer(
+        ignoring: fixed,
+        child: Opacity(
+          opacity: fixed ? 0.5 : 1.0,
+          child: GlassSegmentedControl<PeerUiType>(
+            compact: true,
+            expand: false,
+            height: 36,
+            selected: active,
+            items: [
+              GlassSegmentItem<PeerUiType>(
+                value: PeerUiType.grid,
+                icon: Icons.grid_view_rounded,
+                tooltip: translate('Big tiles'),
+              ),
+              GlassSegmentItem<PeerUiType>(
+                value: PeerUiType.list,
+                icon: Icons.view_list_rounded,
+                tooltip: translate('List'),
+              ),
+            ],
+            onChanged: _selectView,
+          ),
+        ),
+      );
+    });
   }
 }
 
@@ -1011,6 +1012,8 @@ class _PeerSortDropdownState extends State<PeerSortDropdown> {
   }
 }
 
+/// Frosted refresh control that rotates ONLY the inner icon glyph while
+/// keeping the outer hover surface stationary.
 class RefreshWidget extends StatefulWidget {
   final VoidCallback onPressed;
   final Widget child;
@@ -1051,31 +1054,52 @@ class RefreshWidgetState extends State<RefreshWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedRotation(
-      turns: turns,
-      duration: const Duration(milliseconds: 200),
-      onEnd: () {
-        if (widget.spinning?.value == true && mounted) {
-          setState(() => turns += 1.0);
-        }
-      },
-      child: Material(
-        color: hover
-            ? Theme.of(context).colorScheme.primaryContainer
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () {
-            if (mounted) setState(() => turns += 1.0);
-            widget.onPressed();
-          },
-          onHover: (value) {
-            if (mounted) setState(() => hover = value);
-          },
-          child: SizedBox.square(
-            dimension: 44,
-            child: Center(child: widget.child),
+    final glass = CamelliaGlassTokens.of(context);
+    final radius = BorderRadius.circular(CamelliaRadius.control);
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
+
+    return SizedBox.square(
+      dimension: 44,
+      child: Center(
+        child: Material(
+          color: hover ? glass.hoverOverlay : Colors.transparent,
+          borderRadius: radius,
+          child: InkWell(
+            borderRadius: radius,
+            hoverColor: glass.hoverOverlay,
+            highlightColor: Colors.transparent,
+            splashColor: Colors.transparent,
+            splashFactory: NoSplash.splashFactory,
+            focusColor: Colors.transparent,
+            onTap: () {
+              HapticFeedback.selectionClick();
+              if (mounted && !reduceMotion) setState(() => turns += 1.0);
+              widget.onPressed();
+            },
+            onHover: (value) {
+              if (mounted) setState(() => hover = value);
+            },
+            child: SizedBox.square(
+              dimension: 40,
+              child: Center(
+                child: AnimatedRotation(
+                  turns: turns,
+                  duration: CamelliaMotion.resolve(
+                    context,
+                    CamelliaMotion.route,
+                  ),
+                  curve: CamelliaMotion.springSnappy,
+                  onEnd: () {
+                    if (widget.spinning?.value == true &&
+                        mounted &&
+                        !reduceMotion) {
+                      setState(() => turns += 1.0);
+                    }
+                  },
+                  child: widget.child,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -1092,27 +1116,49 @@ Widget _hoverAction({
   RxBool? hoverableWhenfalse,
   EdgeInsetsGeometry padding = const EdgeInsets.all(4.0),
 }) {
-  Widget action(bool selected) => Tooltip(
-    message: toolTip,
-    child: Material(
-      color: selected
-          ? Theme.of(context).colorScheme.primaryContainer
-          : Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        hoverColor: Theme.of(context).colorScheme.primaryContainer,
-        onTap: onTap,
-        onTapDown: onTapDown,
-        child: SizedBox.square(
-          dimension: 44,
-          child: Center(
-            child: Padding(padding: padding, child: child),
+  Widget action(bool selected) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final activeAccent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final radius = BorderRadius.circular(CamelliaRadius.control);
+    return Tooltip(
+      message: toolTip,
+      child: SizedBox.square(
+        dimension: 44,
+        child: Center(
+          child: Material(
+            color: selected
+                ? activeAccent.withValues(alpha: dark ? 0.22 : 0.14)
+                : Colors.transparent,
+            borderRadius: radius,
+            child: InkWell(
+              borderRadius: radius,
+              hoverColor: glass.hoverOverlay,
+              highlightColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              splashFactory: NoSplash.splashFactory,
+              focusColor: Colors.transparent,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onTap();
+              },
+              onTapDown: onTapDown,
+              child: SizedBox.square(
+                dimension: 40,
+                child: Center(
+                  child: Padding(padding: padding, child: child),
+                ),
+              ),
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
   return hoverableWhenfalse == null
       ? action(false)
       : Obx(() => action(hoverableWhenfalse.value == false));

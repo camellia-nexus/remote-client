@@ -1,7 +1,84 @@
-<vector xmlns:aapt="http://schemas.android.com/aapt" xmlns:android="http://schemas.android.com/apk/res/android" android:height="320dp" android:viewportHeight="32" android:viewportWidth="32" android:width="320dp">
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:aapt="http://schemas.android.com/aapt"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="320dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
 
-    <path android:fillColor="#ffffff" android:pathData="M16,0L16,0A16,16 0,0 1,32 16L32,16A16,16 0,0 1,16 32L16,32A16,16 0,0 1,0 16L0,16A16,16 0,0 1,16 0z" android:strokeColor="#00000000" android:strokeWidth="1"/>
+    <!-- Circular Liquid Glass backdrop badge for Android floating overlay -->
+    <path
+        android:pathData="M512,0A512,512 0,0 1,1024 512A512,512 0,0 1,512 1024A512,512 0,0 1,0 512A512,512 0,0 1,512 0Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="1024"
+                android:endY="1024"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FFF8FAFF" android:offset="0.0" />
+                <item android:color="#FFE8EEFF" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
-    <path android:fillColor="#1a1a1a" android:pathData="m23.89,10.135 l-1.807,1.795c-0.318,0.285 -0.472,0.744 -0.293,1.131 1.204,2.518 0.747,5.52 -1.228,7.494 -1.976,1.973 -4.981,2.429 -7.502,1.226 -0.371,-0.166 -0.807,-0.025 -1.093,0.265l-1.836,1.833c-0.216,0.211 -0.322,0.51 -0.288,0.809 0.034,0.3 0.206,0.567 0.463,0.723 4.326,2.618 9.882,1.951 13.463,-1.618 3.581,-3.568 4.264,-9.115 1.655,-13.443 -0.15,-0.263 -0.414,-0.442 -0.714,-0.484 -0.3,-0.043 -0.603,0.058 -0.819,0.269zM8.265,8.184c-3.599,3.554 -4.304,9.103 -1.709,13.441 0.15,0.264 0.413,0.443 0.714,0.485 0.3,0.042 0.603,-0.058 0.82,-0.27l1.797,-1.785c0.325,-0.285 0.484,-0.749 0.303,-1.141 -1.204,-2.518 -0.748,-5.52 1.228,-7.493 1.975,-1.973 4.981,-2.429 7.502,-1.227 0.367,0.165 0.797,0.028 1.084,-0.254l1.846,-1.844c0.216,-0.211 0.322,-0.509 0.288,-0.809 -0.035,-0.299 -0.206,-0.566 -0.463,-0.723 -4.334,-2.596 -9.881,-1.908 -13.448,1.668z" android:strokeWidth="0.987992"/>
+    <!-- Subtle circular glass rim -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M512,16A496,496 0,0 1,1008 512A496,496 0,0 1,512 1008A496,496 0,0 1,16 512A496,496 0,0 1,512 16Z"
+        android:strokeColor="#FFD2DCF6"
+        android:strokeWidth="18" />
+
+    <!-- Camellia Portal Mark: Rear screen frame (Glacier-Aqua) -->
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M318.4,239.6H519.1A107.5,107.5 0,0 1,626.6 347.1V490.5A107.5,107.5 0,0 1,519.1 598H318.4A107.5,107.5 0,0 1,210.9 490.5V347.1A107.5,107.5 0,0 1,318.4 239.6ZM340,304.1A64.5,64.5 0,0 0,275.5 368.6V469A64.5,64.5 0,0 0,340 533.5H497.7A64.5,64.5 0,0 0,562.2 469V368.6A64.5,64.5 0,0 0,497.7 304.1H340Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="626.6"
+                android:endY="598"
+                android:startX="210.9"
+                android:startY="239.6"
+                android:type="linear">
+                <item android:color="#FF0EA5E9" android:offset="0.0" />
+                <item android:color="#FF06B6D4" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Camellia Portal Mark: Luminous Rose-Coral to Indigo connector -->
+    <path
+        android:pathData="M461.8,461.8L562.2,562.2"
+        android:strokeLineCap="round"
+        android:strokeWidth="86">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:endX="562.2"
+                android:endY="562.2"
+                android:startX="461.8"
+                android:startY="461.8"
+                android:type="linear">
+                <item android:color="#FFFF5C7A" android:offset="0.0" />
+                <item android:color="#FF6366F1" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Camellia Portal Mark: Front screen frame (Sapphire-Indigo) -->
+    <path
+        android:fillType="evenOdd"
+        android:pathData="M504.8,426H705.5A107.5,107.5 0,0 1,813 533.5V676.9A107.5,107.5 0,0 1,705.5 784.4H504.8A107.5,107.5 0,0 1,397.3 676.9V533.5A107.5,107.5 0,0 1,504.8 426ZM526.3,490.5A64.5,64.5 0,0 0,461.8 555V655.4A64.5,64.5 0,0 0,526.3 719.9H684A64.5,64.5 0,0 0,748.5 655.4V555A64.5,64.5 0,0 0,684 490.5H526.3Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="813"
+                android:endY="784.4"
+                android:startX="397.3"
+                android:startY="426"
+                android:type="linear">
+                <item android:color="#FF4F46E5" android:offset="0.0" />
+                <item android:color="#FF7C3AED" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
 </vector>

@@ -72,6 +72,16 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         if (remotePage is RemotePage) {
           final ffi = remotePage.ffi;
           bind.setCurSessionId(sessionId: ffi.sessionId);
+          bind.sessionSetCustomFps(sessionId: ffi.sessionId, fps: 0);
+          bind.sessionRefresh(sessionId: ffi.sessionId, display: _display ?? 0);
+        }
+        for (final tab in tabController.state.value.tabs) {
+          if (tab.key != id) {
+            final page = tabController.widget(tab.key);
+            if (page is RemotePage) {
+              bind.sessionSetCustomFps(sessionId: page.ffi.sessionId, fps: 2);
+            }
+          }
         }
         WindowController.fromWindowId(
           params['windowId'],
@@ -96,7 +106,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           page: RemotePage(
             key: ValueKey(peerId),
             id: peerId!,
-            sessionId: sessionId == null ? null : SessionID(sessionId),
+            sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
             tabWindowId: tabWindowId,
             display: display,
             displays: displays?.cast<int>(),
@@ -142,6 +152,17 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
+        onTabDetach: (index, tab) async {
+          if (tabController.state.value.tabs.length <= 1) return;
+          final key = tab.key;
+          final remotePage = tabController.widget(key);
+          final sessionId = (remotePage is RemotePage) ? remotePage.sessionId : 0;
+          await DesktopMultiWindow.invokeMethod(
+            kMainWindowId,
+            kWindowEventMoveTabToNewWindow,
+            '${windowId()},$key,$sessionId,RemoteDesktop',
+          );
+        },
         tail: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -431,11 +452,19 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       Future<void> loopCloseWindow() async {
         int c = 0;
         final windowController = WindowController.fromWindowId(windowId());
-        while (c < 20 &&
-            tabController.state.value.tabs.isEmpty &&
-            (!await windowController.isHidden())) {
-          await windowController.close();
-          await Future.delayed(Duration(milliseconds: 100));
+        try {
+          await windowController.setPreventClose(false);
+        } catch (e) {
+          debugPrint("Failed to setPreventClose in loopCloseWindow: $e");
+        }
+        while (c < 20 && tabController.state.value.tabs.isEmpty) {
+          try {
+            await windowController.close();
+          } catch (e) {
+            debugPrint("Failed to close in loopCloseWindow: $e");
+            break;
+          }
+          await Future.delayed(const Duration(milliseconds: 100));
           c++;
         }
       }
@@ -462,7 +491,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         return false;
       }
     }
-    if (connLength <= 1) {
+    if (connLength <= 0) {
       tabController.clear();
       return true;
     } else {
@@ -538,7 +567,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           page: RemotePage(
             key: ValueKey(id),
             id: id,
-            sessionId: sessionId == null ? null : SessionID(sessionId),
+            sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
             tabWindowId: tabWindowId,
             display: display,
             displays: displays?.cast<int>(),
@@ -691,24 +720,25 @@ class _RelativeMouseModeHint extends StatelessWidget {
         return const SizedBox.shrink();
       }
 
+      final glass = CamelliaGlassTokens.of(context);
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         margin: const EdgeInsets.only(right: 8),
         decoration: BoxDecoration(
-          color: Colors.orange.withValues(alpha: 0.2),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+          color: glass.statusHighLatency.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          border: Border.all(color: glass.statusHighLatency.withValues(alpha: 0.42)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.mouse, size: 14, color: Colors.orange[700]),
+            Icon(Icons.mouse, size: 14, color: glass.statusHighLatency),
             const SizedBox(width: 4),
             Text(
               translate(
                 'rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip',
               ),
-              style: TextStyle(fontSize: 11, color: Colors.orange[700]),
+              style: TextStyle(fontSize: 11, color: glass.statusHighLatency),
             ),
           ],
         ),

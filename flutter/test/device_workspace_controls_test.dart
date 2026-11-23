@@ -1,5 +1,6 @@
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/device_workspace_controls.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,7 +10,7 @@ void main() {
     expect(deviceCategoryLayoutForWidth(519), DeviceCategoryLayout.selector);
     expect(deviceCategoryLayoutForWidth(520), DeviceCategoryLayout.bar);
     expect(deviceCategoryLayoutForWidth(839), DeviceCategoryLayout.bar);
-    expect(deviceCategoryLayoutForWidth(840), DeviceCategoryLayout.rail);
+    expect(deviceCategoryLayoutForWidth(840), DeviceCategoryLayout.bar);
   });
 
   test('desktop search width is bounded without consuming the action row', () {

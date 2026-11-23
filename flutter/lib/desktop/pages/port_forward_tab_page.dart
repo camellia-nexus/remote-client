@@ -7,6 +7,7 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/port_forward_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
+import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
@@ -109,8 +110,24 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: () async {
-          tabController.clear();
-          return true;
+          final connLength = tabController.state.value.tabs.length;
+          if (connLength <= 0) {
+            tabController.clear();
+            return true;
+          }
+          final bool res;
+          if (!option2bool(
+            kOptionEnableConfirmClosingTabs,
+            bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+          )) {
+            res = true;
+          } else {
+            res = await closeConfirmDialog();
+          }
+          if (res) {
+            tabController.clear();
+          }
+          return res;
         },
         tail: AddButton(),
         selectedBorderColor: MyTheme.accent,

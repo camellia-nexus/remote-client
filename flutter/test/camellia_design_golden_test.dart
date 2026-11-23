@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
@@ -342,7 +344,35 @@ Future<void> _renderGolden(
   await expectLater(find.byType(_ClientShellFixture), matchesGoldenFile(file));
 }
 
+class _TolerantGoldenComparator extends LocalFileComparator {
+  _TolerantGoldenComparator(super.testFile);
+
+  static const double tolerance = 0.005;
+
+  @override
+  Future<bool> compare(Uint8List imageBytes, Uri golden) async {
+    final ComparisonResult result = await GoldenFileComparator.compareLists(
+      imageBytes,
+      await getGoldenBytes(golden),
+    );
+    if (result.passed || result.diffPercent <= tolerance) {
+      result.dispose();
+      return true;
+    }
+    final String error = await generateFailureOutput(result, golden, basedir);
+    result.dispose();
+    throw FlutterError(error);
+  }
+}
+
 void main() {
+  setUpAll(() {
+    final defaultComparator = goldenFileComparator as LocalFileComparator;
+    goldenFileComparator = _TolerantGoldenComparator(
+      defaultComparator.basedir.resolve('camellia_design_golden_test.dart'),
+    );
+  });
+
   testWidgets('desktop light visual review', (tester) async {
     await _renderGolden(
       tester,

@@ -7,12 +7,15 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide TabBarTheme;
 import 'package:camellia_remote_app/common.dart';
+import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/pages/remote_page.dart';
 import 'package:camellia_remote_app/desktop/pages/view_camera_page.dart';
 import 'package:camellia_remote_app/main.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
 import 'package:scroll_pos/scroll_pos.dart';
@@ -92,7 +95,7 @@ CancelFunc showRightMenu(
     onlyOne: true,
     allowClick: true,
     enableSafeArea: true,
-    backgroundColor: Color(0x00000000),
+    backgroundColor: Colors.transparent,
     attachedBuilder: builder,
   );
 }
@@ -293,6 +296,7 @@ class DesktopTab extends StatefulWidget {
   final Color? selectedTabBackgroundColor;
   final Color? unSelectedTabBackgroundColor;
   final Color? selectedBorderColor;
+  final void Function(int index, TabInfo tab)? onTabDetach;
 
   final DesktopTabController controller;
 
@@ -318,6 +322,7 @@ class DesktopTab extends StatefulWidget {
     this.selectedTabBackgroundColor,
     this.unSelectedTabBackgroundColor,
     this.selectedBorderColor,
+    this.onTabDetach,
   }) : super(key: key);
 
   static RxString tablabelGetter(String peerId) {
@@ -495,6 +500,10 @@ class _DesktopTabState extends State<DesktopTab>
       await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
         "id": kWindowId!,
       });
+      if (controller.length == 0) {
+        await windowController.setPreventClose(false);
+        await windowController.close();
+      }
     }
 
     macOSWindowClose(
@@ -729,7 +738,7 @@ class _DesktopTabState extends State<DesktopTab>
                           sc.animateTo(
                             sc.offset + e.scrollDelta.dy * adjust,
                             duration: Duration(milliseconds: 200),
-                            curve: Curves.ease,
+                            curve: CamelliaMotion.standard,
                           );
                         });
                       }
@@ -745,6 +754,7 @@ class _DesktopTabState extends State<DesktopTab>
                       unSelectedTabBackgroundColor:
                           unSelectedTabBackgroundColor,
                       selectedBorderColor: selectedBorderColor,
+                      onTabDetach: widget.onTabDetach,
                     ),
                   ),
                 ),
@@ -845,7 +855,7 @@ class WindowActionPanelState extends State<WindowActionPanel> {
             if (widget.showMinimize && !isMacOS)
               ActionIcon(
                 message: 'Minimize',
-                icon: IconFont.min,
+                icon: CamelliaIcons.minimize,
                 onTap: () {
                   if (widget.isMainWindow) {
                     windowManager.minimize();
@@ -862,8 +872,8 @@ class WindowActionPanelState extends State<WindowActionPanel> {
                       ? 'Restore'
                       : 'Maximize',
                   icon: stateGlobal.isMaximized.isTrue
-                      ? IconFont.restore
-                      : IconFont.max,
+                      ? CamelliaIcons.restore
+                      : CamelliaIcons.maximize,
                   onTap: bind.isIncomingOnly() && isInHomePage()
                       ? null
                       : _toggleMaximize,
@@ -873,7 +883,7 @@ class WindowActionPanelState extends State<WindowActionPanel> {
             if (widget.showClose && !isMacOS)
               ActionIcon(
                 message: 'Close',
-                icon: IconFont.close,
+                icon: CamelliaIcons.close,
                 onTap: () async {
                   final res = await widget.onClose?.call() ?? true;
                   if (res) {
@@ -945,8 +955,9 @@ Future<bool> toggleMaximize(bool isMainWindow) async {
 
 Future<bool> closeConfirmDialog() async {
   var confirm = true;
+  final supportsTray = isDesktop && (isWindows || isLinux || isMacOS);
   final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
-    submit() {
+    void submit() {
       String value = bool2option(kOptionEnableConfirmClosingTabs, confirm);
       bind.mainSetLocalOption(
         key: kOptionEnableConfirmClosingTabs,
@@ -955,25 +966,27 @@ Future<bool> closeConfirmDialog() async {
       close(true);
     }
 
+    Future<void> minimizeToTray() async {
+      close(false);
+      if (kWindowId != null && kWindowId != kMainWindowId) {
+        await WindowController.fromWindowId(kWindowId!).hide();
+      } else {
+        await windowManager.hide();
+      }
+    }
+
     return CustomAlertDialog(
-      title: Row(
-        children: [
-          const Icon(
-            Icons.warning_amber_sharp,
-            color: Colors.redAccent,
-            size: 28,
-          ),
-          const SizedBox(width: 10),
-          Text(translate("Warning")),
-        ],
+      title: ModernDialogHeader.warning(
+        title: translate("Warning"),
+        subtitle: translate("Disconnect all devices?"),
+        onClose: () => close(false),
       ),
       content: Column(
-        mainAxisAlignment: MainAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(translate("Disconnect all devices?")),
           CheckboxListTile(
-            contentPadding: const EdgeInsets.all(0),
+            contentPadding: EdgeInsets.zero,
             dense: true,
             controlAffinity: ListTileControlAffinity.leading,
             title: Text(translate("Confirm before closing multiple tabs")),
@@ -985,13 +998,24 @@ Future<bool> closeConfirmDialog() async {
           ),
         ],
       ),
-      // confirm checkbox
       actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("OK", onPressed: submit),
+        dialogButton("Cancel", onPressed: () => close(false), isOutline: true),
+        if (supportsTray)
+          dialogButton(
+            "Minimize to Tray",
+            icon: const Icon(CamelliaIcons.minimize, size: 16),
+            onPressed: minimizeToTray,
+            isOutline: true,
+          ),
+        dialogButton(
+          "Disconnect & Quit",
+          icon: const Icon(CamelliaIcons.close, size: 16),
+          onPressed: submit,
+          isDestructive: true,
+        ),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: () => close(false),
     );
   });
   return res == true;
@@ -1008,6 +1032,7 @@ class _ListView extends StatelessWidget {
   final Color? selectedTabBackgroundColor;
   final Color? selectedBorderColor;
   final Color? unSelectedTabBackgroundColor;
+  final void Function(int index, TabInfo tab)? onTabDetach;
 
   Rx<DesktopTabState> get state => controller.state;
 
@@ -1021,6 +1046,7 @@ class _ListView extends StatelessWidget {
     this.selectedTabBackgroundColor,
     this.unSelectedTabBackgroundColor,
     this.selectedBorderColor,
+    this.onTabDetach,
   });
 
   /// Check whether to show ListView
@@ -1097,7 +1123,25 @@ class _ListView extends StatelessWidget {
                     selectedBorderColor: selectedBorderColor,
                   ),
                 );
-                return GestureDetector(onPanStart: (e) {}, child: child);
+                double dragOffsetY = 0.0;
+                return GestureDetector(
+                  onPanStart: (e) {
+                    dragOffsetY = 0.0;
+                  },
+                  onPanUpdate: (details) {
+                    dragOffsetY += details.delta.dy;
+                    if (dragOffsetY > 65.0 && onTabDetach != null) {
+                      dragOffsetY = 0.0;
+                      onTabDetach?.call(index, tab);
+                    }
+                  },
+                  onPanEnd: (details) {
+                    if (details.velocity.pixelsPerSecond.dy > 120 && onTabDetach != null) {
+                      onTabDetach?.call(index, tab);
+                    }
+                  },
+                  child: child,
+                );
               }).toList(),
       ),
     );
@@ -1318,7 +1362,7 @@ class _CloseButton extends StatelessWidget {
             customBorder: const CircleBorder(),
             onTap: () => onClose(),
             child: Icon(
-              Icons.close,
+              CamelliaIcons.close,
               size: _kIconSize,
               color: tabSelected
                   ? MyTheme.tabbar(context).selectedIconColor
@@ -1362,12 +1406,14 @@ class _ActionIconState extends State<ActionIcon> {
 
   @override
   Widget build(BuildContext context) {
+    final glass = CamelliaGlassTokens.of(context);
+    final scheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: widget.message != null ? translate(widget.message!) : "",
       waitDuration: const Duration(seconds: 1),
       child: InkWell(
         hoverColor: widget.isClose
-            ? const Color.fromARGB(255, 196, 43, 28)
+            ? glass.statusAlert
             : MyTheme.tabbar(context).hoverColor,
         onHover: (value) => hover.value = value,
         onTap: widget.onTap,
@@ -1376,7 +1422,11 @@ class _ActionIconState extends State<ActionIcon> {
           height: widget.boxSize,
           width: widget.boxSize,
           child: widget.onTap == null
-              ? Icon(widget.icon, color: Colors.grey, size: widget.iconSize)
+              ? Icon(
+                  widget.icon,
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                  size: widget.iconSize,
+                )
               : Obx(
                   () => Icon(
                     widget.icon,
@@ -1399,7 +1449,7 @@ class AddButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return ActionIcon(
       message: 'New Connection',
-      icon: IconFont.add,
+      icon: CamelliaIcons.add,
       onTap: () =>
           rustDeskWinManager.call(WindowType.Main, kWindowMainWindowOnTop, ""),
       isClose: false,
@@ -1491,8 +1541,11 @@ class _TabDropDownButtonState extends State<_TabDropDownButton> {
                             onExit: (event) =>
                                 setState(() => btnHover.value = false),
                             child: Icon(
-                              Icons.close,
-                              color: btnHover.value ? Colors.red : null,
+                              CamelliaIcons.close,
+                              size: 16,
+                              color: btnHover.value
+                                  ? CamelliaGlassTokens.of(context).statusAlert
+                                  : null,
                             ),
                           ),
                         );
@@ -1541,30 +1594,71 @@ class TabbarTheme extends ThemeExtension<TabbarTheme> {
   });
 
   static const light = TabbarTheme(
-    selectedTabIconColor: MyTheme.accent,
-    unSelectedTabIconColor: Color.fromARGB(255, 162, 203, 241),
-    selectedTextColor: Colors.black,
-    unSelectedTextColor: Color.fromARGB(255, 112, 112, 112),
-    selectedIconColor: Color.fromARGB(255, 26, 26, 26),
-    unSelectedIconColor: Color.fromARGB(255, 96, 96, 96),
-    dividerColor: Color.fromARGB(255, 238, 238, 238),
-    hoverColor: Colors.white54,
-    closeHoverColor: Colors.white,
-    selectedTabBackgroundColor: Colors.white54,
+    selectedTabIconColor: CamelliaColors.indigo,
+    unSelectedTabIconColor: CamelliaColors.lightMuted,
+    selectedTextColor: CamelliaColors.lightText,
+    unSelectedTextColor: CamelliaColors.lightMuted,
+    selectedIconColor: CamelliaColors.lightText,
+    unSelectedIconColor: CamelliaColors.lightMuted,
+    dividerColor: CamelliaColors.lightBorder,
+    hoverColor: CamelliaColors.lightAccentWash,
+    closeHoverColor: CamelliaColors.lightRaised,
+    selectedTabBackgroundColor: CamelliaColors.lightSurface,
   );
 
   static const dark = TabbarTheme(
-    selectedTabIconColor: MyTheme.accent,
-    unSelectedTabIconColor: Color.fromARGB(255, 30, 65, 98),
-    selectedTextColor: Colors.white,
-    unSelectedTextColor: Color.fromARGB(255, 192, 192, 192),
-    selectedIconColor: Color.fromARGB(255, 192, 192, 192),
-    unSelectedIconColor: Color.fromARGB(255, 255, 255, 255),
-    dividerColor: Color.fromARGB(255, 64, 64, 64),
-    hoverColor: Colors.black26,
-    closeHoverColor: Colors.black,
-    selectedTabBackgroundColor: Colors.black26,
+    selectedTabIconColor: Color(0xFFAAA7FF),
+    unSelectedTabIconColor: CamelliaColors.darkMuted,
+    selectedTextColor: CamelliaColors.darkText,
+    unSelectedTextColor: CamelliaColors.darkMuted,
+    selectedIconColor: CamelliaColors.darkText,
+    unSelectedIconColor: CamelliaColors.darkMuted,
+    dividerColor: CamelliaColors.darkBorder,
+    hoverColor: CamelliaColors.darkAccentWash,
+    closeHoverColor: CamelliaColors.darkRaised,
+    selectedTabBackgroundColor: CamelliaColors.darkSurface,
   );
+
+  static const midnight = TabbarTheme(
+    selectedTabIconColor: CamelliaColors.orchid,
+    unSelectedTabIconColor: CamelliaColors.midnightMuted,
+    selectedTextColor: CamelliaColors.midnightText,
+    unSelectedTextColor: CamelliaColors.midnightMuted,
+    selectedIconColor: CamelliaColors.midnightText,
+    unSelectedIconColor: CamelliaColors.midnightMuted,
+    dividerColor: CamelliaColors.midnightBorder,
+    hoverColor: CamelliaColors.midnightAccentWash,
+    closeHoverColor: CamelliaColors.midnightRaised,
+    selectedTabBackgroundColor: CamelliaColors.midnightSurface,
+  );
+
+  static TabbarTheme of(BuildContext context) {
+    final ext = Theme.of(context).extension<TabbarTheme>();
+    if (ext != null) return ext;
+    final glass = CamelliaGlassTokens.of(context);
+    if (glass.isMidnight) return TabbarTheme.midnight;
+    return Theme.of(context).brightness == Brightness.dark
+        ? TabbarTheme.dark
+        : TabbarTheme.light;
+  }
+
+  static TabbarTheme fromTokens(AppDesignTokens tokens, {required bool isDark}) {
+    return TabbarTheme(
+      selectedTabIconColor:
+          isDark ? const Color(0xFFAAA7FF) : CamelliaColors.indigo,
+      unSelectedTabIconColor: tokens.muted,
+      selectedTextColor:
+          isDark ? CamelliaColors.darkText : CamelliaColors.lightText,
+      unSelectedTextColor: tokens.muted,
+      selectedIconColor:
+          isDark ? CamelliaColors.darkText : CamelliaColors.lightText,
+      unSelectedIconColor: tokens.muted,
+      dividerColor: tokens.border,
+      hoverColor: tokens.accentContainer,
+      closeHoverColor: tokens.surfaceElevated,
+      selectedTabBackgroundColor: tokens.surface,
+    );
+  }
 
   @override
   ThemeExtension<TabbarTheme> copyWith({

@@ -161,6 +161,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     _blockableOverlayState.applyFfi(_ffi);
     // Call onSelected in post frame callback, since we cannot guarantee that the callback will not call setState.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        if (!_rawKeyFocusNode.hasFocus) {
+          _rawKeyFocusNode.requestFocus();
+        }
+        _ffi.inputModel.enterOrLeave(true);
+      }
       widget.tabController?.onSelected?.call(widget.id);
     });
   }
@@ -176,6 +182,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       // unfocus the primary-focus when the whole window is lost focus,
       // and let OS to handle events instead.
       _rawKeyFocusNode.unfocus();
+      _ffi.inputModel.enterOrLeave(false);
     }
     stateGlobal.isFocused.value = false;
   }
@@ -186,6 +193,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     // See [onWindowBlur].
     if (isWindows) {
       _isWindowBlur = false;
+      if (!_rawKeyFocusNode.hasFocus) {
+        _rawKeyFocusNode.requestFocus();
+      }
+      _ffi.inputModel.enterOrLeave(true);
     }
     stateGlobal.isFocused.value = true;
   }
@@ -197,6 +208,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     // a minimized state.
     if (isWindows) {
       _isWindowBlur = false;
+      if (!_rawKeyFocusNode.hasFocus) {
+        _rawKeyFocusNode.requestFocus();
+      }
+      _ffi.inputModel.enterOrLeave(true);
     }
     WakelockManager.enable(_uniqueKey);
   }
@@ -264,6 +279,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
   @override
   void dispose() {
+    _ffi.inputModel.enterOrLeave(false);
     DesktopMultiWindow.removeListener(this);
     _ffi.dialogManager.hideMobileActionsOverlay();
     _ffi.dialogManager.dismissAll();
@@ -386,10 +402,11 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         clientClose(sessionId, _ffi);
-        return false;
       },
       child: MultiProvider(
         providers: [
@@ -415,12 +432,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       }
     }
     // See [onWindowBlur].
-    if (!isWindows) {
-      if (!_rawKeyFocusNode.hasFocus) {
-        _rawKeyFocusNode.requestFocus();
-      }
-      _ffi.inputModel.enterOrLeave(true);
+    if (!_rawKeyFocusNode.hasFocus) {
+      _rawKeyFocusNode.requestFocus();
     }
+    _ffi.inputModel.enterOrLeave(true);
   }
 
   void leaveView(PointerExitEvent evt) {
@@ -438,9 +453,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       }
     }
     // See [onWindowBlur].
-    if (!isWindows) {
-      _ffi.inputModel.enterOrLeave(false);
-    }
+    _ffi.inputModel.enterOrLeave(false);
   }
 
   Widget _buildRawTouchAndPointerRegion(
@@ -691,10 +704,12 @@ class _ImagePaintState extends State<ImagePaint> {
         );
       }
     }
-    return SizedBox(
-      width: size.width,
-      height: size.height,
-      child: Stack(children: children),
+    return RepaintBoundary(
+      child: SizedBox(
+        width: size.width,
+        height: size.height,
+        child: Stack(children: children),
+      ),
     );
   }
 

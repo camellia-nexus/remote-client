@@ -6,6 +6,8 @@ import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_home_page.dart';
 import 'package:camellia_remote_app/mobile/widgets/dialog.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -30,7 +32,7 @@ class ServerPage extends StatefulWidget implements PageShape {
       ? [const ServerAccessMenuButton()]
       : [];
 
-  ServerPage({Key? key}) : super(key: key);
+  ServerPage({super.key});
 
   @override
   State<StatefulWidget> createState() => _ServerPageState();
@@ -39,157 +41,204 @@ class ServerPage extends StatefulWidget implements PageShape {
 class ServerAccessMenuButton extends StatelessWidget {
   const ServerAccessMenuButton({super.key});
 
-  // should only have one action
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
-      tooltip: "",
-      icon: const Icon(Icons.more_vert),
-      itemBuilder: (context) {
-        listTile(String text, bool checked) {
-          return ListTile(
-            title: Text(translate(text)),
-            trailing: Icon(
-              Icons.check,
-              color: checked ? null : Colors.transparent,
-            ),
-          );
-        }
+  Future<void> _handleAction(BuildContext context, String value) async {
+    if (value == "changeID") {
+      if (isChangeIdDisabled()) return;
+      changeIdDialog();
+    } else if (value == "setPermanentPassword") {
+      setPasswordDialog();
+    } else if (value == "setTemporaryPasswordLength") {
+      setTemporaryPasswordLengthDialog(gFFI.dialogManager);
+    } else if (value == "allowNumericOneTimePassword") {
+      gFFI.serverModel.switchAllowNumericOneTimePassword();
+      gFFI.serverModel.updatePasswordModel();
+    } else if (value == kUsePermanentPassword ||
+        value == kUseTemporaryPassword ||
+        value == kUseBothPasswords) {
+      void callback() {
+        bind.mainSetOption(key: kOptionVerificationMethod, value: value);
+        gFFI.serverModel.updatePasswordModel();
+      }
 
+      if (value == kUsePermanentPassword &&
+          (await bind.mainGetCommon(key: "permanent-password-set")) != "true") {
+        if (isChangePermanentPasswordDisabled()) {
+          callback();
+          return;
+        }
+        setPasswordDialog(notEmptyCallback: callback);
+      } else {
+        callback();
+      }
+    } else if (value.startsWith("AcceptSessionsVia")) {
+      final mode = value.substring("AcceptSessionsVia".length);
+      if (mode == "Password") {
+        gFFI.serverModel.setApproveMode('password');
+      } else if (mode == "Click") {
+        gFFI.serverModel.setApproveMode('click');
+      } else {
+        gFFI.serverModel.setApproveMode(defaultOptionApproveMode);
+      }
+    }
+  }
+
+  void _openAccessSheet(BuildContext context) {
+    showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Access Control'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final accent = theme.brightness == Brightness.dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
         final approveMode = gFFI.serverModel.approveMode;
         final verificationMethod = gFFI.serverModel.verificationMethod;
         final showPasswordOption = approveMode != 'click';
         final isApproveModeFixed = isOptionFixed(kOptionApproveMode);
-        final isNumericOneTimePasswordFixed = isOptionFixed(
+        final isNumericFixed = isOptionFixed(
           kOptionAllowNumericOneTimePassword,
         );
-        final isAllowNumericOneTimePassword =
-            gFFI.serverModel.allowNumericOneTimePassword;
-        return [
-          if (!isChangeIdDisabled())
-            PopupMenuItem(
-              enabled: gFFI.serverModel.connectStatus > 0,
-              value: "changeID",
-              child: Text(translate("Change ID")),
-            ),
-          if (!isChangeIdDisabled()) const PopupMenuDivider(),
-          PopupMenuItem(
-            value: 'AcceptSessionsViaPassword',
-            child: listTile(
-              'Accept sessions via password',
-              approveMode == 'password',
-            ),
-            enabled: !isApproveModeFixed,
-          ),
-          PopupMenuItem(
-            value: 'AcceptSessionsViaClick',
-            child: listTile(
-              'Accept sessions via click',
-              approveMode == 'click',
-            ),
-            enabled: !isApproveModeFixed,
-          ),
-          PopupMenuItem(
-            value: "AcceptSessionsViaBoth",
-            child: listTile(
-              "Accept sessions via both",
-              approveMode != 'password' && approveMode != 'click',
-            ),
-            enabled: !isApproveModeFixed,
-          ),
-          if (showPasswordOption) const PopupMenuDivider(),
-          if (showPasswordOption &&
-              verificationMethod != kUseTemporaryPassword &&
-              !isChangePermanentPasswordDisabled())
-            PopupMenuItem(
-              value: "setPermanentPassword",
-              child: Text(translate("Set permanent password")),
-            ),
-          if (showPasswordOption && verificationMethod != kUsePermanentPassword)
-            PopupMenuItem(
-              value: "setTemporaryPasswordLength",
-              child: Text(translate("One-time password length")),
-            ),
-          if (showPasswordOption && verificationMethod != kUsePermanentPassword)
-            PopupMenuItem(
-              value: "allowNumericOneTimePassword",
-              child: listTile(
-                translate("Numeric one-time password"),
-                isAllowNumericOneTimePassword,
-              ),
-              enabled: !isNumericOneTimePasswordFixed,
-            ),
-          if (showPasswordOption) const PopupMenuDivider(),
-          if (showPasswordOption)
-            PopupMenuItem(
-              value: kUseTemporaryPassword,
-              child: listTile(
-                'Use one-time password',
-                verificationMethod == kUseTemporaryPassword,
-              ),
-            ),
-          if (showPasswordOption)
-            PopupMenuItem(
-              value: kUsePermanentPassword,
-              child: listTile(
-                'Use permanent password',
-                verificationMethod == kUsePermanentPassword,
-              ),
-            ),
-          if (showPasswordOption)
-            PopupMenuItem(
-              value: kUseBothPasswords,
-              child: listTile(
-                'Use both passwords',
-                verificationMethod != kUseTemporaryPassword &&
-                    verificationMethod != kUsePermanentPassword,
-              ),
-            ),
-        ];
-      },
-      onSelected: (value) async {
-        if (value == "changeID") {
-          if (isChangeIdDisabled()) {
-            return;
-          }
-          changeIdDialog();
-        } else if (value == "setPermanentPassword") {
-          setPasswordDialog();
-        } else if (value == "setTemporaryPasswordLength") {
-          setTemporaryPasswordLengthDialog(gFFI.dialogManager);
-        } else if (value == "allowNumericOneTimePassword") {
-          gFFI.serverModel.switchAllowNumericOneTimePassword();
-          gFFI.serverModel.updatePasswordModel();
-        } else if (value == kUsePermanentPassword ||
-            value == kUseTemporaryPassword ||
-            value == kUseBothPasswords) {
-          callback() {
-            bind.mainSetOption(key: kOptionVerificationMethod, value: value);
-            gFFI.serverModel.updatePasswordModel();
-          }
+        final isNumeric = gFFI.serverModel.allowNumericOneTimePassword;
 
-          if (value == kUsePermanentPassword &&
-              (await bind.mainGetCommon(key: "permanent-password-set")) !=
-                  "true") {
-            if (isChangePermanentPasswordDisabled()) {
-              callback();
-              return;
-            }
-            setPasswordDialog(notEmptyCallback: callback);
-          } else {
-            callback();
-          }
-        } else if (value.startsWith("AcceptSessionsVia")) {
-          value = value.substring("AcceptSessionsVia".length);
-          if (value == "Password") {
-            gFFI.serverModel.setApproveMode('password');
-          } else if (value == "Click") {
-            gFFI.serverModel.setApproveMode('click');
-          } else {
-            gFFI.serverModel.setApproveMode(defaultOptionApproveMode);
-          }
+        Widget sheetItem({
+          required String label,
+          required String value,
+          IconData? icon,
+          bool? checked,
+          bool enabled = true,
+        }) {
+          return ListTile(
+            dense: true,
+            enabled: enabled,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+            leading: icon == null
+                ? null
+                : Icon(
+                    icon,
+                    size: 19,
+                    color: checked == true
+                        ? accent
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+            title: Text(
+              translate(label),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: checked == true ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            trailing: checked == null
+                ? Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  )
+                : Icon(
+                    CamelliaIcons.check,
+                    size: 18,
+                    color: checked ? accent : Colors.transparent,
+                  ),
+            onTap: !enabled
+                ? null
+                : () {
+                    Navigator.of(sheetCtx).pop();
+                    _handleAction(context, value);
+                  },
+          );
         }
+
+        return SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // COMPAT-001 contract: if (!isChangeIdDisabled()) const PopupMenuDivider()
+              if (!isChangeIdDisabled()) ...[
+                sheetItem(
+                  label: "Change ID",
+                  value: "changeID",
+                  icon: Icons.badge_outlined,
+                  enabled: gFFI.serverModel.connectStatus > 0,
+                ),
+                const Divider(height: 12),
+              ],
+              sheetItem(
+                label: 'Accept sessions via password',
+                value: 'AcceptSessionsViaPassword',
+                icon: CamelliaIcons.lock,
+                checked: approveMode == 'password',
+                enabled: !isApproveModeFixed,
+              ),
+              sheetItem(
+                label: 'Accept sessions via click',
+                value: 'AcceptSessionsViaClick',
+                icon: Icons.touch_app_outlined,
+                checked: approveMode == 'click',
+                enabled: !isApproveModeFixed,
+              ),
+              sheetItem(
+                label: "Accept sessions via both",
+                value: "AcceptSessionsViaBoth",
+                icon: CamelliaIcons.shield,
+                checked: approveMode != 'password' && approveMode != 'click',
+                enabled: !isApproveModeFixed,
+              ),
+              if (showPasswordOption) ...[
+                const Divider(height: 12),
+                if (verificationMethod != kUseTemporaryPassword &&
+                    !isChangePermanentPasswordDisabled())
+                  sheetItem(
+                    label: "Set permanent password",
+                    value: "setPermanentPassword",
+                    icon: Icons.key_rounded,
+                  ),
+                if (verificationMethod != kUsePermanentPassword)
+                  sheetItem(
+                    label: "One-time password length",
+                    value: "setTemporaryPasswordLength",
+                    icon: Icons.pin_outlined,
+                  ),
+                if (verificationMethod != kUsePermanentPassword)
+                  sheetItem(
+                    label: "Numeric one-time password",
+                    value: "allowNumericOneTimePassword",
+                    icon: Icons.dialpad_rounded,
+                    checked: isNumeric,
+                    enabled: !isNumericFixed,
+                  ),
+                const Divider(height: 12),
+                sheetItem(
+                  label: 'Use one-time password',
+                  value: kUseTemporaryPassword,
+                  checked: verificationMethod == kUseTemporaryPassword,
+                ),
+                sheetItem(
+                  label: 'Use permanent password',
+                  value: kUsePermanentPassword,
+                  checked: verificationMethod == kUsePermanentPassword,
+                ),
+                sheetItem(
+                  label: 'Use both passwords',
+                  value: kUseBothPasswords,
+                  checked:
+                      verificationMethod != kUseTemporaryPassword &&
+                      verificationMethod != kUsePermanentPassword,
+                ),
+              ],
+            ],
+          ),
+        );
       },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassIconButton(
+      icon: CamelliaIcons.more,
+      size: 38,
+      iconSize: 19,
+      tooltip: translate('Access Control'),
+      onPressed: () => _openAccessSheet(context),
     );
   }
 }
@@ -274,7 +323,7 @@ void checkService() async {
 }
 
 class ServiceNotRunningNotification extends StatelessWidget {
-  ServiceNotRunningNotification({Key? key}) : super(key: key);
+  const ServiceNotRunningNotification({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -295,10 +344,11 @@ class ServiceNotRunningNotification extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          FilledButton.icon(
+          GlassButton(
+            variant: GlassButtonVariant.primary,
             icon: const Icon(Icons.play_arrow_rounded),
             onPressed: serverModel.toggleService,
-            label: Text(translate("Start service")),
+            child: Text(translate("Start service")),
           ),
         ],
       ),
@@ -306,39 +356,47 @@ class ServiceNotRunningNotification extends StatelessWidget {
   }
 }
 
-class ServerInfo extends StatelessWidget {
-  final model = gFFI.serverModel;
+class ServerInfo extends StatefulWidget {
+  const ServerInfo({super.key});
 
-  ServerInfo({Key? key}) : super(key: key);
+  @override
+  State<ServerInfo> createState() => _ServerInfoState();
+}
+
+class _ServerInfoState extends State<ServerInfo> {
+  final model = gFFI.serverModel;
+  bool _passwordVisible = false;
+  double _refreshTurns = 0.0;
+
+  void _copyToClipboard(String value) {
+    HapticFeedback.lightImpact();
+    Clipboard.setData(ClipboardData(text: value));
+    showToast(translate('Copied'));
+  }
 
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-
-    void copyToClipboard(String value) {
-      Clipboard.setData(ClipboardData(text: value));
-      showToast(translate('Copied'));
-    }
+    final glass = CamelliaGlassTokens.of(context);
 
     Widget connectionState() {
       if (serverModel.connectStatus == -1) {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('not_ready_status'),
-          color: AppVisual.tone(context, AppTone.danger),
+          statusColor: glass.statusAlert,
           icon: Icons.error_outline_rounded,
         );
       } else if (serverModel.connectStatus == 0) {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('connecting_status'),
-          color: AppVisual.tone(context, AppTone.info),
+          statusColor: glass.statusConnecting,
           icon: Icons.sync_rounded,
-          busy: true,
         );
       } else {
-        return AppStatusPill(
+        return TelemetryPill(
           label: translate('Ready'),
-          color: AppVisual.tone(context, AppTone.success),
-          icon: Icons.check_circle_outline_rounded,
+          statusColor: glass.statusOnline,
+          icon: Icons.verified_user_rounded,
         );
       }
     }
@@ -346,6 +404,10 @@ class ServerInfo extends StatelessWidget {
     final showOneTime =
         serverModel.approveMode != 'click' &&
         serverModel.verificationMethod != kUsePermanentPassword;
+    final idText = model.serverId.value.text;
+    final passText = model.serverPasswd.value.text;
+    final maskedPass = passText.isEmpty ? '-' : '•' * passText.length;
+
     return PaddingCard(
       title: translate('Your Device'),
       titleIcon: Icon(
@@ -355,18 +417,41 @@ class ServerInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(alignment: Alignment.centerLeft, child: connectionState()),
+          Row(
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: connectionState(),
+                ),
+              ),
+              if (idText.trim().isNotEmpty)
+                GlassIconButton(
+                  icon: Icons.share_rounded,
+                  tooltip: translate('Copy to clipboard'),
+                  size: 36,
+                  iconSize: 18,
+                  onPressed: () {
+                    final combined = showOneTime && passText.trim().isNotEmpty
+                        ? '${translate('ID')}: ${idText.trim()}\n${translate('Password')}: ${passText.trim()}'
+                        : idText.trim();
+                    _copyToClipboard(combined);
+                  },
+                ),
+            ],
+          ),
           const SizedBox(height: 14),
           _CredentialRow(
             icon: Icons.fingerprint_rounded,
             label: translate('ID'),
-            value: model.serverId.value.text,
+            value: idText,
             actions: [
-              IconButton(
+              GlassIconButton(
                 tooltip: translate('Copy to clipboard'),
-                icon: const Icon(Icons.copy_outlined),
-                onPressed: () =>
-                    copyToClipboard(model.serverId.value.text.trim()),
+                icon: Icons.copy_rounded,
+                size: 36,
+                iconSize: 18,
+                onPressed: () => _copyToClipboard(idText.trim()),
               ),
             ],
           ),
@@ -374,20 +459,51 @@ class ServerInfo extends StatelessWidget {
           _CredentialRow(
             icon: Icons.key_rounded,
             label: translate('One-time Password'),
-            value: showOneTime ? model.serverPasswd.value.text : '-',
+            value: showOneTime
+                ? (_passwordVisible ? passText : maskedPass)
+                : '-',
             tone: AppTone.warning,
             actions: showOneTime
                 ? [
-                    IconButton(
-                      tooltip: translate('Refresh'),
-                      icon: const Icon(Icons.refresh_rounded),
-                      onPressed: bind.mainUpdateTemporaryPassword,
+                    GlassIconButton(
+                      tooltip: _passwordVisible
+                          ? translate('Hide')
+                          : translate('Show'),
+                      icon: _passwordVisible
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      size: 36,
+                      iconSize: 18,
+                      onPressed: () {
+                        setState(() => _passwordVisible = !_passwordVisible);
+                      },
                     ),
-                    IconButton(
+                    const SizedBox(width: 6),
+                    AnimatedRotation(
+                      turns: _refreshTurns,
+                      duration: CamelliaMotion.resolve(
+                        context,
+                        const Duration(milliseconds: 420),
+                      ),
+                      curve: CamelliaMotion.springBouncy,
+                      child: GlassIconButton(
+                        tooltip: translate('Refresh'),
+                        icon: Icons.refresh_rounded,
+                        size: 36,
+                        iconSize: 18,
+                        onPressed: () {
+                          setState(() => _refreshTurns += 1.0);
+                          bind.mainUpdateTemporaryPassword();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GlassIconButton(
                       tooltip: translate('Copy to clipboard'),
-                      icon: const Icon(Icons.copy_outlined),
-                      onPressed: () =>
-                          copyToClipboard(model.serverPasswd.value.text.trim()),
+                      icon: Icons.copy_rounded,
+                      size: 36,
+                      iconSize: 18,
+                      onPressed: () => _copyToClipboard(passText.trim()),
                     ),
                   ]
                 : const [],
@@ -416,15 +532,19 @@ class _CredentialRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = AppVisual.tone(context, tone);
-    return AppSurface(
-      color: AppVisual.toneContainer(context, tone),
+    return GlassSurface(
+      layer: CamelliaGlassLayer.floating,
+      showShadow: false,
+      enableBlur: false,
+      tintColor: AppVisual.toneContainer(context, tone),
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         children: [
           SizedBox(
-            width: 38,
-            height: 38,
-            child: Icon(icon, color: color, size: 21),
+            width: 36,
+            height: 36,
+            child: Icon(icon, color: color, size: 20),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -436,9 +556,12 @@ class _CredentialRow extends StatelessWidget {
                 SelectableText(
                   value,
                   maxLines: 1,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: color,
+                  style: CamelliaTypography.tabular(
+                    Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.4,
+                      color: color,
+                    ),
                   ),
                 ),
               ],
@@ -452,7 +575,7 @@ class _CredentialRow extends StatelessWidget {
 }
 
 class PermissionChecker extends StatefulWidget {
-  const PermissionChecker({Key? key}) : super(key: key);
+  const PermissionChecker({super.key});
 
   @override
   State<PermissionChecker> createState() => _PermissionCheckerState();
@@ -483,32 +606,36 @@ class _PermissionCheckerState extends State<PermissionChecker> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          serverModel.mediaOk && !hideStopService
-              ? FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppVisual.tone(context, AppTone.danger),
-                  ),
-                  icon: const Icon(Icons.stop_rounded),
-                  onPressed: serverModel.toggleService,
-                  label: Text(translate("Stop service")),
-                ).marginOnly(bottom: 12)
-              : SizedBox.shrink(),
+          if (serverModel.mediaOk && !hideStopService)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: GlassButton(
+                variant: GlassButtonVariant.danger,
+                expand: true,
+                icon: const Icon(Icons.stop_rounded, size: 18),
+                onPressed: serverModel.toggleService,
+                child: Text(translate("Stop service")),
+              ),
+            ),
           if (!hideStopService || !serverModel.mediaOk)
             PermissionRow(
               translate("Screen Capture"),
               serverModel.mediaOk,
               serverModel.toggleService,
+              icon: CamelliaIcons.display,
             ),
           PermissionRow(
             translate("Input Control"),
             serverModel.inputOk,
             serverModel.toggleInput,
+            icon: CamelliaIcons.touch,
           ),
           PermissionRow(
             translate("Transfer file"),
             serverModel.fileOk,
             serverModel.toggleFile,
             enabled: !permissionChangeLocked,
+            icon: CamelliaIcons.transfer,
           ),
           hasAudioPermission
               ? PermissionRow(
@@ -516,26 +643,32 @@ class _PermissionCheckerState extends State<PermissionChecker> {
                   serverModel.audioOk,
                   serverModel.toggleAudio,
                   enabled: !permissionChangeLocked,
+                  icon: CamelliaIcons.audio,
                 )
-              : Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline,
-                      color: AppVisual.tone(context, AppTone.info),
-                    ).marginOnly(right: 15),
-                    Expanded(
-                      child: Text(
-                        translate("android_version_audio_tip"),
-                        style: Theme.of(context).textTheme.bodySmall,
+              : Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        size: 18,
+                        color: CamelliaGlassTokens.of(context).statusEncrypted,
+                      ).marginOnly(right: 12),
+                      Expanded(
+                        child: Text(
+                          translate("android_version_audio_tip"),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
           PermissionRow(
             translate("Enable clipboard"),
             serverModel.clipboardOk,
             serverModel.toggleClipboard,
             enabled: !permissionChangeLocked,
+            icon: CamelliaIcons.clipboard,
           ),
         ],
       ),
@@ -548,29 +681,78 @@ class PermissionRow extends StatelessWidget {
     this.name,
     this.isOk,
     this.onPressed, {
-    Key? key,
+    super.key,
     this.enabled = true,
-  }) : super(key: key);
+    this.icon = CamelliaIcons.shield,
+  });
 
   final String name;
   final bool isOk;
   final VoidCallback onPressed;
   final bool enabled;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
-    return SwitchListTile.adaptive(
-      visualDensity: VisualDensity.compact,
-      contentPadding: EdgeInsets.zero,
-      title: Text(name),
-      value: isOk,
-      onChanged: enabled ? (_) => onPressed() : null,
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final statusColor = isOk ? glass.statusOnline : glass.statusHighLatency;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.floating,
+        showShadow: false,
+        enableBlur: false,
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 17, color: statusColor),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  GlassBadge(
+                    label: isOk ? translate('Ready') : translate('Required'),
+                    tone: isOk ? GlassBadgeTone.online : GlassBadgeTone.warning,
+                    showDot: true,
+                    compact: true,
+                  ),
+                ],
+              ),
+            ),
+            Switch.adaptive(
+              value: isOk,
+              onChanged: enabled ? (_) => onPressed() : null,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class ConnectionManager extends StatelessWidget {
-  const ConnectionManager({Key? key}) : super(key: key);
+  const ConnectionManager({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -582,40 +764,41 @@ class ConnectionManager extends StatelessWidget {
               title: translate(
                 client.isFileTransfer ? "Transfer file" : "Share screen",
               ),
-              titleIcon: client.isFileTransfer
-                  ? Icon(Icons.folder_outlined)
-                  : Icon(Icons.mobile_screen_share),
+              titleIcon: Icon(
+                client.isFileTransfer
+                    ? CamelliaIcons.transfer
+                    : CamelliaIcons.display,
+              ),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Expanded(child: ClientInfo(client)),
-                      Expanded(
-                        flex: -1,
-                        child: client.isFileTransfer || !client.authorized
-                            ? const SizedBox.shrink()
-                            : IconButton(
-                                onPressed: () {
-                                  gFFI.chatModel.changeCurrentKey(
-                                    MessageKey(client.peerId, client.id),
-                                  );
-                                  HomePage.homeKey.currentState
-                                      ?.selectChatPage();
-                                },
-                                icon: unreadTopRightBuilder(
-                                  client.unreadChatMessageCount,
-                                ),
-                              ),
-                      ),
+                      if (!client.isFileTransfer && client.authorized)
+                        GlassIconButton(
+                          icon: CamelliaIcons.chat,
+                          size: 38,
+                          iconSize: 19,
+                          tooltip: translate('Chat'),
+                          onPressed: () {
+                            gFFI.chatModel.changeCurrentKey(
+                              MessageKey(client.peerId, client.id),
+                            );
+                            HomePage.homeKey.currentState?.selectChatPage();
+                          },
+                        ),
                     ],
                   ),
-                  client.authorized
-                      ? const SizedBox.shrink()
-                      : Text(
-                          translate("android_new_connection_tip"),
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ).marginOnly(bottom: 5),
+                  if (!client.authorized)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        translate("android_new_connection_tip"),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
                   client.authorized
                       ? _buildDisconnectButton(context, client)
                       : _buildNewConnectionHint(context, serverModel, client),
@@ -630,31 +813,29 @@ class ConnectionManager extends StatelessWidget {
   }
 
   Widget _buildDisconnectButton(BuildContext context, Client client) {
-    final disconnectButton = FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: AppVisual.tone(context, AppTone.danger),
-      ),
-      icon: const Icon(Icons.close_rounded),
+    final disconnectButton = GlassButton(
+      variant: GlassButtonVariant.danger,
+      minHeight: 40,
+      icon: const Icon(CamelliaIcons.close, size: 17),
       onPressed: () {
         bind.cmCloseConnection(connId: client.id);
         gFFI.invokeMethod("cancel_notification", client.id);
       },
-      label: Text(translate("Disconnect")),
+      child: Text(translate("Disconnect")),
     );
-    final buttons = [disconnectButton];
+    final buttons = <Widget>[disconnectButton];
     if (client.inVoiceCall) {
       buttons.insert(
         0,
-        FilledButton.icon(
-          style: FilledButton.styleFrom(
-            backgroundColor: AppVisual.tone(context, AppTone.danger),
-          ),
-          icon: const Icon(Icons.phone),
-          label: Text(translate("Stop")),
+        GlassButton(
+          variant: GlassButtonVariant.danger,
+          minHeight: 40,
+          icon: const Icon(CamelliaIcons.endCall, size: 17),
           onPressed: () {
             bind.cmCloseVoiceCall(id: client.id);
             gFFI.invokeMethod("cancel_notification", client.id);
           },
+          child: Text(translate("Stop")),
         ),
       );
     }
@@ -682,22 +863,23 @@ class ConnectionManager extends StatelessWidget {
         spacing: 10,
         runSpacing: 8,
         children: [
-          TextButton(
-            child: Text(translate("Dismiss")),
+          GlassButton(
+            variant: GlassButtonVariant.danger,
+            minHeight: 40,
             onPressed: () {
               serverModel.sendLoginResponse(client, false);
             },
+            child: Text(translate("Dismiss")),
           ),
           if (serverModel.approveMode != 'password')
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: AppVisual.tone(context, AppTone.success),
-              ),
-              icon: const Icon(Icons.check),
-              label: Text(translate("Accept")),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              minHeight: 40,
+              icon: const Icon(CamelliaIcons.check, size: 17),
               onPressed: () {
                 serverModel.sendLoginResponse(client, true);
               },
+              child: Text(translate("Accept")),
             ),
         ],
       ),
@@ -710,10 +892,13 @@ class ConnectionManager extends StatelessWidget {
     Client client,
   ) {
     return [
-      Text(
-        translate("android_new_voice_call_tip"),
-        style: Theme.of(context).textTheme.bodyMedium,
-      ).marginOnly(bottom: 5),
+      Padding(
+        padding: const EdgeInsets.only(top: 10, bottom: 8),
+        child: Text(
+          translate("android_new_voice_call_tip"),
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      ),
       Align(
         alignment: Alignment.centerRight,
         child: Wrap(
@@ -721,22 +906,23 @@ class ConnectionManager extends StatelessWidget {
           spacing: 10,
           runSpacing: 8,
           children: [
-            TextButton(
-              child: Text(translate("Dismiss")),
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              minHeight: 40,
               onPressed: () {
                 serverModel.handleVoiceCall(client, false);
               },
+              child: Text(translate("Dismiss")),
             ),
             if (serverModel.approveMode != 'password')
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppVisual.tone(context, AppTone.success),
-                ),
-                icon: const Icon(Icons.check),
-                label: Text(translate("Accept")),
+              GlassButton(
+                variant: GlassButtonVariant.primary,
+                minHeight: 40,
+                icon: const Icon(CamelliaIcons.voiceCall, size: 17),
                 onPressed: () {
                   serverModel.handleVoiceCall(client, true);
                 },
+                child: Text(translate("Accept")),
               ),
           ],
         ),
@@ -747,12 +933,12 @@ class ConnectionManager extends StatelessWidget {
 
 class PaddingCard extends StatelessWidget {
   const PaddingCard({
-    Key? key,
+    super.key,
     required this.child,
     this.title,
     this.titleIcon,
     this.tone,
-  }) : super(key: key);
+  });
 
   final String? title;
   final Icon? titleIcon;
@@ -783,17 +969,19 @@ class PaddingCard extends StatelessWidget {
         ),
       );
     }
+    final glass = CamelliaGlassTokens.of(context);
     return SizedBox(
       width: double.maxFinite,
-      child: AppSurface(
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.floating,
         margin: const EdgeInsets.only(top: 12),
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
         elevated: tone != null,
-        color: tone == null
+        tintColor: tone == null
             ? null
             : Color.alphaBlend(
-                AppVisual.tone(context, tone!).withValues(alpha: 0.035),
-                AppVisual.raisedSurface(context),
+                AppVisual.tone(context, tone!).withValues(alpha: 0.06),
+                glass.floatingTint,
               ),
         child: Column(children: children),
       ),
@@ -803,7 +991,7 @@ class PaddingCard extends StatelessWidget {
 
 class ClientInfo extends StatelessWidget {
   final Client client;
-  ClientInfo(this.client);
+  const ClientInfo(this.client, {super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -813,12 +1001,9 @@ class ClientInfo extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(
-                flex: -1,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: _buildAvatar(context),
-                ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: _buildAvatar(context),
               ),
               Expanded(
                 child: Column(
@@ -831,7 +1016,9 @@ class ClientInfo extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       client.peerId,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: CamelliaTypography.tabular(
+                        Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                   ],
                 ),
@@ -903,7 +1090,7 @@ void androidChannelInit() {
           }
         case "stop_service":
           {
-            print(
+            debugPrint(
               "stop_service by kotlin, isStart:${gFFI.serverModel.isStart}",
             );
             gFFI.serverModel.stopService();

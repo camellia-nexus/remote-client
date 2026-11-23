@@ -362,20 +362,6 @@ class RelativeMouseModel {
     );
   }
 
-  /// Handle raw key events for relative mouse mode.
-  /// Returns true if the event was handled and should not be forwarded.
-  bool handleRawKeyEvent(RawKeyEvent e) {
-    final modifiers = e.data;
-    return _handleExitShortcut(
-      logicalKey: e.logicalKey,
-      isKeyUp: e is RawKeyUpEvent,
-      isKeyDown: e is RawKeyDownEvent,
-      ctrlPressed: modifiers.isControlPressed,
-      altPressed: modifiers.isAltPressed,
-      commandPressed: modifiers.isMetaPressed,
-    );
-  }
-
   void onEnterOrLeaveImage(bool enter) {
     if (!enabled.value) return;
 

@@ -54,13 +54,13 @@ class GestureIcons {
 typedef OnTouchModeChange = void Function(bool);
 
 class GestureHelp extends StatefulWidget {
-  GestureHelp({
-    Key? key,
+  const GestureHelp({
+    super.key,
     required this.touchMode,
     required this.onTouchModeChange,
     required this.virtualMouseMode,
     this.inputModel,
-  }) : super(key: key);
+  });
   final bool touchMode;
   final OnTouchModeChange onTouchModeChange;
   final VirtualMouseMode virtualMouseMode;
@@ -92,7 +92,7 @@ class _GestureHelpState extends State<GestureHelp> {
 
   @override
   Widget build(BuildContext context) {
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     final space = 12.0;
     var width = size.width - 2 * space;
     final minWidth = 90;
@@ -293,10 +293,9 @@ class _GestureHelpState extends State<GestureHelp> {
                 ],
               ),
             ),
-            Container(
-              child: Wrap(
-                spacing: space,
-                runSpacing: 2 * space,
+            Wrap(
+              spacing: space,
+              runSpacing: 2 * space,
                 children: _touchMode
                     ? [
                         GestureInfo(
@@ -375,7 +374,6 @@ class _GestureHelpState extends State<GestureHelp> {
                         ),
                       ],
               ),
-            ),
           ],
         ),
       ),
@@ -389,8 +387,8 @@ class GestureInfo extends StatelessWidget {
     this.icon,
     this.fromText,
     this.toText, {
-    Key? key,
-  }) : super(key: key);
+    super.key,
+  });
 
   final String fromText;
   final String toText;
@@ -402,7 +400,7 @@ class GestureInfo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: width,
       child: Column(
         children: [

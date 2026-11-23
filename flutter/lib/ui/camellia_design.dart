@@ -1,6 +1,24 @@
+import 'dart:ui';
+
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 
 enum CamelliaLanguage { english, simplifiedChinese, traditionalChinese }
+
+enum CamelliaThemeStyle {
+  auroraFrost,
+  obsidianCyber,
+  nordicTitanium;
+
+  static CamelliaThemeStyle fromString(String? value) {
+    return switch (value) {
+      'obsidianCyber' => CamelliaThemeStyle.obsidianCyber,
+      'nordicTitanium' => CamelliaThemeStyle.nordicTitanium,
+      _ => CamelliaThemeStyle.auroraFrost,
+    };
+  }
+}
 
 abstract final class CamelliaTypography {
   static const simplifiedFamily = 'CamelliaSansSC';
@@ -41,51 +59,347 @@ abstract final class CamelliaTypography {
       language == CamelliaLanguage.traditionalChinese
       ? traditionalFamily
       : simplifiedFamily;
+
+  /// Enforces tabular numerals (`tabular-nums`) for device IDs, passcodes,
+  /// live telemetry (ms / FPS / Mbps), and file transfer progress counters.
+  static TextStyle tabular(TextStyle? base) => (base ?? const TextStyle())
+      .copyWith(fontFeatures: const <FontFeature>[FontFeature.tabularFigures()]);
 }
 
 abstract final class CamelliaColors {
-  static const indigo = Color(0xFF6558F5);
+  // Refined Sapphire-Indigo + Glacier-Aqua palette (WCAG AA+ across all 3 themes)
+  static const indigo = Color(0xFF4F46E5);
   static const indigoStrong = Color(0xFF4338CA);
-  static const indigoSoft = Color(0xFFECEAFF);
-  static const coral = Color(0xFFFF5C7A);
-  static const coralStrong = Color(0xFFD83A5B);
-  static const azure = Color(0xFF1B8FFF);
-  static const azureStrong = Color(0xFF0068C9);
-  static const aqua = Color(0xFF19BFA9);
-  static const aquaStrong = Color(0xFF087F73);
-  static const orchid = Color(0xFF8C63F7);
-  static const sun = Color(0xFFF0A202);
-  static const sunStrong = Color(0xFF9A6200);
-  static const leaf = Color(0xFF16A36A);
+  static const indigoDark = Color(0xFF6063F1);
+  static const indigo50 = Color(0x804F46E5);
+  static const indigo80 = Color(0xCC4F46E5);
+  static const indigoSoft = Color(0xFFEEF2FF);
+  static const coral = Color(0xFFE11D48);
+  static const coralStrong = Color(0xFFBE123C);
+  static const azure = Color(0xFF3B82F6);
+  static const azureStrong = Color(0xFF2563EB);
+  static const aqua = Color(0xFF06B6D4);
+  static const aquaStrong = Color(0xFF0891B2);
+  static const orchid = Color(0xFF818CF8);
+  static const sun = Color(0xFFD97706);
+  static const sunStrong = Color(0xFFB45309);
+  static const leaf = Color(0xFF10B981);
 
-  static const portalBlue = Color(0xFF1BA7FF);
-  static const portalIndigo = Color(0xFF6558F5);
-  static const portalGlow = Color(0xFFFF5C7A);
-  static const portalPlateLight = Color(0xFFF3F5FF);
-  static const portalPlateDark = Color(0xFF121522);
-  static const portalPlateBorderLight = Color(0xFFD9DDF2);
-  static const portalPlateBorderDark = Color(0xFF343951);
-  static const portalCutoutLight = Color(0xFFF9FAFF);
-  static const portalCutoutDark = Color(0xFF0B0D15);
+  // Remote-desktop semantic status tokens (WCAG AA+ balanced for glass overlays)
+  static const statusOnlineLight = Color(0xFF10B981);
+  static const statusOnlineDark = Color(0xFF34D399);
+  static const statusOfflineLight = Color(0xFF94A3B8);
+  static const statusOfflineDark = Color(0xFF64748B);
+  static const statusOfflineMidnight = Color(0xFF52525B);
+  static const statusConnectingLight = Color(0xFF3B82F6);
+  static const statusConnectingDark = Color(0xFF60A5FA);
+  static const statusHighLatencyLight = Color(0xFFD97706);
+  static const statusHighLatencyDark = Color(0xFFFBBF24);
+  static const statusEncryptedLight = Color(0xFF0891B2);
+  static const statusEncryptedDark = Color(0xFF22D3EE);
+  static const statusAlertLight = Color(0xFFE11D48);
+  static const statusAlertDark = Color(0xFFFB7185);
 
-  static const lightCanvas = Color(0xFFF4F7FC);
+  static const portalBlue = Color(0xFF38BDF8);
+  static const portalIndigo = indigo;
+  static const portalGlow = aqua;
+  static const portalPlateLight = Color(0xFFF3F6FF);
+  static const portalPlateDark = Color(0xFF111827);
+  static const portalPlateBorderLight = Color(0xFFD5DFEC);
+  static const portalPlateBorderDark = Color(0xFF2B3A55);
+  static const portalCutoutLight = Color(0xFFF8FAFF);
+  static const portalCutoutDark = Color(0xFF080D18);
+
+  static const lightCanvas = Color(0xFFF4F7FB);
   static const lightSurface = Color(0xFFFCFDFF);
-  static const lightInset = Color(0xFFEDF3FB);
+  static const lightInset = Color(0xFFEEF2F7);
   static const lightRaised = Color(0xFFFFFFFF);
-  static const lightBorder = Color(0xFFD6DFEC);
-  static const lightText = Color(0xFF172033);
-  static const lightMuted = Color(0xFF617087);
+  static const lightBorder = Color(0xFFD5DFEC);
+  static const lightBorderStrong = Color(0xFFBCC9DB);
+  static const lightText = Color(0xFF0F172A);
+  static const lightMuted = Color(0xFF526077);
+  static const lightErrorBanner = Color(0xFFFFF1F2);
 
-  static const darkCanvas = Color(0xFF090F1D);
-  static const darkSurface = Color(0xFF111A2B);
-  static const darkInset = Color(0xFF18243A);
-  static const darkRaised = Color(0xFF202E47);
-  static const darkBorder = Color(0xFF30405C);
-  static const darkText = Color(0xFFEDF4FF);
-  static const darkMuted = Color(0xFF9AAAC2);
+  static const darkCanvas = Color(0xFF080D18);
+  static const darkSurface = Color(0xFF101829);
+  static const darkInset = Color(0xFF162136);
+  static const darkRaised = Color(0xFF1C2942);
+  static const darkBorder = Color(0xFF2B3A55);
+  static const darkBorderStrong = Color(0xFF3B4E70);
+  static const darkText = Color(0xFFF1F5F9);
+  static const darkMuted = Color(0xFF94A3B8);
+  static const darkErrorBanner = Color(0xFF3A1222);
+
+  // OLED Pure Black (Midnight) surface ramp
+  static const midnightCanvas = Color(0xFF000000);
+  static const midnightSurface = Color(0xFF0B0F19);
+  static const midnightInset = Color(0xFF111726);
+  static const midnightRaised = Color(0xFF161E2E);
+  static const midnightBorder = Color(0xFF253047);
+  static const midnightBorderStrong = Color(0xFF33415C);
+  static const midnightText = Color(0xFFF8FAFC);
+  static const midnightMuted = Color(0xFF94A3B8);
+  static const midnightErrorBanner = Color(0xFF2E0D1B);
 
   static const lightAccentWash = indigoSoft;
-  static const darkAccentWash = Color(0xFF29264F);
+  static const darkAccentWash = Color(0xFF242654);
+  static const midnightAccentWash = Color(0xFF1C1E45);
+
+  static const tooltipLightBg = Color(0xFF0F172A);
+  static const tooltipDarkBg = Color(0xFF182234);
+  static const tooltipText = Color(0xFFF8FAFC);
+
+  static const shadowLight = Color(0x120F172A);
+  static const shadowLightStrong = Color(0x240F172A);
+  static const shadowDark = Color(0x52000000);
+  static const shadowDarkStrong = Color(0x66000000);
+  static const shadowMidnight = Color(0x80000000);
+  static const shadowMidnightStrong = Color(0xA6000000);
+}
+
+/// Four-tier Soft Frosted Glass / Liquid Depth hierarchy.
+enum CamelliaGlassLayer { canvas, sidebar, floating, modal }
+
+/// Soft Frosted Glass material & specular edge tokens registered via [ThemeExtension].
+class CamelliaGlassTokens extends ThemeExtension<CamelliaGlassTokens> {
+  const CamelliaGlassTokens({
+    required this.isMidnight,
+    this.themeStyle = CamelliaThemeStyle.auroraFrost,
+    required this.sidebarTint,
+    required this.floatingTint,
+    required this.modalTint,
+    required this.sidebarBlur,
+    required this.floatingBlur,
+    required this.modalBlur,
+    required this.specularTop,
+    required this.specularBottom,
+    required this.ambientShadow,
+    required this.elevatedShadow,
+    required this.hoverOverlay,
+    required this.focusGlow,
+    required this.statusOnline,
+    required this.statusOffline,
+    required this.statusConnecting,
+    required this.statusHighLatency,
+    required this.statusEncrypted,
+    required this.statusAlert,
+  });
+
+  final bool isMidnight;
+  final CamelliaThemeStyle themeStyle;
+  final Color sidebarTint;
+  final Color floatingTint;
+  final Color modalTint;
+  final double sidebarBlur;
+  final double floatingBlur;
+  final double modalBlur;
+  final Color specularTop;
+  final Color specularBottom;
+  final Color ambientShadow;
+  final Color elevatedShadow;
+  final Color hoverOverlay;
+  final Color focusGlow;
+  final Color statusOnline;
+  final Color statusOffline;
+  final Color statusConnecting;
+  final Color statusHighLatency;
+  final Color statusEncrypted;
+  final Color statusAlert;
+
+  static const light = CamelliaGlassTokens(
+    isMidnight: false,
+    sidebarTint: Color(0xCCFFFFFF),
+    floatingTint: Color(0xDCFCFDFF),
+    modalTint: Color(0xEBFFFFFF),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0xEBFFFFFF),
+    specularBottom: Color(0x4CB8C8DF),
+    ambientShadow: Color(0x140F172A),
+    elevatedShadow: Color(0x260F172A),
+    hoverOverlay: Color(0x124F46E5),
+    focusGlow: Color(0x404F46E5),
+    statusOnline: CamelliaColors.statusOnlineLight,
+    statusOffline: CamelliaColors.statusOfflineLight,
+    statusConnecting: CamelliaColors.statusConnectingLight,
+    statusHighLatency: CamelliaColors.statusHighLatencyLight,
+    statusEncrypted: CamelliaColors.statusEncryptedLight,
+    statusAlert: CamelliaColors.statusAlertLight,
+  );
+
+  static const dark = CamelliaGlassTokens(
+    isMidnight: false,
+    sidebarTint: Color(0xBD101829),
+    floatingTint: Color(0xCC142035),
+    modalTint: Color(0xE318243B),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0x45FFFFFF),
+    specularBottom: Color(0x14FFFFFF),
+    ambientShadow: Color(0x52000000),
+    elevatedShadow: Color(0x73000000),
+    hoverOverlay: Color(0x1AFFFFFF),
+    focusGlow: Color(0x52818CF8),
+    statusOnline: CamelliaColors.statusOnlineDark,
+    statusOffline: CamelliaColors.statusOfflineDark,
+    statusConnecting: CamelliaColors.statusConnectingDark,
+    statusHighLatency: CamelliaColors.statusHighLatencyDark,
+    statusEncrypted: CamelliaColors.statusEncryptedDark,
+    statusAlert: CamelliaColors.statusAlertDark,
+  );
+
+  static const midnight = CamelliaGlassTokens(
+    isMidnight: true,
+    sidebarTint: Color(0xD1080B13),
+    floatingTint: Color(0xDE0B0F19),
+    modalTint: Color(0xED111726),
+    sidebarBlur: 18,
+    floatingBlur: 20,
+    modalBlur: 24,
+    specularTop: Color(0x3DFFFFFF),
+    specularBottom: Color(0x12FFFFFF),
+    ambientShadow: Color(0x80000000),
+    elevatedShadow: Color(0xA6000000),
+    hoverOverlay: Color(0x1CFFFFFF),
+    focusGlow: Color(0x5C818CF8),
+    statusOnline: CamelliaColors.statusOnlineDark,
+    statusOffline: CamelliaColors.statusOfflineMidnight,
+    statusConnecting: CamelliaColors.statusConnectingDark,
+    statusHighLatency: CamelliaColors.statusHighLatencyDark,
+    statusEncrypted: CamelliaColors.statusEncryptedDark,
+    statusAlert: CamelliaColors.statusAlertDark,
+  );
+
+  static CamelliaGlassTokens of(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<CamelliaGlassTokens>() ??
+        (theme.brightness == Brightness.dark ? dark : light);
+  }
+
+  Color tintFor(CamelliaGlassLayer layer) => switch (layer) {
+    CamelliaGlassLayer.canvas => sidebarTint,
+    CamelliaGlassLayer.sidebar => sidebarTint,
+    CamelliaGlassLayer.floating => floatingTint,
+    CamelliaGlassLayer.modal => modalTint,
+  };
+
+  double blurFor(CamelliaGlassLayer layer) => switch (layer) {
+    CamelliaGlassLayer.canvas => 0,
+    CamelliaGlassLayer.sidebar => sidebarBlur,
+    CamelliaGlassLayer.floating => floatingBlur,
+    CamelliaGlassLayer.modal => modalBlur,
+  };
+
+  @override
+  CamelliaGlassTokens copyWith({
+    bool? isMidnight,
+    CamelliaThemeStyle? themeStyle,
+    Color? sidebarTint,
+    Color? floatingTint,
+    Color? modalTint,
+    double? sidebarBlur,
+    double? floatingBlur,
+    double? modalBlur,
+    Color? specularTop,
+    Color? specularBottom,
+    Color? ambientShadow,
+    Color? elevatedShadow,
+    Color? hoverOverlay,
+    Color? focusGlow,
+    Color? statusOnline,
+    Color? statusOffline,
+    Color? statusConnecting,
+    Color? statusHighLatency,
+    Color? statusEncrypted,
+    Color? statusAlert,
+  }) {
+    return CamelliaGlassTokens(
+      isMidnight: isMidnight ?? this.isMidnight,
+      themeStyle: themeStyle ?? this.themeStyle,
+      sidebarTint: sidebarTint ?? this.sidebarTint,
+      floatingTint: floatingTint ?? this.floatingTint,
+      modalTint: modalTint ?? this.modalTint,
+      sidebarBlur: sidebarBlur ?? this.sidebarBlur,
+      floatingBlur: floatingBlur ?? this.floatingBlur,
+      modalBlur: modalBlur ?? this.modalBlur,
+      specularTop: specularTop ?? this.specularTop,
+      specularBottom: specularBottom ?? this.specularBottom,
+      ambientShadow: ambientShadow ?? this.ambientShadow,
+      elevatedShadow: elevatedShadow ?? this.elevatedShadow,
+      hoverOverlay: hoverOverlay ?? this.hoverOverlay,
+      focusGlow: focusGlow ?? this.focusGlow,
+      statusOnline: statusOnline ?? this.statusOnline,
+      statusOffline: statusOffline ?? this.statusOffline,
+      statusConnecting: statusConnecting ?? this.statusConnecting,
+      statusHighLatency: statusHighLatency ?? this.statusHighLatency,
+      statusEncrypted: statusEncrypted ?? this.statusEncrypted,
+      statusAlert: statusAlert ?? this.statusAlert,
+    );
+  }
+
+  @override
+  CamelliaGlassTokens lerp(
+    ThemeExtension<CamelliaGlassTokens>? other,
+    double t,
+  ) {
+    if (other is! CamelliaGlassTokens) return this;
+    return CamelliaGlassTokens(
+      isMidnight: t < 0.5 ? isMidnight : other.isMidnight,
+      themeStyle: t < 0.5 ? themeStyle : other.themeStyle,
+      sidebarTint: Color.lerp(sidebarTint, other.sidebarTint, t)!,
+      floatingTint: Color.lerp(floatingTint, other.floatingTint, t)!,
+      modalTint: Color.lerp(modalTint, other.modalTint, t)!,
+      sidebarBlur: lerpDouble(sidebarBlur, other.sidebarBlur, t)!,
+      floatingBlur: lerpDouble(floatingBlur, other.floatingBlur, t)!,
+      modalBlur: lerpDouble(modalBlur, other.modalBlur, t)!,
+      specularTop: Color.lerp(specularTop, other.specularTop, t)!,
+      specularBottom: Color.lerp(specularBottom, other.specularBottom, t)!,
+      ambientShadow: Color.lerp(ambientShadow, other.ambientShadow, t)!,
+      elevatedShadow: Color.lerp(elevatedShadow, other.elevatedShadow, t)!,
+      hoverOverlay: Color.lerp(hoverOverlay, other.hoverOverlay, t)!,
+      focusGlow: Color.lerp(focusGlow, other.focusGlow, t)!,
+      statusOnline: Color.lerp(statusOnline, other.statusOnline, t)!,
+      statusOffline: Color.lerp(statusOffline, other.statusOffline, t)!,
+      statusConnecting: Color.lerp(
+        statusConnecting,
+        other.statusConnecting,
+        t,
+      )!,
+      statusHighLatency: Color.lerp(
+        statusHighLatency,
+        other.statusHighLatency,
+        t,
+      )!,
+      statusEncrypted: Color.lerp(statusEncrypted, other.statusEncrypted, t)!,
+      statusAlert: Color.lerp(statusAlert, other.statusAlert, t)!,
+    );
+  }
+}
+
+/// Physics-damped spring curve adapter for tactile Apple-like motion.
+class CamelliaSpringCurve extends Curve {
+  const CamelliaSpringCurve({
+    this.mass = 1.0,
+    this.stiffness = 380.0,
+    this.damping = 28.0,
+  });
+
+  final double mass;
+  final double stiffness;
+  final double damping;
+
+  @override
+  double transformInternal(double t) {
+    final simulation = SpringSimulation(
+      SpringDescription(mass: mass, stiffness: stiffness, damping: damping),
+      0.0,
+      1.0,
+      0.0,
+    );
+    return simulation.x(t * 0.55).clamp(0.0, 1.08);
+  }
 }
 
 abstract final class CamelliaSpace {
@@ -102,52 +416,276 @@ abstract final class CamelliaRadius {
   static const control = 10.0;
   static const surface = 14.0;
   static const sheet = 18.0;
-  static const status = 999.0;
+  static const pill = 999.0;
+  static const status = 10.0;
 }
 
 abstract final class CamelliaMotion {
   static const hover = Duration(milliseconds: 120);
   static const feedback = Duration(milliseconds: 160);
-  static const state = Duration(milliseconds: 200);
-  static const content = Duration(milliseconds: 220);
-  static const modal = Duration(milliseconds: 260);
-  static const route = Duration(milliseconds: 280);
+  static const state = Duration(milliseconds: 220);
+  static const content = Duration(milliseconds: 240);
+  static const modal = Duration(milliseconds: 280);
+  static const route = Duration(milliseconds: 300);
   static const enter = Curves.easeOutCubic;
   static const exit = Curves.easeInCubic;
   static const standard = Curves.easeInOutCubic;
+  static const springSnappy = CamelliaSpringCurve(
+    stiffness: 460.0,
+    damping: 32.0,
+  );
+  static const springGentle = CamelliaSpringCurve(
+    stiffness: 300.0,
+    damping: 26.0,
+  );
+  static const springBouncy = CamelliaSpringCurve(
+    stiffness: 380.0,
+    damping: 20.0,
+  );
+
+  /// Honors OS Reduce Motion preference by degrading animations to instant fade.
+  static bool reduceMotion(BuildContext context) =>
+      MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+  static Duration resolve(BuildContext context, Duration normal) =>
+      reduceMotion(context) ? Duration.zero : normal;
 }
 
 abstract final class CamelliaTheme {
   static ThemeData build({
     required Brightness brightness,
     required bool desktopDensity,
+    bool oledMidnight = false,
+    CamelliaThemeStyle themeStyle = CamelliaThemeStyle.auroraFrost,
     String fontFamily = CamelliaTypography.simplifiedFamily,
     List<String> fontFamilyFallback = CamelliaTypography.systemFontFallbacks,
     List<ThemeExtension<dynamic>> extensions = const [],
   }) {
     final dark = brightness == Brightness.dark;
-    final canvas = dark
-        ? CamelliaColors.darkCanvas
-        : CamelliaColors.lightCanvas;
-    final surface = dark
-        ? CamelliaColors.darkSurface
-        : CamelliaColors.lightSurface;
-    final inset = dark ? CamelliaColors.darkInset : CamelliaColors.lightInset;
-    final raised = dark
-        ? CamelliaColors.darkRaised
-        : CamelliaColors.lightRaised;
-    final border = dark
-        ? CamelliaColors.darkBorder
-        : CamelliaColors.lightBorder;
-    final text = dark ? CamelliaColors.darkText : CamelliaColors.lightText;
-    final muted = dark ? CamelliaColors.darkMuted : CamelliaColors.lightMuted;
-    final primary = dark ? const Color(0xFFAAA7FF) : CamelliaColors.indigo;
-    final primaryContainer = dark
-        ? CamelliaColors.darkAccentWash
-        : CamelliaColors.lightAccentWash;
-    final onPrimaryContainer = dark
-        ? const Color(0xFFE4E2FF)
-        : const Color(0xFF292274);
+    final midnight = dark && oledMidnight;
+
+    final Color canvas;
+    final Color surface;
+    final Color inset;
+    final Color raised;
+    final Color border;
+    final Color text;
+    final Color muted;
+    final Color primary;
+    final Color accentInk;
+    final Color secondary;
+    final Color primaryContainer;
+    final Color onPrimaryContainer;
+
+    if (themeStyle == CamelliaThemeStyle.obsidianCyber) {
+      canvas = midnight
+          ? CamelliaColors.midnightCanvas
+          : dark
+          ? const Color(0xFF05080E)
+          : const Color(0xFFF1F5F9);
+      surface = midnight
+          ? CamelliaColors.midnightSurface
+          : dark
+          ? const Color(0xFF0D1522)
+          : Colors.white;
+      inset = midnight
+          ? CamelliaColors.midnightInset
+          : dark
+          ? const Color(0xFF080D15)
+          : const Color(0xFFE2E8F0);
+      raised = midnight
+          ? CamelliaColors.midnightRaised
+          : dark
+          ? const Color(0xFF141F30)
+          : const Color(0xFFF8FAFC);
+      border = midnight
+          ? CamelliaColors.midnightBorder
+          : dark
+          ? const Color(0xFF1E293B)
+          : const Color(0xFFCBD5E1);
+      text = midnight
+          ? CamelliaColors.midnightText
+          : dark
+          ? const Color(0xFFF8FAFC)
+          : const Color(0xFF0F172A);
+      muted = midnight
+          ? CamelliaColors.midnightMuted
+          : dark
+          ? const Color(0xFF94A3B8)
+          : const Color(0xFF64748B);
+      primary = dark ? const Color(0xFF10B981) : const Color(0xFF059669);
+      accentInk = dark ? const Color(0xFF34D399) : const Color(0xFF059669);
+      secondary = dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7);
+      primaryContainer = dark
+          ? const Color(0xFF064E3B)
+          : const Color(0xFFD1FAE5);
+      onPrimaryContainer = dark
+          ? const Color(0xFFA7F3D0)
+          : const Color(0xFF065F46);
+    } else if (themeStyle == CamelliaThemeStyle.nordicTitanium) {
+      canvas = midnight
+          ? CamelliaColors.midnightCanvas
+          : dark
+          ? const Color(0xFF161618)
+          : const Color(0xFFF4F4F6);
+      surface = midnight
+          ? CamelliaColors.midnightSurface
+          : dark
+          ? const Color(0xFF202024)
+          : Colors.white;
+      inset = midnight
+          ? CamelliaColors.midnightInset
+          : dark
+          ? const Color(0xFF1B1B1E)
+          : const Color(0xFFEAEBED);
+      raised = midnight
+          ? CamelliaColors.midnightRaised
+          : dark
+          ? const Color(0xFF2A2A30)
+          : const Color(0xFFFAF9F6);
+      border = midnight
+          ? CamelliaColors.midnightBorder
+          : dark
+          ? const Color(0xFF383840)
+          : const Color(0xFFD4D4D8);
+      text = midnight
+          ? CamelliaColors.midnightText
+          : dark
+          ? const Color(0xFFF5F5F7)
+          : const Color(0xFF1C1917);
+      muted = midnight
+          ? CamelliaColors.midnightMuted
+          : dark
+          ? const Color(0xFFA8A29E)
+          : const Color(0xFF78716C);
+      primary = dark ? const Color(0xFFF59E0B) : const Color(0xFFD97706);
+      accentInk = dark ? const Color(0xFFFBBF24) : const Color(0xFFD97706);
+      secondary = dark ? const Color(0xFFE2E8F0) : const Color(0xFFD97706);
+      primaryContainer = dark
+          ? const Color(0xFF451A03)
+          : const Color(0xFFFEF3C7);
+      onPrimaryContainer = dark
+          ? const Color(0xFFFDE68A)
+          : const Color(0xFF78350F);
+    } else {
+      // auroraFrost (default liquid glass)
+      canvas = midnight
+          ? CamelliaColors.midnightCanvas
+          : dark
+          ? CamelliaColors.darkCanvas
+          : CamelliaColors.lightCanvas;
+      surface = midnight
+          ? CamelliaColors.midnightSurface
+          : dark
+          ? CamelliaColors.darkSurface
+          : CamelliaColors.lightSurface;
+      inset = midnight
+          ? CamelliaColors.midnightInset
+          : dark
+          ? CamelliaColors.darkInset
+          : CamelliaColors.lightInset;
+      raised = midnight
+          ? CamelliaColors.midnightRaised
+          : dark
+          ? CamelliaColors.darkRaised
+          : CamelliaColors.lightRaised;
+      border = midnight
+          ? CamelliaColors.midnightBorder
+          : dark
+          ? CamelliaColors.darkBorder
+          : CamelliaColors.lightBorder;
+      text = midnight
+          ? CamelliaColors.midnightText
+          : dark
+          ? CamelliaColors.darkText
+          : CamelliaColors.lightText;
+      muted = midnight
+          ? CamelliaColors.midnightMuted
+          : dark
+          ? CamelliaColors.darkMuted
+          : CamelliaColors.lightMuted;
+      primary = dark ? CamelliaColors.indigoDark : CamelliaColors.indigo;
+      accentInk = dark ? CamelliaColors.orchid : CamelliaColors.indigo;
+      secondary = dark ? CamelliaColors.orchid : CamelliaColors.indigoStrong;
+      primaryContainer = midnight
+          ? CamelliaColors.midnightAccentWash
+          : dark
+          ? CamelliaColors.darkAccentWash
+          : CamelliaColors.lightAccentWash;
+      onPrimaryContainer = dark
+          ? const Color(0xFFE0E7FF)
+          : const Color(0xFF312E81);
+    }
+
+    final baseGlass = midnight
+        ? CamelliaGlassTokens.midnight
+        : dark
+        ? CamelliaGlassTokens.dark
+        : CamelliaGlassTokens.light;
+
+    final CamelliaGlassTokens glassTokens;
+    if (themeStyle == CamelliaThemeStyle.obsidianCyber) {
+      glassTokens = baseGlass.copyWith(
+        themeStyle: themeStyle,
+        sidebarTint: midnight
+            ? CamelliaColors.midnightCanvas
+            : dark
+            ? const Color(0xC8090D14)
+            : const Color(0xC0F1F5F9),
+        floatingTint: midnight
+            ? CamelliaColors.midnightSurface
+            : dark
+            ? const Color(0xD00D1522)
+            : const Color(0xC8FFFFFF),
+        modalTint: midnight
+            ? CamelliaColors.midnightRaised
+            : dark
+            ? const Color(0xE00F1928)
+            : const Color(0xF2FFFFFF),
+        specularTop: dark
+            ? const Color(0x8010B981)
+            : const Color(0x80059669),
+        specularBottom: dark
+            ? const Color(0x5506B6D4)
+            : const Color(0x500284C7),
+        focusGlow: const Color(0x8010B981),
+      );
+    } else if (themeStyle == CamelliaThemeStyle.nordicTitanium) {
+      glassTokens = baseGlass.copyWith(
+        themeStyle: themeStyle,
+        sidebarTint: midnight
+            ? CamelliaColors.midnightCanvas
+            : dark
+            ? const Color(0xC818181C)
+            : const Color(0xB8F4F4F6),
+        floatingTint: midnight
+            ? CamelliaColors.midnightSurface
+            : dark
+            ? const Color(0xD0202026)
+            : const Color(0xC8FFFFFF),
+        modalTint: midnight
+            ? CamelliaColors.midnightRaised
+            : dark
+            ? const Color(0xE026262E)
+            : const Color(0xF2FFFFFF),
+        specularTop: dark
+            ? const Color(0x80F59E0B)
+            : const Color(0x80D97706),
+        specularBottom: dark
+            ? const Color(0x55E2E8F0)
+            : const Color(0x50D4D4D8),
+        focusGlow: const Color(0x80F59E0B),
+      );
+    } else {
+      glassTokens = baseGlass.copyWith(
+        themeStyle: themeStyle,
+        focusGlow: primary.withValues(alpha: dark ? 0.38 : 0.22),
+      );
+    }
+    final mergedExtensions = List<ThemeExtension<dynamic>>.of(extensions);
+    if (!mergedExtensions.any((e) => e is CamelliaGlassTokens)) {
+      mergedExtensions.insert(0, glassTokens);
+    }
     final scheme =
         ColorScheme.fromSeed(
           seedColor: CamelliaColors.indigo,
@@ -157,17 +695,19 @@ abstract final class CamelliaTheme {
           onPrimary: Colors.white,
           primaryContainer: primaryContainer,
           onPrimaryContainer: onPrimaryContainer,
-          secondary: dark
-              ? const Color(0xFF77C7FF)
-              : CamelliaColors.indigoStrong,
-          onSecondary: dark ? const Color(0xFF211B66) : Colors.white,
+          secondary: secondary,
+          onSecondary: dark ? CamelliaColors.lightText : Colors.white,
           secondaryContainer: dark
-              ? const Color(0xFF302C63)
-              : const Color(0xFFEDEBFF),
-          tertiary: dark ? const Color(0xFF67DDCE) : CamelliaColors.aquaStrong,
+              ? const Color(0xFF282B59)
+              : const Color(0xFFE0E7FF),
+          onSecondaryContainer: onPrimaryContainer,
+          tertiary: dark
+              ? CamelliaColors.statusEncryptedDark
+              : CamelliaColors.aquaStrong,
+          onTertiary: dark ? const Color(0xFF082F49) : Colors.white,
           tertiaryContainer: dark
-              ? const Color(0xFF30343C)
-              : const Color(0xFFE9EBEF),
+              ? const Color(0xFF132C38)
+              : const Color(0xFFE0F7FA),
           surface: surface,
           onSurface: text,
           surfaceContainerLowest: canvas,
@@ -178,8 +718,10 @@ abstract final class CamelliaTheme {
           onSurfaceVariant: muted,
           outline: border,
           outlineVariant: border.withValues(alpha: dark ? 0.72 : 0.82),
-          error: dark ? const Color(0xFFFFB4AB) : const Color(0xFFB3261E),
-          onError: Colors.white,
+          error: dark
+              ? CamelliaColors.statusAlertDark
+              : CamelliaColors.statusAlertLight,
+          onError: dark ? CamelliaColors.lightText : Colors.white,
         );
     TextStyle style(
       double size,
@@ -193,6 +735,7 @@ abstract final class CamelliaTheme {
       fontSize: size,
       fontWeight: weight,
       height: height,
+      leadingDistribution: TextLeadingDistribution.even,
       color: color ?? text,
       letterSpacing: tracking,
     );
@@ -238,9 +781,9 @@ abstract final class CamelliaTheme {
       disabledColor: muted.withValues(alpha: 0.45),
       focusColor: CamelliaColors.azure.withValues(alpha: dark ? 0.28 : 0.18),
       hoverColor: primaryContainer.withValues(alpha: dark ? 0.72 : 0.64),
-      highlightColor: primary.withValues(alpha: 0.10),
-      splashColor: primary.withValues(alpha: 0.12),
-      splashFactory: InkRipple.splashFactory,
+      highlightColor: Colors.transparent,
+      splashColor: Colors.transparent,
+      splashFactory: NoSplash.splashFactory,
       visualDensity: VisualDensity.standard,
       materialTapTargetSize: MaterialTapTargetSize.padded,
       textTheme: textTheme,
@@ -267,7 +810,7 @@ abstract final class CamelliaTheme {
         ),
         hintStyle: textTheme.bodyMedium?.copyWith(color: muted),
         labelStyle: textTheme.bodyMedium?.copyWith(color: muted),
-        floatingLabelStyle: textTheme.labelMedium?.copyWith(color: primary),
+        floatingLabelStyle: textTheme.labelMedium?.copyWith(color: accentInk),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(CamelliaRadius.control),
           borderSide: BorderSide(color: border),
@@ -279,7 +822,7 @@ abstract final class CamelliaTheme {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(CamelliaRadius.control),
           borderSide: BorderSide(
-            color: dark ? const Color(0xFF5FA8DE) : CamelliaColors.azure,
+            color: accentInk,
             width: 1.6,
           ),
         ),
@@ -292,6 +835,16 @@ abstract final class CamelliaTheme {
         style: ButtonStyle(
           minimumSize: WidgetStatePropertyAll(Size(0, controlHeight)),
           padding: WidgetStatePropertyAll(buttonPadding),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return inset;
+            return primary;
+          }),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.disabled)) return muted;
+            return Colors.white;
+          }),
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          splashFactory: NoSplash.splashFactory,
           textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
           shape: WidgetStatePropertyAll(controlShape),
           elevation: const WidgetStatePropertyAll(0),
@@ -307,6 +860,7 @@ abstract final class CamelliaTheme {
           disabledBackgroundColor: inset,
           disabledForegroundColor: muted,
           elevation: 0,
+          splashFactory: NoSplash.splashFactory,
           shape: controlShape,
           textStyle: textTheme.labelLarge,
         ),
@@ -318,6 +872,7 @@ abstract final class CamelliaTheme {
           foregroundColor: text,
           backgroundColor: surface,
           side: BorderSide(color: border),
+          splashFactory: NoSplash.splashFactory,
           shape: controlShape,
           textStyle: textTheme.labelLarge,
         ),
@@ -326,7 +881,8 @@ abstract final class CamelliaTheme {
         style: TextButton.styleFrom(
           minimumSize: Size(0, controlHeight),
           padding: buttonPadding,
-          foregroundColor: primary,
+          foregroundColor: accentInk,
+          splashFactory: NoSplash.splashFactory,
           shape: controlShape,
           textStyle: textTheme.labelLarge,
         ),
@@ -336,7 +892,10 @@ abstract final class CamelliaTheme {
           minimumSize: Size.square(controlHeight),
           foregroundColor: muted,
           hoverColor: primaryContainer,
-          highlightColor: primary.withValues(alpha: 0.10),
+          highlightColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          splashFactory: NoSplash.splashFactory,
+          side: BorderSide.none,
           shape: controlShape,
         ),
       ),
@@ -441,11 +1000,28 @@ abstract final class CamelliaTheme {
             ? const Duration(milliseconds: 450)
             : Duration.zero,
         showDuration: const Duration(seconds: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: dark ? const Color(0xFFE7EEFB) : const Color(0xFF111A2B),
-          borderRadius: BorderRadius.circular(5),
+          color: dark
+              ? CamelliaColors.tooltipDarkBg
+              : CamelliaColors.tooltipLightBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: dark ? 0.14 : 0.08),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: dark ? 0.42 : 0.18),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
-        textStyle: style(12, FontWeight.w500, color: Colors.white),
+        textStyle: style(
+          12,
+          FontWeight.w500,
+          color: CamelliaColors.tooltipText,
+        ),
       ),
       navigationBarTheme: NavigationBarThemeData(
         height: 68,
@@ -457,7 +1033,7 @@ abstract final class CamelliaTheme {
         iconTheme: WidgetStateProperty.resolveWith(
           (states) => IconThemeData(
             size: states.contains(WidgetState.selected) ? 24 : 22,
-            color: states.contains(WidgetState.selected) ? primary : muted,
+            color: states.contains(WidgetState.selected) ? accentInk : muted,
           ),
         ),
         labelTextStyle: WidgetStateProperty.resolveWith(
@@ -474,14 +1050,14 @@ abstract final class CamelliaTheme {
         elevation: 0,
         backgroundColor: surface,
         indicatorColor: primaryContainer,
-        selectedIconTheme: IconThemeData(color: primary, size: 23),
+        selectedIconTheme: IconThemeData(color: accentInk, size: 23),
         unselectedIconTheme: IconThemeData(color: muted, size: 21),
         selectedLabelTextStyle: style(12, FontWeight.w700, color: text),
         unselectedLabelTextStyle: style(12, FontWeight.w500, color: muted),
       ),
       tabBarTheme: TabBarThemeData(
         dividerColor: border,
-        indicatorColor: primary,
+        indicatorColor: accentInk,
         indicatorSize: TabBarIndicatorSize.label,
         labelColor: text,
         unselectedLabelColor: muted,
@@ -510,20 +1086,27 @@ abstract final class CamelliaTheme {
       ),
       dividerTheme: DividerThemeData(color: border, thickness: 1, space: 1),
       progressIndicatorTheme: ProgressIndicatorThemeData(
-        color: primary,
+        color: accentInk,
         linearTrackColor: inset,
         circularTrackColor: inset,
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         elevation: 12,
-        backgroundColor: dark ? raised : CamelliaColors.lightText,
-        contentTextStyle: style(14, FontWeight.w500, color: Colors.white),
-        actionTextColor: dark
-            ? const Color(0xFFC5C2FF)
-            : const Color(0xFFD8D5FF),
+        backgroundColor: dark
+            ? CamelliaColors.tooltipDarkBg
+            : CamelliaColors.tooltipLightBg,
+        contentTextStyle: style(
+          14,
+          FontWeight.w500,
+          color: CamelliaColors.tooltipText,
+        ),
+        actionTextColor: const Color(0xFFA5B4FC),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: dark ? 0.14 : 0.08),
+          ),
         ),
       ),
       scrollbarTheme: ScrollbarThemeData(
@@ -535,7 +1118,7 @@ abstract final class CamelliaTheme {
           return muted.withValues(alpha: 0.55);
         }),
       ),
-      extensions: extensions,
+      extensions: mergedExtensions,
     );
   }
 }
@@ -550,37 +1133,245 @@ class CamelliaBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            theme.scaffoldBackgroundColor,
-            Color.alphaBlend(
-              (dark ? CamelliaColors.indigo : CamelliaColors.azure).withValues(
-                alpha: dark ? 0.16 : 0.065,
-              ),
-              theme.scaffoldBackgroundColor,
-            ),
-            Color.alphaBlend(
-              (dark ? CamelliaColors.azure : CamelliaColors.indigo).withValues(
-                alpha: dark ? 0.10 : 0.04,
-              ),
-              theme.scaffoldBackgroundColor,
-            ),
-            if (dark)
-              Color.alphaBlend(
-                CamelliaColors.aqua.withValues(alpha: 0.045),
-                theme.scaffoldBackgroundColor,
-              ),
-          ],
-          stops: dark ? const [0, 0.36, 0.72, 1] : const [0, 0.5, 1],
-        ),
+    final glass = CamelliaGlassTokens.of(context);
+    final content = DefaultTextHeightBehavior(
+      textHeightBehavior: const TextHeightBehavior(
+        leadingDistribution: TextLeadingDistribution.even,
       ),
       child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
     );
+    if (glass.isMidnight) {
+      return RepaintBoundary(
+        child: ColoredBox(
+          color: CamelliaColors.midnightCanvas,
+          child: content,
+        ),
+      );
+    }
+    return RepaintBoundary(
+      child: CustomPaint(
+        painter: _MinimalistPatternPainter(
+          baseColor: theme.scaffoldBackgroundColor,
+          dark: dark,
+          style: glass.themeStyle,
+          isMidnight: glass.isMidnight,
+        ),
+        child: content,
+      ),
+    );
   }
+}
+
+class _MinimalistPatternPainter extends CustomPainter {
+  const _MinimalistPatternPainter({
+    required this.baseColor,
+    required this.dark,
+    required this.style,
+    required this.isMidnight,
+  });
+
+  final Color baseColor;
+  final bool dark;
+  final CamelliaThemeStyle style;
+  final bool isMidnight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+
+    if (isMidnight) {
+      canvas.drawRect(rect, Paint()..color = CamelliaColors.midnightCanvas);
+      final gridPaint = Paint()
+        ..color = const Color(0xFF818CF8).withValues(alpha: 0.025)
+        ..strokeWidth = 0.5;
+      for (double x = 0; x < size.width; x += 64.0) {
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      }
+      for (double y = 0; y < size.height; y += 64.0) {
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+      }
+      return;
+    }
+
+    final accent1 = style == CamelliaThemeStyle.obsidianCyber
+        ? (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
+        : style == CamelliaThemeStyle.nordicTitanium
+        ? (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
+        : (dark ? CamelliaColors.indigo : CamelliaColors.azure);
+
+    final accent2 = style == CamelliaThemeStyle.obsidianCyber
+        ? (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
+        : style == CamelliaThemeStyle.nordicTitanium
+        ? (dark ? const Color(0xFFD97706) : const Color(0xFFD97706))
+        : (dark ? CamelliaColors.azure : CamelliaColors.indigo);
+
+    final basePaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          baseColor,
+          Color.alphaBlend(
+            accent1.withValues(alpha: dark ? 0.12 : 0.05),
+            baseColor,
+          ),
+          Color.alphaBlend(
+            accent2.withValues(alpha: dark ? 0.08 : 0.03),
+            baseColor,
+          ),
+          baseColor,
+        ],
+        stops: const [0, 0.40, 0.75, 1],
+      ).createShader(rect);
+    canvas.drawRect(rect, basePaint);
+
+    final maxDim = size.longestSide.clamp(320.0, 1800.0);
+
+    if (style == CamelliaThemeStyle.obsidianCyber) {
+      // Obsidian Cyber: precision engineering telemetry radar grid + glowing telemetry nodes + crosshairs
+      final glowPaint = Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(0, -0.4),
+          radius: 1.1,
+          colors: [
+            (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
+                .withValues(alpha: dark ? 0.15 : 0.09),
+            Colors.transparent,
+          ],
+        ).createShader(rect);
+      canvas.drawRect(rect, glowPaint);
+
+      final gridPaint = Paint()
+        ..color = (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
+            .withValues(alpha: dark ? 0.22 : 0.14)
+        ..strokeWidth = 0.85;
+      for (double x = 0; x < size.width; x += 48.0) {
+        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      }
+      for (double y = 0; y < size.height; y += 48.0) {
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+      }
+
+      // High-tech intersection telemetry nodes
+      final nodePaint = Paint()
+        ..color = (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
+            .withValues(alpha: dark ? 0.48 : 0.32)
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round;
+      final nodes = <Offset>[];
+      for (double x = 48; x < size.width; x += 96.0) {
+        for (double y = 48; y < size.height; y += 96.0) {
+          nodes.add(Offset(x, y));
+        }
+      }
+      canvas.drawPoints(PointMode.points, nodes, nodePaint);
+
+      final crosshairPaint = Paint()
+        ..color = (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
+            .withValues(alpha: dark ? 0.60 : 0.42)
+        ..strokeWidth = 1.4;
+      void drawCrosshair(double cx, double cy) {
+        canvas.drawLine(Offset(cx - 12, cy), Offset(cx + 12, cy), crosshairPaint);
+        canvas.drawLine(Offset(cx, cy - 12), Offset(cx, cy + 12), crosshairPaint);
+      }
+      drawCrosshair(32, 32);
+      if (size.width > 200) drawCrosshair(size.width - 32, 32);
+      if (size.height > 200) drawCrosshair(32, size.height - 32);
+      if (size.width > 200 && size.height > 200) {
+        drawCrosshair(size.width - 32, size.height - 32);
+      }
+
+      final scanLinePaint = Paint()
+        ..color = (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
+            .withValues(alpha: dark ? 0.36 : 0.24)
+        ..strokeWidth = 1.2;
+      canvas.drawLine(const Offset(0, 48), Offset(size.width, 48), scanLinePaint);
+    } else if (style == CamelliaThemeStyle.nordicTitanium) {
+      // Nordic Titanium: brushed titanium micro-grooves + warm ambient top spotlight + diagonal metallic sheen
+      final groovePaint = Paint()
+        ..color = (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
+            .withValues(alpha: dark ? 0.18 : 0.12)
+        ..strokeWidth = 0.8;
+      for (double y = 0; y < size.height; y += 8.0) {
+        canvas.drawLine(Offset(0, y), Offset(size.width, y), groovePaint);
+      }
+
+      final conePaint = Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(0, -1.0),
+          radius: 1.3,
+          colors: [
+            (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
+                .withValues(alpha: dark ? 0.34 : 0.22),
+            Colors.transparent,
+          ],
+        ).createShader(rect);
+      canvas.drawRect(rect, conePaint);
+
+      // Diagonal champagne titanium metallic sheen
+      final sheenPaint = Paint()
+        ..shader = LinearGradient(
+          begin: const Alignment(-1.0, -1.0),
+          end: const Alignment(1.0, 1.0),
+          colors: [
+            Colors.transparent,
+            (dark ? const Color(0xFFFEF3C7) : const Color(0xFFD97706))
+                .withValues(alpha: dark ? 0.15 : 0.10),
+            Colors.transparent,
+          ],
+          stops: const [0.35, 0.50, 0.65],
+        ).createShader(rect);
+      canvas.drawRect(rect, sheenPaint);
+    } else {
+      // Aurora Frost: ambient radial glow orbs + subtle micro-dot matrix
+      void paintOrb(Offset center, double radius, Color color, double alpha) {
+        final orbPaint = Paint()
+          ..shader = RadialGradient(
+            colors: [color.withValues(alpha: alpha), color.withValues(alpha: 0)],
+          ).createShader(Rect.fromCircle(center: center, radius: radius));
+        canvas.drawCircle(center, radius, orbPaint);
+      }
+
+      paintOrb(
+        Offset(size.width * 0.14, size.height * 0.12),
+        maxDim * 0.44,
+        CamelliaColors.indigo,
+        dark ? 0.13 : 0.07,
+      );
+      paintOrb(
+        Offset(size.width * 0.86, size.height * 0.18),
+        maxDim * 0.38,
+        CamelliaColors.azure,
+        dark ? 0.10 : 0.055,
+      );
+      paintOrb(
+        Offset(size.width * 0.72, size.height * 0.88),
+        maxDim * 0.40,
+        CamelliaColors.aqua,
+        dark ? 0.07 : 0.045,
+      );
+
+      final dotPaint = Paint()
+        ..color = (dark ? CamelliaColors.orchid : CamelliaColors.indigo)
+            .withValues(alpha: dark ? 0.035 : 0.025)
+        ..strokeWidth = 1.5
+        ..strokeCap = StrokeCap.round;
+      final points = <Offset>[];
+      for (double x = 16; x < size.width; x += 32.0) {
+        for (double y = 16; y < size.height; y += 32.0) {
+          points.add(Offset(x, y));
+        }
+      }
+      canvas.drawPoints(PointMode.points, points, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MinimalistPatternPainter oldDelegate) =>
+      oldDelegate.baseColor != baseColor ||
+      oldDelegate.dark != dark ||
+      oldDelegate.style != style ||
+      oldDelegate.isMidnight != isMidnight;
 }
 
 class CamelliaPageHeader extends StatelessWidget {
@@ -659,90 +1450,153 @@ class CamelliaSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final border = theme.colorScheme.outlineVariant;
+    final glass = CamelliaGlassTokens.of(context);
+    final radius = BorderRadius.circular(CamelliaRadius.surface);
     return Padding(
       padding: margin,
-      child: Material(
-        color: theme.colorScheme.surface,
-        surfaceTintColor: Colors.transparent,
-        elevation: theme.brightness == Brightness.dark ? 2 : 0,
-        shadowColor: Colors.black.withValues(alpha: 0.34),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-          side: BorderSide(color: border),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: glass.floatingTint,
+          borderRadius: radius,
+          boxShadow: [
+            BoxShadow(
+              color: glass.ambientShadow,
+              blurRadius: 16,
+              spreadRadius: -2,
+              offset: const Offset(0, 5),
+            ),
+            BoxShadow(
+              color: glass.ambientShadow.withValues(
+                alpha: glass.ambientShadow.a * 0.45,
+              ),
+              blurRadius: 4,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (title != null || description != null || trailing != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    // A Row measures non-flex children with an unbounded main
-                    // axis. Bound the shared trailing slot before layouts such
-                    // as OnlineStatusWidget introduce their own Flexible rows.
-                    final availableWidth = constraints.hasBoundedWidth
-                        ? constraints.maxWidth
-                        : MediaQuery.sizeOf(context).width;
-                    final trailingMaxWidth =
-                        availableWidth.isFinite && availableWidth > 0
-                        ? availableWidth / 2
-                        : 0.0;
-                    return Row(
-                      children: [
-                        if (accent != null)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 10),
-                            child: Container(
-                              width: 3.5,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: accent,
-                                borderRadius: BorderRadius.circular(
-                                  CamelliaRadius.status,
+        child: ClipRRect(
+          borderRadius: radius,
+          child: CustomPaint(
+            foregroundPainter: _CamelliaSectionRimPainter(
+              borderRadius: radius,
+              topColor: glass.specularTop,
+              bottomColor: glass.specularBottom,
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (title != null || description != null || trailing != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // A Row measures non-flex children with an unbounded main
+                          // axis. Bound the shared trailing slot before layouts such
+                          // as OnlineStatusWidget introduce their own Flexible rows.
+                          final availableWidth = constraints.hasBoundedWidth
+                              ? constraints.maxWidth
+                              : MediaQuery.sizeOf(context).width;
+                          final trailingMaxWidth =
+                              availableWidth.isFinite && availableWidth > 0
+                              ? availableWidth / 2
+                              : 0.0;
+                          return Row(
+                            children: [
+                              if (accent != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 10),
+                                  child: Container(
+                                    width: 3.5,
+                                    height: 18,
+                                    decoration: BoxDecoration(
+                                      color: accent,
+                                      borderRadius: BorderRadius.circular(
+                                        CamelliaRadius.status,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (title != null)
+                                      Text(
+                                        title!,
+                                        style: theme.textTheme.titleMedium,
+                                      ),
+                                    if (description != null) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        description!,
+                                        style: theme.textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
-                            ),
-                          ),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (title != null)
-                                Text(
-                                  title!,
-                                  style: theme.textTheme.titleMedium,
+                              if (trailing != null)
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: trailingMaxWidth,
+                                  ),
+                                  child: trailing!,
                                 ),
-                              if (description != null) ...[
-                                const SizedBox(height: 2),
-                                Text(
-                                  description!,
-                                  style: theme.textTheme.bodySmall,
-                                ),
-                              ],
                             ],
-                          ),
-                        ),
-                        if (trailing != null)
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: trailingMaxWidth,
-                            ),
-                            child: trailing!,
-                          ),
-                      ],
-                    );
-                  },
-                ),
+                          );
+                        },
+                      ),
+                    ),
+                  Padding(padding: padding, child: child),
+                ],
               ),
-            Padding(padding: padding, child: child),
-          ],
+            ),
+          ),
         ),
       ),
     );
   }
+}
+
+class _CamelliaSectionRimPainter extends CustomPainter {
+  const _CamelliaSectionRimPainter({
+    required this.borderRadius,
+    required this.topColor,
+    required this.bottomColor,
+  });
+
+  final BorderRadius borderRadius;
+  final Color topColor;
+  final Color bottomColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final rect = Offset.zero & size;
+    final rrect = borderRadius.toRRect(rect).deflate(0.45);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          topColor,
+          Color.lerp(topColor, bottomColor, 0.55)!,
+          bottomColor,
+        ],
+        stops: const [0.0, 0.45, 1.0],
+      ).createShader(rect);
+    canvas.drawRRect(rrect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CamelliaSectionRimPainter oldDelegate) =>
+      oldDelegate.borderRadius != borderRadius ||
+      oldDelegate.topColor != topColor ||
+      oldDelegate.bottomColor != bottomColor;
 }
 
 class CamelliaStatusDot extends StatelessWidget {

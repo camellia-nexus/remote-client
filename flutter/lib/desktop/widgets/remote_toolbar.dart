@@ -13,8 +13,8 @@ import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/plugin/widgets/desc_ui.dart';
 import 'package:camellia_remote_app/plugin/common.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/ui/remote_ui_models.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
@@ -116,22 +116,16 @@ Alignment _alignmentForEdge(_ToolbarEdge edge, double fraction) {
   }
 }
 
-// The handle is visually separate from the toolbar and keeps the same rounded
-// silhouette at every dock edge.
-BorderRadius _collapseHandleBorderRadius() {
-  return BorderRadius.circular(12);
-}
-
 IconData _toolbarCollapseIcon(_ToolbarEdge edge, bool isCollapsed) {
   switch (edge) {
     case _ToolbarEdge.top:
-      return isCollapsed ? Icons.expand_more : Icons.expand_less;
+      return isCollapsed ? Icons.expand_more_rounded : Icons.expand_less_rounded;
     case _ToolbarEdge.bottom:
-      return isCollapsed ? Icons.expand_less : Icons.expand_more;
+      return isCollapsed ? Icons.expand_less_rounded : Icons.expand_more_rounded;
     case _ToolbarEdge.left:
-      return isCollapsed ? Icons.chevron_right : Icons.chevron_left;
+      return isCollapsed ? Icons.chevron_right_rounded : Icons.chevron_left_rounded;
     case _ToolbarEdge.right:
-      return isCollapsed ? Icons.chevron_left : Icons.chevron_right;
+      return isCollapsed ? Icons.chevron_left_rounded : Icons.chevron_right_rounded;
   }
 }
 
@@ -259,14 +253,8 @@ class ToolbarState {
   }
 }
 
-class _ToolbarTheme {
-  static const Color blueColor = CamelliaColors.azure;
-  static const Color hoverBlueColor = CamelliaColors.indigo;
-  static const Color inactiveColor = Color(0xFF6B7284);
-  static const Color hoverInactiveColor = CamelliaColors.indigo;
-
-  static const Color redColor = CamelliaColors.coral;
-  static const Color hoverRedColor = CamelliaColors.coralStrong;
+@visibleForTesting
+class ToolbarTheme {
   static const double height = 40;
   static const double dividerHeight = 18;
 
@@ -282,13 +270,33 @@ class _ToolbarTheme {
   static const EdgeInsets menuPadding = EdgeInsets.symmetric(vertical: 6);
   static const double menuButtonBorderRadius = CamelliaRadius.control;
 
+  static Color activeColor(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+  }
+
+  static Color activeHoverColor(BuildContext context) =>
+      Theme.of(context).colorScheme.primary;
+
+  static Color mutedColor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurfaceVariant;
+
+  static Color hoverMutedColor(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurface;
+
+  static Color dangerColor(BuildContext context) =>
+      CamelliaGlassTokens.of(context).statusAlert;
+
   static Color borderColor(BuildContext context) =>
       Theme.of(context).colorScheme.outlineVariant;
 
-  static Color? dividerColor(BuildContext context) =>
-      MyTheme.color(context).divider;
+  static Color dividerColor(BuildContext context) =>
+      Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.72);
 
   static MenuStyle defaultMenuStyle(BuildContext context) {
+    final glass = CamelliaGlassTokens.of(context);
     final maxHeight = RemoteCommandMenuMetrics.menuHeight(
       MediaQuery.sizeOf(context).height,
     );
@@ -297,8 +305,11 @@ class _ToolbarTheme {
     );
     final minWidth = maxWidth < 168
         ? maxWidth
-        : maxWidth.clamp(168.0, 196.0).toDouble();
+        : maxWidth.clamp(168.0, 210.0).toDouble();
     return MenuStyle(
+      backgroundColor: WidgetStatePropertyAll(glass.modalTint),
+      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+      shadowColor: WidgetStatePropertyAll(glass.elevatedShadow),
       minimumSize: WidgetStatePropertyAll(Size(minWidth, 0)),
       maximumSize: WidgetStatePropertyAll(Size(maxWidth, maxHeight)),
       side: WidgetStatePropertyAll(
@@ -346,6 +357,8 @@ class _ToolbarTheme {
     );
   }
 }
+
+typedef _ToolbarTheme = ToolbarTheme;
 
 typedef DismissFunc = void Function();
 
@@ -430,6 +443,7 @@ class RemoteToolbar extends StatefulWidget {
 class _RemoteToolbarState extends State<RemoteToolbar> {
   late Debouncer<int> _debouncerHide;
   bool _isCursorOverImage = false;
+  bool _dockHovered = false;
   final _fraction = 0.5.obs;
   final _edge = _ToolbarEdge.top.obs;
   final _dragging = false.obs;
@@ -437,7 +451,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   final _previewEdge = Rxn<_ToolbarEdge>();
   final _previewFraction = Rxn<double>();
   // Measured size of the live toolbar, so the preview ghost matches reality
-  // (collapsed handle vs expanded toolbar). Updated after every layout pass.
+  // (collapsed micro-capsule vs expanded dock). Updated after every layout pass.
   final _toolbarSize = Rxn<Size>();
   final _toolbarKey = GlobalKey(debugLabel: 'remote_toolbar_root');
   final _dockingOptionsInitialized = false.obs;
@@ -447,8 +461,6 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
   void _setFullscreen(bool v) {
     stateGlobal.setFullscreen(v);
-    // stateGlobal.fullscreen is RxBool now, no need to call setState.
-    // setState(() {});
   }
 
   RxBool get collapse => widget.state.collapse;
@@ -504,12 +516,11 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      // Initialize toolbar states (collapse, hide) from session options
       await widget.state.init(widget.ffi.sessionId);
     });
 
     _debouncerHide = Debouncer<int>(
-      Duration(milliseconds: 5000),
+      const Duration(milliseconds: 5000),
       onChanged: _debouncerHideProc,
       initialValue: 0,
     );
@@ -525,7 +536,11 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   }
 
   _debouncerHideProc(int v) {
-    if (!pin && collapse.isFalse && _isCursorOverImage && _dragging.isFalse) {
+    if (!pin &&
+        collapse.isFalse &&
+        _isCursorOverImage &&
+        !_dockHovered &&
+        _dragging.isFalse) {
       collapse.value = true;
     }
   }
@@ -540,20 +555,16 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // Wait for initialization to complete to prevent flickering
       if (!widget.state.initialized.value ||
           !_dockingOptionsInitialized.value) {
         return const SizedBox.shrink();
       }
-      // If toolbar is hidden, return empty widget
       if (hide.value) {
         return const SizedBox.shrink();
       }
       final edge = _edge.value;
       final isHorizontal = _isHorizontalEdge(edge);
 
-      // Measure the live toolbar after every layout so the preview ghost can
-      // match its actual footprint (collapsed handle vs expanded toolbar).
       if (!_measureScheduled) {
         _measureScheduled = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -567,16 +578,80 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         });
       }
 
+      if (collapse.isFalse && _dragging.isFalse) {
+        triggerAutoHide();
+      }
+
+      final dockInset = switch (edge) {
+        _ToolbarEdge.top => const EdgeInsets.only(top: 6),
+        _ToolbarEdge.bottom => const EdgeInsets.only(bottom: 6),
+        _ToolbarEdge.left => const EdgeInsets.only(left: 6),
+        _ToolbarEdge.right => const EdgeInsets.only(right: 6),
+      };
+
+      final isCollapsed = collapse.isTrue;
+      final idleDimmed = isCollapsed && !_dockHovered && _dragging.isFalse;
+
       final toolbar = KeyedSubtree(
         key: _toolbarKey,
-        child: collapse.isFalse
-            ? _buildToolbar(context, edge, isHorizontal)
-            : _buildDraggableCollapse(context, edge, isHorizontal),
+        child: Padding(
+          padding: dockInset,
+          child: Offstage(
+            offstage: _dragging.isTrue,
+            child: RepaintBoundary(
+              child: MouseRegion(
+                onEnter: (_) {
+                  if (!_dockHovered && mounted) {
+                    setState(() => _dockHovered = true);
+                  }
+                },
+                onExit: (_) {
+                  if (_dockHovered && mounted) {
+                    setState(() => _dockHovered = false);
+                    triggerAutoHide();
+                  }
+                },
+                child: AnimatedOpacity(
+                  duration: CamelliaMotion.resolve(
+                    context,
+                    CamelliaMotion.state,
+                  ),
+                  curve: CamelliaMotion.standard,
+                  opacity: idleDimmed ? 0.58 : 1.0,
+                  child: GlassSurface(
+                    layer: CamelliaGlassLayer.modal,
+                    borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                    elevated: true,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isHorizontal ? 6 : 4,
+                      vertical: isHorizontal ? 4 : 6,
+                    ),
+                    child: Theme(
+                      data: themeData(),
+                      child: AnimatedSize(
+                        duration: CamelliaMotion.resolve(
+                          context,
+                          CamelliaMotion.state,
+                        ),
+                        curve: CamelliaMotion.springSnappy,
+                        alignment: Alignment.center,
+                        child: isCollapsed
+                            ? _buildCollapsedCapsule(
+                                context,
+                                edge,
+                                isHorizontal,
+                              )
+                            : _buildExpandedDock(context, edge, isHorizontal),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       );
 
-      // Keep the full-viewport docking layer stable during a drag, but place
-      // the fallible toolbar subtree behind a strict cross-axis boundary. A
-      // release ErrorWidget from a toolbar child must never cover the canvas.
       return RemoteToolbarOverlaySurface(
         edge: edge,
         fraction: _fraction.value,
@@ -600,10 +675,6 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     Size? measured,
   ) {
     final color = Theme.of(context).colorScheme.primary;
-    // Use the measured live toolbar size so collapsed vs expanded looks
-    // right. The current orientation may differ from the preview orientation
-    // (e.g. dragging a top-docked toolbar toward the left edge), so swap the
-    // long/short axes when previewing a different orientation.
     final previewSize = _toolbarSizeForEdge(edge, measured);
     return Align(
       alignment: _alignmentForEdge(edge, fraction),
@@ -611,51 +682,81 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         width: previewSize.width,
         height: previewSize.height,
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: color.withValues(alpha: 0.55), width: 1.5),
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+          border: Border.all(color: color.withValues(alpha: 0.65), width: 1.5),
         ),
       ),
     );
   }
 
-  Widget _buildDraggableCollapse(
+  Widget _buildDragGrip(bool isHorizontal) {
+    return _DockDragGrip(
+      dragging: _dragging,
+      fraction: _fraction,
+      edge: _edge,
+      previewEdge: _previewEdge,
+      previewFraction: _previewFraction,
+      toolbarSize: _toolbarSize,
+      isHorizontal: isHorizontal,
+      onPlacementChanged: _saveDockingPreferences,
+    );
+  }
+
+  Widget _buildCollapseToggle(
+    BuildContext context,
+    _ToolbarEdge edge,
+    bool isCollapsed,
+  ) {
+    return _IconMenuButton(
+      icon: Icon(_toolbarCollapseIcon(edge, isCollapsed)),
+      tooltip: isCollapsed ? 'Show Toolbar' : 'Hide Toolbar',
+      color: _ToolbarTheme.mutedColor(context),
+      hoverColor: _ToolbarTheme.hoverMutedColor(context),
+      compact: isCollapsed,
+      onPressed: () {
+        widget.state.switchCollapse(widget.ffi.sessionId);
+        if (!widget.state.collapse.value && !_dockHovered && mounted) {
+          setState(() => _dockHovered = true);
+        }
+      },
+    );
+  }
+
+  Widget _buildCollapsedCapsule(
     BuildContext context,
     _ToolbarEdge edge,
     bool isHorizontal,
   ) {
-    return Obx(() {
-      if (collapse.isFalse && _dragging.isFalse) {
-        triggerAutoHide();
-      }
-      final borderRadius = _collapseHandleBorderRadius();
-      return Offstage(
-        offstage: _dragging.isTrue,
-        child: Material(
-          elevation: _ToolbarTheme.elevation,
-          shadowColor: MyTheme.color(context).shadow,
-          borderRadius: borderRadius,
-          child: _DraggableShowHide(
-            id: widget.id,
-            ffi: widget.ffi,
-            sessionId: widget.ffi.sessionId,
-            dragging: _dragging,
-            fraction: _fraction,
-            edge: _edge,
-            previewEdge: _previewEdge,
-            previewFraction: _previewFraction,
-            toolbarSize: _toolbarSize,
-            isHorizontal: isHorizontal,
-            onPlacementChanged: _saveDockingPreferences,
-            toolbarState: widget.state,
-            borderRadius: borderRadius,
-          ),
+    final axis = isHorizontal ? Axis.horizontal : Axis.vertical;
+    return Flex(
+      direction: axis,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _buildDragGrip(isHorizontal),
+        _CollapsedStatusBadge(
+          id: widget.id,
+          ffi: widget.ffi,
+          isHorizontal: isHorizontal,
+          onTap: () => widget.state.switchCollapse(widget.ffi.sessionId),
         ),
-      );
-    });
+        _MinimizedMonitorSwitchButton(id: widget.id, ffi: widget.ffi),
+        _buildCollapseToggle(context, edge, true),
+        if (isWebDesktop)
+          _IconMenuButton(
+            icon: const Icon(CamelliaIcons.close),
+            tooltip: 'Close',
+            compact: true,
+            color: _ToolbarTheme.dangerColor(context),
+            hoverColor: _ToolbarTheme.dangerColor(context),
+            onPressed: () => closeConnection(id: widget.id),
+          ),
+      ],
+    );
   }
 
-  Widget _buildToolbar(
+  Widget _buildExpandedDock(
     BuildContext context,
     _ToolbarEdge edge,
     bool isHorizontal,
@@ -682,7 +783,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             horizontal: isHorizontal ? 4 : 0,
             vertical: isHorizontal ? 0 : 4,
           ),
-          color: Theme.of(context).dividerColor,
+          color: _ToolbarTheme.dividerColor(context),
         );
 
         void adaptive(
@@ -696,23 +797,17 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
           }
         }
 
+        toolbarItems.add(_buildDragGrip(isHorizontal));
         toolbarItems.add(
           _SessionStatusMenu(
             id: widget.id,
+            ffi: widget.ffi,
             quality: widget.ffi.qualityMonitorModel,
+            isHorizontal: isHorizontal,
           ),
         );
-        adaptive(
-          RemoteCommandBarTier.full,
-          (inOverflow) => _PinMenu(state: widget.state, inOverflow: inOverflow),
-        );
-        if (!isWebDesktop) {
-          adaptive(
-            RemoteCommandBarTier.full,
-            (inOverflow) =>
-                _MobileActionMenu(ffi: widget.ffi, inOverflow: inOverflow),
-          );
-        }
+        toolbarItems.add(divider());
+
         toolbarItems.add(
           _ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state),
         );
@@ -726,30 +821,15 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             ),
           );
         }
-        toolbarItems.add(divider());
+        if (!isWebDesktop) {
+          adaptive(
+            RemoteCommandBarTier.full,
+            (inOverflow) =>
+                _MobileActionMenu(ffi: widget.ffi, inOverflow: inOverflow),
+          );
+        }
 
-        adaptive(
-          RemoteCommandBarTier.full,
-          (inOverflow) => Obx(() {
-            final privacyModeState = PrivacyModeState.find(widget.id);
-            if ((privacyModeState.isEmpty ||
-                    allowDisplaySwitchInPrivacyMode(
-                      pi,
-                      privacyModeState.value,
-                    )) &&
-                pi.displaysCount.value > 1 &&
-                mainGetLocalBoolOptionSync(
-                  kOptionAllowMonitorSwitchMainToolbar,
-                )) {
-              return _MainMonitorSwitchButton(
-                id: widget.id,
-                ffi: widget.ffi,
-                inOverflow: inOverflow,
-              );
-            }
-            return const Offstage();
-          }),
-        );
+        // Consolidated Monitor Picker (replaces duplicate monitor controls)
         adaptive(
           RemoteCommandBarTier.input,
           (inOverflow) => Obx(() {
@@ -764,11 +844,25 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
                 id: widget.id,
                 ffi: widget.ffi,
                 inOverflow: inOverflow,
+                isHorizontal: isHorizontal,
               );
             }
             return const Offstage();
           }),
         );
+
+        // Surfaced Privacy Mode quick toggle right on the primary dock
+        if (widget.ffi.connType == ConnType.defaultConn) {
+          adaptive(
+            RemoteCommandBarTier.collaboration,
+            (inOverflow) => _PrivacyModeMenu(
+              id: widget.id,
+              ffi: widget.ffi,
+              inOverflow: inOverflow,
+            ),
+          );
+        }
+
         toolbarItems.add(
           _DisplayMenu(
             id: widget.id,
@@ -798,49 +892,23 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             (inOverflow) => _RecordMenu(inOverflow: inOverflow),
           );
         }
+        adaptive(
+          RemoteCommandBarTier.full,
+          (inOverflow) => _PinMenu(state: widget.state, inOverflow: inOverflow),
+        );
         if (overflowItems.isNotEmpty) {
           toolbarItems.add(_MoreActionsMenu(children: overflowItems));
         }
         toolbarItems.add(divider());
+        toolbarItems.add(_buildCollapseToggle(context, edge, false));
         toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));
 
-        const toolbarBorderRadius = BorderRadius.all(
-          Radius.circular(CamelliaRadius.surface),
-        );
         final innerAxis = isHorizontal ? Axis.horizontal : Axis.vertical;
-        final outerAxis = isHorizontal ? Axis.vertical : Axis.horizontal;
-        final spacer = isHorizontal
-            ? const SizedBox(width: 2)
-            : const SizedBox(height: 2);
-        final toolbarMaterial = Material(
-          elevation: _ToolbarTheme.elevation,
-          shadowColor: MyTheme.color(context).shadow,
-          borderRadius: toolbarBorderRadius,
-          color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.96),
-          child: Theme(
-            data: themeData(),
-            child: _ToolbarTheme.borderWrapper(
-              context,
-              Flex(
-                direction: innerAxis,
-                mainAxisSize: MainAxisSize.min,
-                children: [spacer, ...toolbarItems, spacer],
-              ),
-              toolbarBorderRadius,
-            ),
-          ),
-        );
-        final handle = _buildDraggableCollapse(context, edge, isHorizontal);
-        final gap = isHorizontal
-            ? const SizedBox(height: 4)
-            : const SizedBox(width: 4);
-        final children = (edge == _ToolbarEdge.top || edge == _ToolbarEdge.left)
-            ? [toolbarMaterial, gap, handle]
-            : [handle, gap, toolbarMaterial];
         return Flex(
-          direction: outerAxis,
+          direction: innerAxis,
           mainAxisSize: MainAxisSize.min,
-          children: children,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: toolbarItems,
         );
       },
     );
@@ -854,7 +922,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             Size(0, RemoteCommandMenuMetrics.rowHeight),
           ),
           padding: const WidgetStatePropertyAll(
-            EdgeInsets.symmetric(horizontal: 8),
+            EdgeInsets.symmetric(horizontal: 10),
           ),
           textStyle: const WidgetStatePropertyAll(
             TextStyle(fontWeight: FontWeight.normal),
@@ -903,13 +971,14 @@ class _PinMenu extends StatelessWidget {
         ),
         tooltip: state.pin ? 'Unpin Toolbar' : 'Pin Toolbar',
         inOverflow: inOverflow,
+        active: state.pin,
         onPressed: state.switchPin,
         color: state.pin
-            ? _ToolbarTheme.blueColor
-            : _ToolbarTheme.inactiveColor,
+            ? _ToolbarTheme.activeColor(context)
+            : _ToolbarTheme.mutedColor(context),
         hoverColor: state.pin
-            ? _ToolbarTheme.hoverBlueColor
-            : _ToolbarTheme.hoverInactiveColor,
+            ? _ToolbarTheme.activeHoverColor(context)
+            : _ToolbarTheme.hoverMutedColor(context),
       ),
     );
   }
@@ -924,23 +993,44 @@ class _MoreActionsMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return _IconSubmenuButton(
       tooltip: 'More actions',
-      icon: const Icon(Icons.more_horiz_rounded),
-      color: _ToolbarTheme.inactiveColor,
-      hoverColor: _ToolbarTheme.hoverInactiveColor,
+      icon: const Icon(CamelliaIcons.more),
+      color: _ToolbarTheme.mutedColor(context),
+      hoverColor: _ToolbarTheme.hoverMutedColor(context),
       menuChildrenGetter: (_) => children,
     );
   }
 }
 
-class _SessionStatusMenu extends StatelessWidget {
-  const _SessionStatusMenu({required this.id, required this.quality});
+int? _parseLatencyMs(String? raw) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  final match = RegExp(r'\d+').firstMatch(raw);
+  if (match == null) return null;
+  return int.tryParse(match.group(0)!);
+}
+
+class _SessionStatusMenu extends StatefulWidget {
+  const _SessionStatusMenu({
+    required this.id,
+    required this.ffi,
+    required this.quality,
+    required this.isHorizontal,
+  });
 
   final String id;
+  final FFI ffi;
   final QualityMonitorModel quality;
+  final bool isHorizontal;
+
+  @override
+  State<_SessionStatusMenu> createState() => _SessionStatusMenuState();
+}
+
+class _SessionStatusMenuState extends State<_SessionStatusMenu> {
+  final MenuController _menuController = MenuController();
 
   SessionStatusSnapshot _snapshot(ConnectionType? connection) {
     final valid = connection?.isValid() ?? false;
-    final data = quality.data;
+    final data = widget.quality.data;
     return SessionStatusSnapshot(
       secure: valid
           ? connection!.secure.value == ConnectionType.strSecure
@@ -958,50 +1048,111 @@ class _SessionStatusMenu extends StatelessWidget {
     );
   }
 
+  String _resolutionText() {
+    final w = widget.ffi.canvasModel.getDisplayWidth().round();
+    final h = widget.ffi.canvasModel.getDisplayHeight().round();
+    if (w <= 0 || h <= 0) return '—';
+    return '$w×$h';
+  }
+
   Widget _buildMenu(BuildContext context, ConnectionType? connection) {
+    final glass = CamelliaGlassTokens.of(context);
     final snapshot = _snapshot(connection);
-    final status = snapshot.secure == null
+    final delayMs = _parseLatencyMs(snapshot.delay);
+    final statusColor = snapshot.secure == null
+        ? glass.statusConnecting
+        : !snapshot.secure!
+        ? glass.statusAlert
+        : delayMs != null
+        ? CamelliaIcons.signalColor(context, delayMs)
+        : glass.statusOnline;
+
+    final routeTag = snapshot.direct == null
         ? translate('Connecting')
-        : snapshot.secure!
-        ? translate('Secure')
-        : translate('Insecure');
-    final route = snapshot.direct == null
-        ? null
         : snapshot.direct!
-        ? translate('Direct')
+        ? 'P2P'
         : translate('Relay');
-    final label = route == null ? status : '$status · $route';
-    final color = snapshot.secure == null
-        ? _ToolbarTheme.inactiveColor
-        : snapshot.secure!
-        ? CamelliaColors.aqua
-        : _ToolbarTheme.redColor;
-    return _IconSubmenuButton(
-      tooltip: label,
-      icon: Icon(
-        snapshot.secure == null
-            ? Icons.sync_rounded
-            : snapshot.secure!
-            ? Icons.shield_rounded
-            : Icons.gpp_maybe_rounded,
+
+    final parts = <String>[routeTag];
+    if (snapshot.delayValue != '—') {
+      parts.add(snapshot.delayValue);
+    }
+    final fpsDisplay = snapshot.display(snapshot.fps);
+    if (fpsDisplay != '—') {
+      parts.add('$fpsDisplay FPS');
+    }
+    final telemetryLabel = parts.join(' · ');
+
+    final tooltipLabel = snapshot.secure == null
+        ? translate('Connecting')
+        : '${snapshot.secure! ? translate('Secure') : translate('Insecure')} · $telemetryLabel';
+
+    final resolution = _resolutionText();
+
+    if (!widget.isHorizontal) {
+      return _IconSubmenuButton(
+        tooltip: tooltipLabel,
+        icon: Icon(
+          snapshot.secure == null
+              ? Icons.sync_rounded
+              : snapshot.secure!
+              ? CamelliaIcons.shield
+              : Icons.gpp_maybe_rounded,
+        ),
+        color: statusColor,
+        hoverColor: statusColor,
+        menuStyle: _ToolbarTheme.statusMenuStyle(context),
+        menuChildrenGetter: (_) => [
+          _SessionStatusPanel(
+            snapshot: snapshot,
+            resolution: resolution,
+            latencyMs: delayMs,
+          ),
+        ],
+      );
+    }
+
+    return MenuAnchor(
+      controller: _menuController,
+      style: _ToolbarTheme.statusMenuStyle(context),
+      menuChildren: [
+        _SessionStatusPanel(
+          snapshot: snapshot,
+          resolution: resolution,
+          latencyMs: delayMs,
+        ),
+      ],
+      builder: (context, controller, child) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: Tooltip(
+          message: tooltipLabel,
+          child: TelemetryPill(
+            label: telemetryLabel,
+            statusColor: statusColor,
+            icon: snapshot.secure == null
+                ? Icons.sync_rounded
+                : snapshot.secure!
+                ? CamelliaIcons.shield
+                : Icons.gpp_maybe_rounded,
+            compact: true,
+            onTap: () =>
+                controller.isOpen ? controller.close() : controller.open(),
+          ),
+        ),
       ),
-      color: color,
-      hoverColor: color,
-      menuStyle: _ToolbarTheme.statusMenuStyle(context),
-      menuChildrenGetter: (_) => [_SessionStatusPanel(snapshot: snapshot)],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: quality,
+      animation: widget.quality,
       builder: (context, _) {
-        final tag = ConnectionTypeState.tag(id);
+        final tag = ConnectionTypeState.tag(widget.id);
         if (!Get.isRegistered<ConnectionType>(tag: tag)) {
           return _buildMenu(context, null);
         }
-        final connection = ConnectionTypeState.find(id);
+        final connection = ConnectionTypeState.find(widget.id);
         return Obx(() {
           connection.secure.value;
           connection.direct.value;
@@ -1013,10 +1164,55 @@ class _SessionStatusMenu extends StatelessWidget {
   }
 }
 
+class _NetworkMicroBar extends StatelessWidget {
+  const _NetworkMicroBar({required this.latencyMs});
+
+  final int? latencyMs;
+
+  int get _activeBars {
+    if (latencyMs == null || latencyMs! <= 0) return 4;
+    if (latencyMs! < 45) return 4;
+    if (latencyMs! < 100) return 3;
+    if (latencyMs! < 180) return 2;
+    return 1;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeColor = CamelliaIcons.signalColor(context, latencyMs);
+    final inactiveColor = Theme.of(
+      context,
+    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.24);
+    final bars = _activeBars;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        for (var i = 0; i < 4; i++)
+          Container(
+            width: 3.5,
+            height: 6.0 + i * 3.0,
+            margin: const EdgeInsets.symmetric(horizontal: 1.2),
+            decoration: BoxDecoration(
+              color: i < bars ? activeColor : inactiveColor,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _SessionStatusPanel extends StatelessWidget {
-  const _SessionStatusPanel({required this.snapshot});
+  const _SessionStatusPanel({
+    required this.snapshot,
+    required this.resolution,
+    required this.latencyMs,
+  });
 
   final SessionStatusSnapshot snapshot;
+  final String resolution;
+  final int? latencyMs;
 
   String _security() => snapshot.secure == null
       ? translate('Connecting')
@@ -1047,11 +1243,28 @@ class _SessionStatusPanel extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                translate('Session status'),
-                style: Theme.of(context).textTheme.titleMedium,
+              Row(
+                children: [
+                  if (snapshot.secure != null && snapshot.direct != null) ...[
+                    CamelliaIcons.securityBadge(
+                      secure: snapshot.secure!,
+                      direct: snapshot.direct!,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: Text(
+                      translate('Session status'),
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  _NetworkMicroBar(latencyMs: latencyMs),
+                ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
@@ -1070,39 +1283,50 @@ class _SessionStatusPanel extends StatelessWidget {
                   ),
                   _StatusMetric(
                     width: metricWidth,
-                    icon: Icons.swap_horiz_rounded,
-                    label: translate('Protocol'),
-                    value: snapshot.display(snapshot.streamType),
+                    icon: Icons.aspect_ratio_rounded,
+                    label: translate('Resolution'),
+                    value: resolution,
+                    tabular: true,
                   ),
                   _StatusMetric(
                     width: metricWidth,
                     icon: Icons.speed_rounded,
                     label: translate('Latency'),
                     value: snapshot.delayValue,
-                  ),
-                  _StatusMetric(
-                    width: metricWidth,
-                    icon: Icons.network_check_rounded,
-                    label: translate('Speed'),
-                    value: snapshot.display(snapshot.speed),
+                    tabular: true,
                   ),
                   _StatusMetric(
                     width: metricWidth,
                     icon: Icons.movie_filter_outlined,
                     label: translate('FPS'),
                     value: snapshot.display(snapshot.fps),
+                    tabular: true,
+                  ),
+                  _StatusMetric(
+                    width: metricWidth,
+                    icon: Icons.network_check_rounded,
+                    label: translate('Speed'),
+                    value: snapshot.display(snapshot.speed),
+                    tabular: true,
                   ),
                   _StatusMetric(
                     width: metricWidth,
                     icon: Icons.tune_rounded,
                     label: translate('Target Bitrate'),
                     value: snapshot.bitrateValue,
+                    tabular: true,
                   ),
                   _StatusMetric(
                     width: metricWidth,
                     icon: Icons.memory_rounded,
                     label: translate('Codec'),
                     value: snapshot.display(snapshot.codec),
+                  ),
+                  _StatusMetric(
+                    width: metricWidth,
+                    icon: Icons.swap_horiz_rounded,
+                    label: translate('Protocol'),
+                    value: snapshot.display(snapshot.streamType),
                   ),
                   _StatusMetric(
                     width: metricWidth,
@@ -1126,24 +1350,31 @@ class _StatusMetric extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.tabular = false,
   });
 
   final double width;
   final IconData icon;
   final String label;
   final String value;
+  final bool tabular;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final valueStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+    );
     return Container(
       width: width,
       constraints: const BoxConstraints(minHeight: 42),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainer,
+        color: scheme.surfaceContainer.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(CamelliaRadius.control),
-        border: Border.all(color: scheme.outlineVariant),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.7),
+        ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -1168,9 +1399,9 @@ class _StatusMetric extends StatelessWidget {
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: tabular
+                      ? CamelliaTypography.tabular(valueStyle)
+                      : valueStyle,
                 ),
               ],
             ),
@@ -1192,23 +1423,25 @@ class _MobileActionMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!ffi.ffiModel.isPeerAndroid) return Offstage();
-    return Obx(
-      () => _IconMenuButton(
-        icon: const Icon(Icons.touch_app_rounded),
+    if (!ffi.ffiModel.isPeerAndroid) return const Offstage();
+    return Obx(() {
+      final active = ffi.dialogManager.mobileActionsOverlayVisible.isTrue;
+      return _IconMenuButton(
+        icon: const Icon(CamelliaIcons.touch),
         tooltip: 'Mobile Actions',
         inOverflow: inOverflow,
+        active: active,
         onPressed: () => ffi.dialogManager.setMobileActionsOverlayVisible(
           !ffi.dialogManager.mobileActionsOverlayVisible.value,
         ),
-        color: ffi.dialogManager.mobileActionsOverlayVisible.isTrue
-            ? _ToolbarTheme.blueColor
-            : _ToolbarTheme.inactiveColor,
-        hoverColor: ffi.dialogManager.mobileActionsOverlayVisible.isTrue
-            ? _ToolbarTheme.hoverBlueColor
-            : _ToolbarTheme.hoverInactiveColor,
-      ),
-    );
+        color: active
+            ? _ToolbarTheme.activeColor(context)
+            : _ToolbarTheme.mutedColor(context),
+        hoverColor: active
+            ? _ToolbarTheme.activeHoverColor(context)
+            : _ToolbarTheme.hoverMutedColor(context),
+      );
+    });
   }
 }
 
@@ -1242,50 +1475,17 @@ class _MonitorCycle {
   }
 }
 
-class _MainMonitorSwitchButton extends StatelessWidget {
-  final String id;
-  final FFI ffi;
-  final bool inOverflow;
-
-  const _MainMonitorSwitchButton({
-    Key? key,
-    required this.id,
-    required this.ffi,
-    this.inOverflow = false,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final cycle = _MonitorCycle(id, ffi);
-    return Obx(() {
-      if (cycle.total < 2) return const Offstage();
-      final label = cycle.label;
-
-      return _IconMenuButton(
-        tooltip: cycle.tooltip,
-        inOverflow: inOverflow,
-        color: _ToolbarTheme.blueColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
-        onPressed: cycle.next,
-        icon: Badge(
-          label: Text(label),
-          offset: const Offset(5, -5),
-          child: const Icon(Icons.monitor_rounded),
-        ),
-      );
-    });
-  }
-}
-
 class _MonitorMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
   final bool inOverflow;
+  final bool isHorizontal;
   const _MonitorMenu({
     Key? key,
     required this.id,
     required this.ffi,
     this.inOverflow = false,
+    this.isHorizontal = true,
   }) : super(key: key);
 
   bool get supportIndividualWindows =>
@@ -1297,16 +1497,34 @@ class _MonitorMenu extends StatelessWidget {
   }
 
   Widget buildMonitorMenu(BuildContext context) {
+    final cycle = _MonitorCycle(id, ffi);
+    final scheme = Theme.of(context).colorScheme;
+    final activeColor = _ToolbarTheme.activeColor(context);
     return _IconSubmenuButton(
       tooltip: 'Select Monitor',
-      icon: const Icon(Icons.splitscreen_rounded),
+      icon: Badge(
+        backgroundColor: scheme.primary,
+        textColor: scheme.onPrimary,
+        label: Text(
+          cycle.label,
+          style: CamelliaTypography.tabular(
+            TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: scheme.onPrimary,
+            ),
+          ),
+        ),
+        offset: const Offset(6, -5),
+        child: const Icon(CamelliaIcons.screen),
+      ),
       ffi: ffi,
       inOverflow: inOverflow,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
+      color: activeColor,
+      hoverColor: _ToolbarTheme.activeHoverColor(context),
       menuStyle: _ToolbarTheme.defaultMenuStyle(context).copyWith(
         padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(horizontal: 6),
+          EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         ),
       ),
       menuChildrenGetter: (_) => [buildMonitorSubmenuWidget(context)],
@@ -1314,12 +1532,31 @@ class _MonitorMenu extends StatelessWidget {
   }
 
   Widget buildMonitorSubmenuWidget(BuildContext context) {
+    final cycle = _MonitorCycle(id, ffi);
+    final showQuickCycle =
+        cycle.total > 1 &&
+        mainGetLocalBoolOptionSync(kOptionAllowMonitorSwitchMainToolbar);
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(children: buildMonitorList(context)),
-        supportIndividualWindows ? const Divider() : const Offstage(),
-        supportIndividualWindows ? chooseDisplayBehavior() : const Offstage(),
+        Wrap(spacing: 4, runSpacing: 4, children: buildMonitorList(context)),
+        if (showQuickCycle) ...[
+          const Divider(),
+          MenuButton(
+            ffi: ffi,
+            onPressed: cycle.next,
+            child: _menuLabel(
+              context,
+              Icons.switch_video_rounded,
+              cycle.tooltip,
+            ),
+          ),
+        ],
+        if (supportIndividualWindows) ...[
+          const Divider(),
+          chooseDisplayBehavior(),
+        ],
       ],
     );
   }
@@ -1342,64 +1579,66 @@ class _MonitorMenu extends StatelessWidget {
     );
   }
 
-  buildOneMonitorButton(i, curDisplay) => Text(
-    '${i + 1}',
-    style: TextStyle(
-      color: i == curDisplay
-          ? _ToolbarTheme.blueColor
-          : _ToolbarTheme.inactiveColor,
-      fontSize: 12,
-      fontWeight: FontWeight.bold,
-    ),
-  );
-
   List<Widget> buildMonitorList(BuildContext context) {
     final List<Widget> monitorList = [];
     final pi = ffi.ffiModel.pi;
+    final scheme = Theme.of(context).colorScheme;
+    final activeColor = _ToolbarTheme.activeColor(context);
+    final mutedColor = _ToolbarTheme.mutedColor(context);
 
-    buildMonitorButton(int i) => Obx(() {
-      RxInt display = CurrentDisplayState.find(id);
-
+    Widget buildMonitorButton(int i) => Obx(() {
+      final display = CurrentDisplayState.find(id);
       final isAllMonitors = i == kAllDisplayValue;
+      final isSelected = i == display.value;
       final width = SimpleWrapper<double>(0);
       Widget? monitorsIcon;
       if (isAllMonitors) {
         monitorsIcon = globalMonitorsWidget(
+          context,
           width,
-          Colors.white,
-          _ToolbarTheme.blueColor,
+          scheme.onPrimary,
+          scheme.primary,
         );
       }
       return _IconMenuButton(
         tooltip: isAllMonitors ? 'All monitors' : '#{${i + 1}} monitor',
-        hMargin: 6,
-        vMargin: 12,
+        hMargin: 4,
+        vMargin: 6,
         topLevel: false,
-        color: i == display.value
-            ? _ToolbarTheme.blueColor
-            : _ToolbarTheme.inactiveColor,
-        hoverColor: i == display.value
-            ? _ToolbarTheme.hoverBlueColor
-            : _ToolbarTheme.hoverInactiveColor,
+        active: isSelected,
+        color: isSelected ? activeColor : mutedColor,
+        hoverColor: isSelected
+            ? _ToolbarTheme.activeHoverColor(context)
+            : _ToolbarTheme.hoverMutedColor(context),
         width: isAllMonitors ? width.value : null,
         icon: isAllMonitors
             ? monitorsIcon!
-            : Container(
-                alignment: AlignmentDirectional.center,
-                constraints: const BoxConstraints(
-                  minHeight: _ToolbarTheme.height,
-                ),
+            : SizedBox(
+                height: _ToolbarTheme.height,
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    SvgPicture.asset(
-                      "assets/screen.svg",
-                      colorFilter: const ColorFilter.mode(
-                        Colors.white,
-                        BlendMode.srcIn,
+                    Icon(
+                      CamelliaIcons.screen,
+                      size: 26,
+                      color: isSelected ? activeColor : mutedColor,
+                    ),
+                    Positioned(
+                      top: 11,
+                      child: Text(
+                        '${i + 1}',
+                        style: CamelliaTypography.tabular(
+                          TextStyle(
+                            color: isSelected
+                                ? scheme.onPrimary
+                                : scheme.onSurface,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            height: 1.0,
+                          ),
+                        ),
                       ),
                     ),
-                    Obx(() => buildOneMonitorButton(i, display.value)),
                   ],
                 ),
               ),
@@ -1416,12 +1655,14 @@ class _MonitorMenu extends StatelessWidget {
     return monitorList;
   }
 
-  globalMonitorsWidget(
+  Widget globalMonitorsWidget(
+    BuildContext context,
     SimpleWrapper<double> width,
     Color activeTextColor,
     Color activeBgColor,
   ) {
-    getMonitors() {
+    final scheme = Theme.of(context).colorScheme;
+    Widget getMonitors() {
       final pi = ffi.ffiModel.pi;
       RxInt display = CurrentDisplayState.find(id);
       final rect = ffi.ffiModel.globalDisplaysRect();
@@ -1445,6 +1686,7 @@ class _MonitorMenu extends StatelessWidget {
                 ? dWidth * scale
                 : dHeight * scale) *
             0.65;
+        final selected = display.value == i;
         children.add(
           Positioned(
             left: (d.x - rect.left) * scale + startX,
@@ -1453,18 +1695,24 @@ class _MonitorMenu extends StatelessWidget {
             height: dHeight * scale,
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey, width: 1.0),
-                color: display.value == i ? activeBgColor : Colors.white,
+                border: Border.all(
+                  color: selected ? activeBgColor : scheme.outlineVariant,
+                  width: 1.0,
+                ),
+                borderRadius: BorderRadius.circular(3),
+                color: selected ? activeBgColor : scheme.surfaceContainerHigh,
               ),
               child: Center(
                 child: Text(
                   '${i + 1}',
-                  style: TextStyle(
-                    color: display.value == i
-                        ? activeTextColor
-                        : _ToolbarTheme.inactiveColor,
-                    fontSize: fontSize,
-                    fontWeight: FontWeight.bold,
+                  style: CamelliaTypography.tabular(
+                    TextStyle(
+                      color: selected
+                          ? activeTextColor
+                          : scheme.onSurfaceVariant,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
@@ -1483,7 +1731,7 @@ class _MonitorMenu extends StatelessWidget {
     return Stack(
       alignment: Alignment.center,
       children: [
-        SizedBox(height: _ToolbarTheme.buttonSize),
+        const SizedBox(height: _ToolbarTheme.buttonSize),
         getMonitors(),
       ],
     );
@@ -1508,11 +1756,82 @@ class _MonitorMenu extends StatelessWidget {
   }
 }
 
+class _PrivacyModeMenu extends StatelessWidget {
+  const _PrivacyModeMenu({
+    required this.id,
+    required this.ffi,
+    this.inOverflow = false,
+  });
+
+  final String id;
+  final FFI ffi;
+  final bool inOverflow;
+
+  @override
+  Widget build(BuildContext context) {
+    final ffiModel = Provider.of<FfiModel>(context);
+    final pi = ffiModel.pi;
+    return Obx(() {
+      final privacyModeState = PrivacyModeState.find(id);
+      if (!(pi.features.privacyMode || privacyModeState.isNotEmpty) ||
+          !(ffiModel.keyboard || privacyModeState.isNotEmpty)) {
+        return const Offstage();
+      }
+      final list = toolbarPrivacyMode(privacyModeState, context, id, ffi);
+      if (list.isEmpty) return const Offstage();
+
+      final isActive = privacyModeState.isNotEmpty;
+      final glass = CamelliaGlassTokens.of(context);
+      final tint = isActive
+          ? glass.statusEncrypted
+          : _ToolbarTheme.mutedColor(context);
+      final hoverTint = isActive
+          ? glass.statusEncrypted
+          : _ToolbarTheme.hoverMutedColor(context);
+
+      if (list.length == 1) {
+        final item = list.first;
+        return _IconMenuButton(
+          icon: Icon(isActive ? CamelliaIcons.eyeOff : CamelliaIcons.privacy),
+          tooltip: 'Privacy mode',
+          inOverflow: inOverflow,
+          active: isActive,
+          color: tint,
+          hoverColor: hoverTint,
+          onPressed: item.onChanged != null
+              ? () => item.onChanged!(!item.value)
+              : null,
+        );
+      }
+
+      return _IconSubmenuButton(
+        tooltip: 'Privacy mode',
+        icon: Icon(isActive ? CamelliaIcons.eyeOff : CamelliaIcons.privacy),
+        ffi: ffi,
+        inOverflow: inOverflow,
+        active: isActive,
+        color: tint,
+        hoverColor: hoverTint,
+        menuChildrenGetter: (_) => list
+            .map(
+              (e) => CkbMenuButton(
+                value: e.value,
+                onChanged: e.onChanged,
+                child: e.child,
+                ffi: ffi,
+              ),
+            )
+            .toList(),
+      );
+    });
+  }
+}
+
 class _ControlMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
   final ToolbarState state;
-  _ControlMenu({
+  const _ControlMenu({
     Key? key,
     required this.id,
     required this.ffi,
@@ -1524,12 +1843,12 @@ class _ControlMenu extends StatelessWidget {
     return _IconSubmenuButton(
       tooltip: 'Control Actions',
       icon: const Icon(Icons.bolt_rounded),
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
+      color: _ToolbarTheme.activeColor(context),
+      hoverColor: _ToolbarTheme.activeHoverColor(context),
       ffi: ffi,
       menuChildrenGetter: (_) => toolbarControls(context, id, ffi).map((e) {
         if (e.divider) {
-          return Divider();
+          return const Divider();
         } else {
           return MenuButton(
             child: e.child,
@@ -1844,10 +2163,10 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
     return _IconSubmenuButton(
       tooltip: 'Display Settings',
-      icon: const Icon(Icons.display_settings_rounded),
+      icon: const Icon(CamelliaIcons.display),
       ffi: widget.ffi,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
+      color: _ToolbarTheme.activeColor(context),
+      hoverColor: _ToolbarTheme.activeHoverColor(context),
       menuChildrenGetter: menuChildrenGetter,
     );
   }
@@ -1913,8 +2232,8 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         final isCustom = data as bool;
         return AnimatedSwitcher(
           duration: Duration(milliseconds: 220),
-          switchInCurve: Curves.easeOut,
-          switchOutCurve: Curves.easeIn,
+          switchInCurve: CamelliaMotion.enter,
+          switchOutCurve: CamelliaMotion.exit,
           child: isCustom
               ? _CustomScaleMenuControls(ffi: ffi, onChanged: onChanged)
               : SizedBox.shrink(),
@@ -2200,13 +2519,12 @@ class _CustomScaleMenuControlsState
                 message: translate('Decrease'),
                 child: IconButton(
                   iconSize: 16,
-                  padding: EdgeInsets.all(1),
+                  padding: const EdgeInsets.all(1),
                   constraints: smallBtnConstraints,
-                  splashRadius: 11,
                   style: IconButton.styleFrom(
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  icon: const Icon(Icons.remove),
+                  icon: const Icon(CamelliaIcons.minimize),
                   onPressed: () => nudgeScale(-1),
                 ),
               ),
@@ -2215,13 +2533,12 @@ class _CustomScaleMenuControlsState
                 message: translate('Increase'),
                 child: IconButton(
                   iconSize: 16,
-                  padding: EdgeInsets.all(1),
+                  padding: const EdgeInsets.all(1),
                   constraints: smallBtnConstraints,
-                  splashRadius: 11,
                   style: IconButton.styleFrom(
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  icon: const Icon(Icons.add),
+                  icon: const Icon(CamelliaIcons.add),
                   onPressed: () => nudgeScale(1),
                 ),
               ),
@@ -2236,7 +2553,8 @@ class _CustomScaleMenuControlsState
 
 // Lightweight rectangular thumb that paints the current percentage.
 // Stateless and uses only SliderTheme colors; avoids allocations beyond a TextPainter per frame.
-class _RectValueThumbShape extends SliderComponentShape {
+@visibleForTesting
+class RectValueThumbShape extends SliderComponentShape {
   final double min;
   final double max;
   final double width;
@@ -2247,7 +2565,7 @@ class _RectValueThumbShape extends SliderComponentShape {
   // If null, falls back to linear interpolation between min and max.
   final int Function(double normalized)? displayValueForNormalized;
 
-  const _RectValueThumbShape({
+  const RectValueThumbShape({
     required this.min,
     required this.max,
     required this.width,
@@ -2286,7 +2604,7 @@ class _RectValueThumbShape extends SliderComponentShape {
     );
     final Color? evaluatedColor = colorTween.evaluate(enableAnimation);
     final Color? thumbColor = sliderTheme.thumbColor;
-    final Color fillColor = evaluatedColor ?? thumbColor ?? Colors.blueAccent;
+    final Color fillColor = evaluatedColor ?? thumbColor ?? CamelliaColors.indigo;
 
     final RRect rrect = RRect.fromRectAndRadius(
       Rect.fromCenter(center: center, width: width, height: height),
@@ -2301,10 +2619,12 @@ class _RectValueThumbShape extends SliderComponentShape {
         : (min + value * (max - min)).round();
     final TextSpan span = TextSpan(
       text: '$displayValue$unit',
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
+      style: CamelliaTypography.tabular(
+        const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
     final TextPainter tp = TextPainter(
@@ -2313,12 +2633,17 @@ class _RectValueThumbShape extends SliderComponentShape {
       textDirection: textDirection,
     );
     tp.layout(maxWidth: width - 4);
+    canvas.save();
+    canvas.clipRRect(rrect);
     tp.paint(
       canvas,
       Offset(center.dx - tp.width / 2, center.dy - tp.height / 2),
     );
+    canvas.restore();
   }
 }
+
+typedef _RectValueThumbShape = RectValueThumbShape;
 
 class _ResolutionsMenu extends StatefulWidget {
   final String id;
@@ -2719,11 +3044,11 @@ class _KeyboardMenu extends StatelessWidget {
 
     return _IconSubmenuButton(
       tooltip: 'Keyboard Settings',
-      icon: const Icon(Icons.keyboard_alt_outlined),
+      icon: const Icon(CamelliaIcons.keyboard),
       ffi: ffi,
       inOverflow: inOverflow,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
+      color: _ToolbarTheme.activeColor(context),
+      hoverColor: _ToolbarTheme.activeHoverColor(context),
       menuChildrenGetter: (_) => [
         keyboardMode(),
         localKeyboardType(),
@@ -2861,17 +3186,19 @@ class _KeyboardMenu extends StatelessWidget {
     );
   }
 
-  inputSource() {
+  Widget inputSource() {
     final supportedInputSource = bind.mainSupportedInputSource();
-    if (supportedInputSource.isEmpty) return Offstage();
-    late final List<dynamic> supportedInputSourceList;
+    if (supportedInputSource.isEmpty) return const Offstage();
+    final List<dynamic> supportedInputSourceList;
     try {
-      supportedInputSourceList = jsonDecode(supportedInputSource);
+      final decoded = jsonDecode(supportedInputSource);
+      if (decoded is! List) return const Offstage();
+      supportedInputSourceList = decoded;
     } catch (e) {
       debugPrint('Failed to decode $supportedInputSource, $e');
-      return;
+      return const Offstage();
     }
-    if (supportedInputSourceList.length < 2) return Offstage();
+    if (supportedInputSourceList.length < 2) return const Offstage();
     final inputSource = stateGlobal.getInputSource();
     final enabled = !ffi.ffiModel.viewOnly;
     final children = <Widget>[Divider()];
@@ -3032,11 +3359,11 @@ class _ChatMenuState extends State<_ChatMenu> {
       return _IconSubmenuButton(
         tooltip: 'Chat',
         key: chatButtonKey,
-        icon: const Icon(Icons.chat_bubble_outline_rounded),
+        icon: const Icon(CamelliaIcons.chat),
         ffi: widget.ffi,
         inOverflow: widget.inOverflow,
-        color: _ToolbarTheme.blueColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
+        color: _ToolbarTheme.activeColor(context),
+        hoverColor: _ToolbarTheme.activeHoverColor(context),
         menuChildrenGetter: (_) => [textChat(), voiceCall()],
       );
     }
@@ -3044,13 +3371,13 @@ class _ChatMenuState extends State<_ChatMenu> {
 
   buildTextChatButton() {
     return _IconMenuButton(
-      icon: const Icon(Icons.chat_rounded),
+      icon: const Icon(CamelliaIcons.chat),
       tooltip: 'Text chat',
       key: chatButtonKey,
       inOverflow: widget.inOverflow,
       onPressed: _textChatOnPressed,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
+      color: _ToolbarTheme.activeColor(context),
+      hoverColor: _ToolbarTheme.activeHoverColor(context),
     );
   }
 
@@ -3142,27 +3469,85 @@ class _VoiceCallMenu extends StatelessWidget {
         case VoiceCallStatus.connected:
           return _IconSubmenuButton(
             tooltip: 'Voice call',
-            icon: const Icon(Icons.call_rounded),
+            icon: const Icon(CamelliaIcons.voiceCall),
             inOverflow: inOverflow,
-            color: _ToolbarTheme.blueColor,
-            hoverColor: _ToolbarTheme.hoverBlueColor,
+            active: true,
+            color: CamelliaGlassTokens.of(context).statusOnline,
+            hoverColor: CamelliaGlassTokens.of(context).statusOnline,
             menuChildrenGetter: menuChildrenGetter,
             ffi: ffi,
           );
         default:
-          return Offstage();
+          return const Offstage();
       }
     });
   }
 
   Widget buildCallWaiting(BuildContext context) {
+    final danger = _ToolbarTheme.dangerColor(context);
     return _IconMenuButton(
-      icon: const Icon(Icons.call_end_rounded),
-      tooltip: "Waiting",
+      icon: const Icon(CamelliaIcons.endCall),
+      tooltip: translate("Waiting"),
       inOverflow: inOverflow,
+      active: true,
       onPressed: () => bind.sessionCloseVoiceCall(sessionId: ffi.sessionId),
-      color: _ToolbarTheme.redColor,
-      hoverColor: _ToolbarTheme.hoverRedColor,
+      color: danger,
+      hoverColor: danger,
+    );
+  }
+}
+
+class _BreathingStatusDot extends StatefulWidget {
+  const _BreathingStatusDot({required this.color, this.size = 8.0});
+
+  final Color color;
+  final double size;
+
+  @override
+  State<_BreathingStatusDot> createState() => _BreathingStatusDotState();
+}
+
+class _BreathingStatusDotState extends State<_BreathingStatusDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
+    final core = Container(
+      width: widget.size,
+      height: widget.size,
+      decoration: BoxDecoration(
+        color: widget.color,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: widget.color.withValues(alpha: 0.55),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+    );
+    if (reduceMotion) return core;
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeInOut.transform(_controller.value);
+        return Transform.scale(
+          scale: 0.88 + t * 0.28,
+          child: Opacity(opacity: 0.65 + t * 0.35, child: child),
+        );
+      },
+      child: core,
     );
   }
 }
@@ -3180,24 +3565,34 @@ class _RecordMenu extends StatelessWidget {
     final visible =
         !hideRecordingButton &&
         (recordingModel.start || ffi.permissions['recording'] != false);
-    if (!visible) return Offstage();
+    if (!visible) return const Offstage();
+    final danger = _ToolbarTheme.dangerColor(context);
+    final isRecording = recordingModel.start;
     return _IconMenuButton(
-      icon: Icon(
-        recordingModel.start
-            ? Icons.stop_circle_outlined
-            : Icons.fiber_manual_record_rounded,
-      ),
+      icon: isRecording
+          ? Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                const Icon(Icons.stop_circle_outlined),
+                Positioned(
+                  right: -3,
+                  top: -3,
+                  child: _BreathingStatusDot(color: danger, size: 7),
+                ),
+              ],
+            )
+          : const Icon(CamelliaIcons.record),
       inOverflow: inOverflow,
-      tooltip: recordingModel.start
+      active: isRecording,
+      tooltip: isRecording
           ? 'Stop session recording'
           : 'Start session recording',
       onPressed: () => recordingModel.toggle(),
-      color: recordingModel.start
-          ? _ToolbarTheme.redColor
-          : _ToolbarTheme.blueColor,
-      hoverColor: recordingModel.start
-          ? _ToolbarTheme.hoverRedColor
-          : _ToolbarTheme.hoverBlueColor,
+      color: isRecording ? danger : _ToolbarTheme.activeColor(context),
+      hoverColor: isRecording
+          ? danger
+          : _ToolbarTheme.activeHoverColor(context),
     );
   }
 }
@@ -3210,8 +3605,9 @@ class _CloseMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final danger = _ToolbarTheme.dangerColor(context);
     return _IconMenuButton(
-      icon: const Icon(Icons.close_rounded),
+      icon: const Icon(CamelliaIcons.close),
       tooltip: 'Close',
       onPressed: () async {
         if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
@@ -3219,8 +3615,8 @@ class _CloseMenu extends StatelessWidget {
         }
         closeConnection(id: id);
       },
-      color: _ToolbarTheme.redColor,
-      hoverColor: _ToolbarTheme.hoverRedColor,
+      color: danger,
+      hoverColor: danger,
     );
   }
 }
@@ -3235,6 +3631,8 @@ class _IconMenuButton extends StatefulWidget {
   final double? vMargin;
   final bool topLevel;
   final bool inOverflow;
+  final bool active;
+  final bool compact;
   final double? width;
   const _IconMenuButton({
     Key? key,
@@ -3247,6 +3645,8 @@ class _IconMenuButton extends StatefulWidget {
     this.vMargin,
     this.topLevel = true,
     this.inOverflow = false,
+    this.active = false,
+    this.compact = false,
     this.width,
   }) : super(key: key);
 
@@ -3261,10 +3661,12 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
   Widget build(BuildContext context) {
     final tint = hover ? widget.hoverColor : widget.color;
     final label = translate(widget.tooltip);
+    final iconDim = widget.compact ? 17.0 : 20.0;
+    final btnSize = widget.compact ? 30.0 : _ToolbarTheme.buttonSize;
     final leadingIcon = SizedBox.square(
-      dimension: 20,
+      dimension: iconDim,
       child: IconTheme.merge(
-        data: IconThemeData(color: tint, size: 20),
+        data: IconThemeData(color: tint, size: iconDim),
         child: FittedBox(fit: BoxFit.contain, child: widget.icon),
       ),
     );
@@ -3279,36 +3681,28 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
     final button = Padding(
       padding: EdgeInsets.symmetric(
         horizontal: widget.hMargin ?? _ToolbarTheme.buttonHMargin,
-        vertical: widget.vMargin ?? _ToolbarTheme.buttonVMargin,
+        vertical: widget.vMargin ?? (widget.compact ? 1 : _ToolbarTheme.buttonVMargin),
       ),
       child: SizedBox(
-        width: widget.topLevel
-            ? _ToolbarTheme.buttonSize
-            : widget.width ?? _ToolbarTheme.buttonSize,
-        height: _ToolbarTheme.buttonSize,
+        width: widget.topLevel ? btnSize : widget.width ?? btnSize,
+        height: btnSize,
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(_ToolbarTheme.iconRadius),
+            borderRadius: BorderRadius.circular(CamelliaRadius.pill),
             onHover: (value) => setState(() => hover = value),
             onTap: widget.onPressed,
             child: _CommandBarActionSurface(
               icon: leadingIcon,
               tint: tint,
               hovered: hover,
+              active: widget.active,
+              size: btnSize,
             ),
           ),
         ),
       ),
     );
-    if (widget.topLevel) {
-      return Semantics(
-        button: true,
-        enabled: widget.onPressed != null,
-        label: label,
-        child: Tooltip(message: label, child: button),
-      );
-    }
     return Semantics(
       button: true,
       enabled: widget.onPressed != null,
@@ -3318,39 +3712,51 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
   }
 }
 
-class _CommandBarActionSurface extends StatelessWidget {
-  const _CommandBarActionSurface({
+@visibleForTesting
+class CommandBarActionSurface extends StatelessWidget {
+  const CommandBarActionSurface({
+    super.key,
     required this.icon,
     required this.tint,
     required this.hovered,
+    this.active = false,
+    this.size = _ToolbarTheme.buttonSize,
   });
 
   final Widget icon;
   final Color tint;
   final bool hovered;
+  final bool active;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final bg = hovered
+        ? scheme.primaryContainer.withValues(alpha: dark ? 0.78 : 0.72)
+        : active
+        ? tint.withValues(alpha: dark ? 0.22 : 0.14)
+        : Colors.transparent;
     return AnimatedContainer(
-      duration: CamelliaMotion.hover,
+      duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
       curve: CamelliaMotion.enter,
-      width: _ToolbarTheme.buttonSize,
-      height: _ToolbarTheme.buttonSize,
-      padding: const EdgeInsets.all(10),
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(size <= 32 ? 6 : 10),
       decoration: BoxDecoration(
-        color: hovered
-            ? scheme.primaryContainer.withValues(alpha: 0.72)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(_ToolbarTheme.iconRadius),
+        color: bg,
+        borderRadius: BorderRadius.circular(CamelliaRadius.pill),
       ),
       child: IconTheme.merge(
-        data: IconThemeData(color: tint, size: 20),
+        data: IconThemeData(color: tint, size: size <= 32 ? 17 : 20),
         child: FittedBox(fit: BoxFit.contain, child: icon),
       ),
     );
   }
 }
+
+typedef _CommandBarActionSurface = CommandBarActionSurface;
 
 class _IconSubmenuButton extends StatefulWidget {
   final String tooltip;
@@ -3361,8 +3767,9 @@ class _IconSubmenuButton extends StatefulWidget {
   final MenuStyle? menuStyle;
   final FFI? ffi;
   final bool inOverflow;
+  final bool active;
 
-  _IconSubmenuButton({
+  const _IconSubmenuButton({
     Key? key,
     required this.icon,
     required this.tooltip,
@@ -3372,6 +3779,7 @@ class _IconSubmenuButton extends StatefulWidget {
     this.ffi,
     this.menuStyle,
     this.inOverflow = false,
+    this.active = false,
   }) : super(key: key);
 
   @override
@@ -3420,6 +3828,7 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
         tooltip: widget.tooltip,
         color: widget.color,
         hoverColor: widget.hoverColor,
+        active: widget.active || controller.isOpen,
         onPressed: controller.isOpen ? controller.close : controller.open,
       ),
     );
@@ -3549,10 +3958,7 @@ class RdoMenuButton<T> extends StatelessWidget {
   }
 }
 
-class _DraggableShowHide extends StatefulWidget {
-  final String id;
-  final FFI ffi;
-  final SessionID sessionId;
+class _DockDragGrip extends StatefulWidget {
   final RxDouble fraction;
   final Rx<_ToolbarEdge> edge;
   final Rxn<_ToolbarEdge> previewEdge;
@@ -3561,14 +3967,8 @@ class _DraggableShowHide extends StatefulWidget {
   final bool isHorizontal;
   final void Function(_ToolbarEdge edge, double fraction) onPlacementChanged;
   final RxBool dragging;
-  final ToolbarState toolbarState;
-  final BorderRadius borderRadius;
 
-  const _DraggableShowHide({
-    Key? key,
-    required this.id,
-    required this.ffi,
-    required this.sessionId,
+  const _DockDragGrip({
     required this.fraction,
     required this.edge,
     required this.previewEdge,
@@ -3577,27 +3977,21 @@ class _DraggableShowHide extends StatefulWidget {
     required this.isHorizontal,
     required this.onPlacementChanged,
     required this.dragging,
-    required this.toolbarState,
-    required this.borderRadius,
-  }) : super(key: key);
+  });
 
   @override
-  State<_DraggableShowHide> createState() => _DraggableShowHideState();
+  State<_DockDragGrip> createState() => _DockDragGripState();
 }
 
-class _DraggableShowHideState extends State<_DraggableShowHide> {
+class _DockDragGripState extends State<_DockDragGrip> {
   static const double _left = 0;
   static const double _right = 1;
-  static const double _controlExtent =
-      RemoteCommandMenuMetrics.compactHandleExtent / 2;
+  static const double _controlExtent = 30.0;
   Offset? _lastPointerDown;
   Offset? _dragGrabOffset;
   double? _dragLongAxisGrabOffset;
   Size? _dragToolbarSize;
 
-  RxBool get collapse => widget.toolbarState.collapse;
-
-  // Bias the current preview so diagonal drags do not flicker between edges.
   static const double _switchHysteresisPx = 50.0;
 
   _ToolbarEdge _nearestToolbarEdge(Offset cursor, Size mediaSize) {
@@ -3709,11 +4103,16 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
     widget.onPlacementChanged(newEdge, frac);
   }
 
-  Widget _buildDraggable(BuildContext context) {
+  @override
+  Widget build(BuildContext context) {
     final icon = Icon(
-      widget.isHorizontal ? Icons.drag_indicator : Icons.drag_handle,
-      size: 18,
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      widget.isHorizontal
+          ? Icons.drag_indicator_rounded
+          : Icons.drag_handle_rounded,
+      size: 16,
+      color: Theme.of(
+        context,
+      ).colorScheme.onSurfaceVariant.withValues(alpha: 0.78),
     );
     return Listener(
       onPointerDown: (event) => _lastPointerDown = event.position,
@@ -3723,10 +4122,10 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
           cursor: SystemMouseCursors.move,
           child: Draggable(
             axis: null,
-            feedback: Material(
-              color: Theme.of(context).colorScheme.surface,
-              elevation: 8,
-              borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            feedback: GlassSurface(
+              layer: CamelliaGlassLayer.modal,
+              borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+              elevated: true,
               child: SizedBox.square(
                 dimension: _controlExtent,
                 child: Center(child: icon),
@@ -3754,91 +4153,112 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
       ),
     );
   }
+}
+
+class _CollapsedStatusBadge extends StatelessWidget {
+  const _CollapsedStatusBadge({
+    required this.id,
+    required this.ffi,
+    required this.isHorizontal,
+    required this.onTap,
+  });
+
+  final String id;
+  final FFI ffi;
+  final bool isHorizontal;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    const double iconSize = 18;
+    final glass = CamelliaGlassTokens.of(context);
+    final recordingModel = Provider.of<RecordingModel>(context);
+    return AnimatedBuilder(
+      animation: ffi.qualityMonitorModel,
+      builder: (context, _) {
+        final tag = ConnectionTypeState.tag(id);
+        final hasConn = Get.isRegistered<ConnectionType>(tag: tag);
+        final conn = hasConn ? ConnectionTypeState.find(id) : null;
+        final privacyModeState = PrivacyModeState.find(id);
+        return Obx(() {
+          final isRecording = recordingModel.start;
+          final isPrivacy = privacyModeState.isNotEmpty;
+          final valid = conn?.isValid() ?? false;
+          final secure = valid
+              ? conn!.secure.value == ConnectionType.strSecure
+              : null;
+          final delayMs = _parseLatencyMs(ffi.qualityMonitorModel.data.delay);
+          final dotColor = isRecording
+              ? glass.statusAlert
+              : secure == null
+              ? glass.statusConnecting
+              : !secure
+              ? glass.statusAlert
+              : delayMs != null
+              ? CamelliaIcons.signalColor(context, delayMs)
+              : glass.statusOnline;
 
-    Widget buttonWrapper(
-      VoidCallback? onPressed,
-      IconData icon, {
-      required String tooltip,
-      Color hoverColor = _ToolbarTheme.blueColor,
-    }) {
-      return Tooltip(
-        message: tooltip,
-        child: TextButton(
-          onPressed: onPressed,
-          style: ButtonStyle(
-            minimumSize: const WidgetStatePropertyAll(
-              Size(_controlExtent, _controlExtent),
-            ),
-            maximumSize: const WidgetStatePropertyAll(
-              Size(_controlExtent, _controlExtent),
-            ),
-            padding: const WidgetStatePropertyAll(EdgeInsets.all(7)),
-            shape: WidgetStatePropertyAll(
-              RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          final latencyText = delayMs != null ? '${delayMs}ms' : null;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: isHorizontal ? 6 : 2,
+                  vertical: isHorizontal ? 2 : 6,
+                ),
+                child: Flex(
+                  direction: isHorizontal ? Axis.horizontal : Axis.vertical,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isRecording)
+                      _BreathingStatusDot(color: glass.statusAlert, size: 8)
+                    else
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: dotColor,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: dotColor.withValues(alpha: 0.5),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (isPrivacy) ...[
+                      SizedBox(
+                        width: isHorizontal ? 5 : 0,
+                        height: isHorizontal ? 0 : 4,
+                      ),
+                      Icon(
+                        CamelliaIcons.privacy,
+                        size: 13,
+                        color: glass.statusEncrypted,
+                      ),
+                    ],
+                    if (isHorizontal && latencyText != null) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        latencyText,
+                        style: CamelliaTypography.tabular(
+                          Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
-            foregroundColor: WidgetStatePropertyAll(
-              Theme.of(context).colorScheme.onSurface,
-            ),
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              return states.contains(WidgetState.hovered)
-                  ? hoverColor.withValues(alpha: 0.14)
-                  : Colors.transparent;
-            }),
-          ),
-          child: Icon(icon, size: iconSize),
-        ),
-      );
-    }
-
-    final axis = widget.isHorizontal ? Axis.horizontal : Axis.vertical;
-    final child = Flex(
-      direction: axis,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _buildDraggable(context),
-        Obx(
-          () => collapse.isTrue
-              ? _MinimizedMonitorSwitchButton(id: widget.id, ffi: widget.ffi)
-              : const Offstage(),
-        ),
-        Obx(
-          () => buttonWrapper(
-            () => widget.toolbarState.switchCollapse(widget.sessionId),
-            _toolbarCollapseIcon(widget.edge.value, collapse.isTrue),
-            tooltip: translate(
-              collapse.isFalse ? 'Hide Toolbar' : 'Show Toolbar',
-            ),
-          ),
-        ),
-        if (isWebDesktop)
-          Obx(() {
-            if (collapse.isFalse) {
-              return Offstage();
-            } else {
-              return buttonWrapper(
-                () => closeConnection(id: widget.id),
-                Icons.close,
-                tooltip: translate('Close'),
-                hoverColor: _ToolbarTheme.redColor,
-              );
-            }
-          }),
-      ],
-    );
-    return Container(
-      padding: EdgeInsets.zero,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.96),
-        border: Border.all(color: _ToolbarTheme.borderColor(context), width: 1),
-        borderRadius: widget.borderRadius,
-      ),
-      child: child,
+          );
+        });
+      },
     );
   }
 }
@@ -3945,41 +4365,38 @@ class _MinimizedMonitorSwitchButton extends StatelessWidget {
         return const Offstage();
       }
 
+      final scheme = Theme.of(context).colorScheme;
+      final activeColor = _ToolbarTheme.activeColor(context);
       return SizedBox.square(
-        dimension: 32,
+        dimension: 30,
         child: Tooltip(
           message: cycle.tooltip,
-          child: TextButton(
-            onPressed: cycle.next,
-            style: ButtonStyle(
-              minimumSize: const WidgetStatePropertyAll(Size(32, 32)),
-              maximumSize: const WidgetStatePropertyAll(Size(32, 32)),
-              padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
-              backgroundColor: WidgetStateProperty.resolveWith((states) {
-                if (states.contains(WidgetState.hovered)) {
-                  return _ToolbarTheme.blueColor.withValues(alpha: 0.15);
-                }
-                return null;
-              }),
-            ),
-            child: Stack(
-              alignment: const Alignment(0, -0.125),
-              children: [
-                const Icon(
-                  Icons.monitor_rounded,
-                  size: iconSize,
-                  color: _ToolbarTheme.blueColor,
-                ),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 8,
-                    height: 1,
-                    fontWeight: FontWeight.bold,
+          child: InkWell(
+            onTap: cycle.next,
+            borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+            hoverColor: activeColor.withValues(alpha: 0.15),
+            child: Center(
+              child: Stack(
+                alignment: const Alignment(0, -0.15),
+                children: [
+                  Icon(
+                    CamelliaIcons.screen,
+                    size: iconSize,
+                    color: activeColor,
                   ),
-                ),
-              ],
+                  Text(
+                    label,
+                    style: CamelliaTypography.tabular(
+                      TextStyle(
+                        color: scheme.onPrimary,
+                        fontSize: 8,
+                        height: 1,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

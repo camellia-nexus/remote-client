@@ -1,11 +1,11 @@
 {
-    "name": "Camellia Web Client",
-    "short_name": "Camellia",
+    "name": "Camellia Remote",
+    "short_name": "Camellia Remote",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#FFF7F2",
-    "theme_color": "#D6455D",
-    "description": "Camellia secure remote access in the browser.",
+    "background_color": "#080D18",
+    "theme_color": "#4F46E5",
+    "description": "Camellia Remote secure remote access in the browser.",
     "icons": [
         {
             "src": "icons/Icon-192.png",

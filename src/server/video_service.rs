@@ -635,7 +635,7 @@ fn get_capturer_camera(current: usize) -> ResultType<CapturerInfo> {
         num_cpus::get(),
         name,
     );
-    return Ok(CapturerInfo {
+    Ok(CapturerInfo {
         origin,
         width,
         height,
@@ -644,7 +644,7 @@ fn get_capturer_camera(current: usize) -> ResultType<CapturerInfo> {
         privacy_mode_id,
         _capturer_privacy_mode_id: privacy_mode_id,
         capturer,
-    });
+    })
 }
 fn get_capturer(
     source: VideoSource,
@@ -999,7 +999,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                     && scroll_handled_timestamp > 0
                     && quiet_ms >= SCROLL_STILL_SETTLE_MS
                 {
-                    if yuv.len() > 0 {
+                    if !yuv.is_empty() {
                         let can_change_quality = encoder.support_changing_quality();
                         if can_change_quality {
                             let enhanced_ratio = (quality * 1.5).max(scrap::codec::BR_BEST);

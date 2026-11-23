@@ -77,7 +77,7 @@ class _ButtonState extends State<Button> {
                       color: widget.isOutline
                           ? widget.textColor ??
                               Theme.of(context).textTheme.titleLarge?.color
-                          : Colors.white),
+                          : Theme.of(context).colorScheme.onPrimary),
                 ).marginSymmetric(horizontal: 12),
               )),
         ));
@@ -160,7 +160,7 @@ class _FixedWidthButtonState extends State<FixedWidthButton> {
                         color: widget.isOutline
                             ? widget.textColor ??
                                 Theme.of(context).textTheme.titleLarge?.color
-                            : Colors.white),
+                            : Theme.of(context).colorScheme.onPrimary),
                   ).marginSymmetric(horizontal: 12),
                 ),
               ],

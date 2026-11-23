@@ -5,8 +5,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/common/widgets/settings_components.dart';
-import 'package:camellia_remote_app/desktop/pages/desktop_setting_page.dart';
+import 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -19,19 +20,22 @@ import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../widgets/deploy_dialog.dart';
-import '../widgets/dialog.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
 import 'home_page.dart';
 import 'scan_page.dart';
 
 class SettingsPage extends StatefulWidget implements PageShape {
-  @override
-  final title = translate("Settings");
+  const SettingsPage({super.key});
 
   @override
-  final icon = const Icon(Icons.tune_outlined);
+  String get title => translate("Settings");
 
   @override
-  final appBarActions = bind.isDisableSettings() ? [] : [ScanButton()];
+  Icon get icon => const Icon(Icons.tune_outlined);
+
+  @override
+  List<Widget> get appBarActions =>
+      bind.isDisableSettings() ? const [] : const [ScanButton()];
 
   @override
   State<SettingsPage> createState() => _SettingsState();
@@ -41,21 +45,37 @@ const url = 'https://github.com/camellia-computing/remote-client';
 
 SettingsThemeData _camelliaSettingsTheme(Brightness brightness) {
   final dark = brightness == Brightness.dark;
-  final surface = dark
-      ? CamelliaColors.darkSurface
-      : CamelliaColors.lightSurface;
-  final text = dark ? CamelliaColors.darkText : CamelliaColors.lightText;
-  final muted = dark ? CamelliaColors.darkMuted : CamelliaColors.lightMuted;
-  final border = dark ? CamelliaColors.darkBorder : CamelliaColors.lightBorder;
+  final midnight =
+      dark && MyTheme.getThemePreference() == CamelliaThemePreference.midnight;
+  final glass = midnight
+      ? CamelliaGlassTokens.midnight
+      : dark
+      ? CamelliaGlassTokens.dark
+      : CamelliaGlassTokens.light;
+  final surface = glass.floatingTint;
+  final text = midnight
+      ? CamelliaColors.midnightText
+      : dark
+      ? CamelliaColors.darkText
+      : CamelliaColors.lightText;
+  final muted = midnight
+      ? CamelliaColors.midnightMuted
+      : dark
+      ? CamelliaColors.darkMuted
+      : CamelliaColors.lightMuted;
+  final border = midnight
+      ? CamelliaColors.midnightBorder
+      : dark
+      ? CamelliaColors.darkBorder
+      : CamelliaColors.lightBorder;
+  final accent = dark ? CamelliaColors.indigoDark : CamelliaColors.indigo;
   return SettingsThemeData(
     settingsListBackground: Colors.transparent,
     settingsSectionBackground: surface,
-    dividerColor: border,
-    tileHighlightColor: CamelliaColors.azure.withValues(
-      alpha: dark ? 0.22 : 0.10,
-    ),
-    titleTextColor: CamelliaColors.coral,
-    leadingIconsColor: CamelliaColors.azure,
+    dividerColor: border.withValues(alpha: 0.55),
+    tileHighlightColor: accent.withValues(alpha: dark ? 0.18 : 0.09),
+    titleTextColor: accent,
+    leadingIconsColor: accent,
     trailingTextColor: muted,
     tileDescriptionTextColor: muted,
     settingsTileTextColor: text,
@@ -65,7 +85,7 @@ SettingsThemeData _camelliaSettingsTheme(Brightness brightness) {
     titleTextStyle: const TextStyle(
       fontSize: 13,
       fontWeight: FontWeight.w800,
-      letterSpacing: 0,
+      letterSpacing: 0.2,
     ),
     tileTextStyle: const TextStyle(
       fontSize: 15,
@@ -464,9 +484,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             Expanded(child: Text(translate('Use IP Whitelisting'))),
             Offstage(
               offstage: !_onlyWhiteList,
-              child: const Icon(
+              child: Icon(
                 Icons.warning_amber_rounded,
-                color: Color.fromARGB(255, 255, 204, 0),
+                color: CamelliaGlassTokens.of(context).statusHighLatency,
               ),
             ).marginOnly(left: 5),
           ],
@@ -969,26 +989,45 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               ),
             SettingsTile(
               title: Text(translate('Language')),
-              leading: Icon(Icons.translate),
+              leading: const Icon(Icons.translate_rounded),
               onPressed: (context) {
-                showLanguageSettings(gFFI.dialogManager);
+                showLanguageSettings(gFFI.dialogManager, sheetContext: context);
               },
             ),
             SettingsTile(
-              title: Text(
-                translate(
-                  Theme.of(context).brightness == Brightness.light
-                      ? 'Light Theme'
-                      : 'Dark Theme',
-                ),
+              title: Text(translate('Theme')),
+              value: ValueListenableBuilder<CamelliaThemePreference>(
+                valueListenable: MyTheme.themeNotifier,
+                builder: (context, pref, _) {
+                  final label = switch (pref) {
+                    CamelliaThemePreference.light => translate('Light'),
+                    CamelliaThemePreference.dark => translate('Dark'),
+                    CamelliaThemePreference.midnight => translate(
+                      'OLED Midnight',
+                    ),
+                    CamelliaThemePreference.system => translate(
+                      'Follow System',
+                    ),
+                  };
+                  return Text(label);
+                },
               ),
-              leading: Icon(
-                Theme.of(context).brightness == Brightness.light
-                    ? Icons.dark_mode
-                    : Icons.light_mode,
+              leading: ValueListenableBuilder<CamelliaThemePreference>(
+                valueListenable: MyTheme.themeNotifier,
+                builder: (context, pref, _) {
+                  final icon = switch (pref) {
+                    CamelliaThemePreference.light => Icons.light_mode_rounded,
+                    CamelliaThemePreference.dark => Icons.dark_mode_rounded,
+                    CamelliaThemePreference.midnight =>
+                      Icons.nights_stay_rounded,
+                    CamelliaThemePreference.system =>
+                      Icons.brightness_auto_rounded,
+                  };
+                  return Icon(icon);
+                },
               ),
               onPressed: (context) {
-                showThemeSettings(gFFI.dialogManager);
+                showThemeSettings(gFFI.dialogManager, sheetContext: context);
               },
             ),
             if (!bind.isDisableAccount())
@@ -1218,7 +1257,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     return true;
   }
 
-  defaultDisplaySection() {
+  SettingsSection defaultDisplaySection() {
     return SettingsSection(
       title: Text(translate("Display Settings")),
       tiles: [
@@ -1242,7 +1281,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   }
 }
 
-void showLanguageSettings(OverlayDialogManager dialogManager) async {
+void showLanguageSettings(
+  OverlayDialogManager dialogManager, {
+  BuildContext? sheetContext,
+}) async {
   List<dynamic> validLangs = [];
   try {
     final rawLangs = await bind.mainGetLangs();
@@ -1250,14 +1292,17 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
     if (decoded is List) {
       validLangs = decoded.where((e) => e is List && e.length >= 2).toList();
     } else {
-      throw FormatException('Invalid language list format');
+      throw const FormatException('Invalid language list format');
     }
   } catch (e) {
     debugPrint("Failed to load languages: $e");
     dialogManager.show(
       (setState, close, context) {
         return CustomAlertDialog(
-          title: Text(translate('Language')),
+          title: ModernDialogHeader.warning(
+            title: translate('Language'),
+            onClose: close,
+          ),
           content: Text('${translate("Failed to load language list")}: $e'),
           actions: [
             dialogButton("Cancel", onPressed: close, isOutline: true),
@@ -1265,7 +1310,7 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
               "Retry",
               onPressed: () {
                 close();
-                showLanguageSettings(dialogManager);
+                showLanguageSettings(dialogManager, sheetContext: sheetContext);
               },
             ),
           ],
@@ -1278,6 +1323,56 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
   }
 
   var lang = bind.mainGetLocalOption(key: kCommConfKeyLang);
+  final isOptFixed = isOptionFixed(kCommConfKeyLang);
+
+  if (sheetContext != null && sheetContext.mounted) {
+    await showGlassBottomSheet<void>(
+      context: sheetContext,
+      title: translate('Language'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> setLang(String? v) async {
+            if (v == null || lang == v) return;
+            setSheetState(() => lang = v);
+            await bind.mainSetLocalOption(key: kCommConfKeyLang, value: v);
+            bind.mainChangeLanguage(lang: v);
+            reloadCurrentWindow();
+            if (ctx.mounted) Navigator.of(ctx).pop();
+          }
+
+          return ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(ctx).height * 0.62,
+            ),
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                getRadio<String>(
+                  Text(translate('Default')),
+                  defaultOptionLang.toString(),
+                  lang,
+                  isOptFixed ? null : setLang,
+                ),
+                Divider(color: CamelliaGlassTokens.of(ctx).specularBottom),
+                ...validLangs.map((e) {
+                  final key = e[0].toString();
+                  final name = e[1].toString();
+                  return getRadio<String>(
+                    Text(translate(name)),
+                    key,
+                    lang,
+                    isOptFixed ? null : setLang,
+                  );
+                }),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    return;
+  }
+
   dialogManager.show(
     (setState, close, context) {
       bool isClosed = false;
@@ -1303,7 +1398,6 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
         }
       }
 
-      final isOptFixed = isOptionFixed(kCommConfKeyLang);
       return CustomAlertDialog(
         content: Column(
           children:
@@ -1314,7 +1408,7 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
                   lang,
                   isOptFixed ? null : setLang,
                 ),
-                Divider(color: MyTheme.border),
+                Divider(color: CamelliaGlassTokens.of(context).specularBottom),
               ] +
               validLangs.map((e) {
                 final key = e[0].toString();
@@ -1335,8 +1429,96 @@ void showLanguageSettings(OverlayDialogManager dialogManager) async {
   );
 }
 
-void showThemeSettings(OverlayDialogManager dialogManager) async {
-  var themeMode = MyTheme.getThemeModePreference();
+void showThemeSettings(
+  OverlayDialogManager dialogManager, {
+  BuildContext? sheetContext,
+}) async {
+  var themePref = MyTheme.getThemePreference();
+  final isOptFixed = isOptionFixed(kCommConfKeyTheme);
+
+  if (sheetContext != null && sheetContext.mounted) {
+    await showGlassBottomSheet<void>(
+      context: sheetContext,
+      title: translate('Theme'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final theme = Theme.of(ctx);
+          final accent = theme.brightness == Brightness.dark
+              ? theme.colorScheme.secondary
+              : theme.colorScheme.primary;
+          final options = [
+            (
+              CamelliaThemePreference.system,
+              translate('Follow System'),
+              Icons.brightness_auto_rounded,
+            ),
+            (
+              CamelliaThemePreference.light,
+              translate('Light'),
+              Icons.light_mode_rounded,
+            ),
+            (
+              CamelliaThemePreference.dark,
+              translate('Dark'),
+              Icons.dark_mode_rounded,
+            ),
+            (
+              CamelliaThemePreference.midnight,
+              translate('OLED Midnight'),
+              Icons.nights_stay_rounded,
+            ),
+          ];
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: options.map((entry) {
+              final selected = themePref == entry.$1;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: GlassSurface(
+                  layer: CamelliaGlassLayer.floating,
+                  showShadow: false,
+                  enableBlur: false,
+                  tintColor: selected ? accent.withValues(alpha: 0.16) : null,
+                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                  child: ListTile(
+                    dense: true,
+                    enabled: !isOptFixed,
+                    leading: Icon(
+                      entry.$3,
+                      color: selected
+                          ? accent
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    title: Text(
+                      entry.$2,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                    trailing: Icon(
+                      CamelliaIcons.check,
+                      size: 18,
+                      color: selected ? accent : Colors.transparent,
+                    ),
+                    onTap: isOptFixed
+                        ? null
+                        : () {
+                            setSheetState(() => themePref = entry.$1);
+                            MyTheme.changeThemePreference(entry.$1);
+                            Navigator.of(ctx).pop();
+                          },
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+    return;
+  }
 
   dialogManager.show(
     (setState, close, context) {
@@ -1350,37 +1532,43 @@ void showThemeSettings(OverlayDialogManager dialogManager) async {
         }
       }
 
-      setTheme(v) {
-        if (themeMode != v) {
+      void setTheme(CamelliaThemePreference? v) {
+        if (v != null && themePref != v) {
           setState(() {
-            themeMode = v;
+            themePref = v;
           });
-          MyTheme.changeDarkMode(themeMode);
+          MyTheme.changeThemePreference(v);
           closeTimer?.cancel();
           closeTimer = Timer(const Duration(milliseconds: 200), safeClose);
         }
       }
 
-      final isOptFixed = isOptionFixed(kCommConfKeyTheme);
       return CustomAlertDialog(
         content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             getRadio(
               Text(translate('Light')),
-              ThemeMode.light,
-              themeMode,
+              CamelliaThemePreference.light,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
             getRadio(
               Text(translate('Dark')),
-              ThemeMode.dark,
-              themeMode,
+              CamelliaThemePreference.dark,
+              themePref,
+              isOptFixed ? null : setTheme,
+            ),
+            getRadio(
+              Text(translate('OLED Midnight')),
+              CamelliaThemePreference.midnight,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
             getRadio(
               Text(translate('Follow System')),
-              ThemeMode.system,
-              themeMode,
+              CamelliaThemePreference.system,
+              themePref,
               isOptFixed ? null : setTheme,
             ),
           ],
@@ -1397,12 +1585,12 @@ void showAbout(OverlayDialogManager dialogManager) {
   dialogManager.show(
     (setState, close, context) {
       return CustomAlertDialog(
-        title: const Text('About Camellia Remote'),
+        title: Text(translate('About Camellia Remote')),
         content: Wrap(
           direction: Axis.vertical,
           spacing: 12,
           children: [
-            Text('Version: $version'),
+            Text('${translate('Version')}: $version'),
             InkWell(
               onTap: () async {
                 const url =
@@ -1428,6 +1616,8 @@ void showAbout(OverlayDialogManager dialogManager) {
 }
 
 class ScanButton extends StatelessWidget {
+  const ScanButton({super.key});
+
   @override
   Widget build(BuildContext context) {
     return IconButton(
@@ -1606,37 +1796,53 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(translate('Manage trusted devices')),
-        centerTitle: true,
-        actions: [
-          Obx(
-            () => IconButton(
-              icon: Icon(Icons.delete, color: Colors.white),
-              onPressed: selectedDevices.isEmpty
-                  ? null
-                  : () {
-                      confrimDeleteTrustedDevicesDialog(
-                        trustedDevices,
-                        selectedDevices,
-                      );
-                    },
+    final glass = CamelliaGlassTokens.of(context);
+    return AppAmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          title: Text(translate('Manage trusted devices')),
+          centerTitle: true,
+          actions: [
+            Obx(
+              () => Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: GlassIconButton(
+                  icon: CamelliaIcons.trash,
+                  size: 38,
+                  iconSize: 19,
+                  accentColor: glass.statusAlert,
+                  tooltip: translate('Delete'),
+                  onPressed: selectedDevices.isEmpty
+                      ? null
+                      : () {
+                          confrimDeleteTrustedDevicesDialog(
+                            trustedDevices,
+                            selectedDevices,
+                          );
+                        },
+                ),
+              ),
             ),
-          ),
-        ],
-      ),
-      body: FutureBuilder<List<TrustedDevice>>(
-        future: _devicesFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
-          }
-          return trustedDevicesTable(trustedDevices, selectedDevices);
-        },
+          ],
+        ),
+        body: FutureBuilder<List<TrustedDevice>>(
+          future: _devicesFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Error: ${snapshot.error}'));
+            }
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: trustedDevicesTable(trustedDevices, selectedDevices),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1673,10 +1879,12 @@ SettingsTile _getPopupDialogRadioEntry({
 
   init();
 
-  void showDialog() async {
-    gFFI.dialogManager.show(
-      (setState, close, context) {
-        var isSubmitting = false;
+  void showSheet(BuildContext sheetContext) async {
+    var isSubmitting = false;
+    await showGlassBottomSheet<void>(
+      context: sheetContext,
+      title: translate(title),
+      builder: (ctx) {
         final onChanged = asyncSetter == null
             ? null
             : (String? value) async {
@@ -1685,50 +1893,40 @@ SettingsTile _getPopupDialogRadioEntry({
                 try {
                   await asyncSetter(value);
                   init();
-                  if (value != notCloseValue) {
-                    close();
+                  if (value != notCloseValue && ctx.mounted) {
+                    Navigator.of(ctx).pop();
                   }
                 } finally {
                   isSubmitting = false;
                 }
               };
 
-        return CustomAlertDialog(
-          content: Obx(
-            () => Column(
-              children: [
-                ...list
-                    .map(
-                      (e) => getRadio(
-                        Text(translate(e.label)),
-                        e.value,
-                        groupValue.value,
-                        onChanged,
-                      ),
-                    )
-                    .toList(),
-                Offstage(
-                  offstage:
-                      !(tail != null &&
-                          showTail != null &&
-                          showTail.value == true),
-                  child: tail,
+        return Obx(
+          () => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...list.map(
+                (e) => getRadio(
+                  Text(translate(e.label)),
+                  e.value,
+                  groupValue.value,
+                  onChanged,
                 ),
-              ],
-            ),
+              ),
+              if (tail != null && showTail != null && showTail.value == true)
+                Padding(padding: const EdgeInsets.only(top: 10), child: tail),
+            ],
           ),
         );
       },
-      backDismiss: true,
-      clickMaskDismiss: true,
     );
   }
 
   return SettingsTile(
     title: Text(translate(title)),
-    onPressed: asyncSetter == null ? null : (context) => showDialog(),
+    onPressed: asyncSetter == null ? null : (context) => showSheet(context),
     value: Padding(
-      padding: EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: Obx(() => Text(translate(valueText.value))),
     ),
   );

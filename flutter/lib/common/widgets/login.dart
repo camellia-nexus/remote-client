@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
-import 'package:get/get.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../common.dart';
@@ -58,14 +59,15 @@ class _IconOP extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final svgFile = kOpSvgList.contains(op.toLowerCase())
-        ? op.toLowerCase()
-        : 'default';
     return Container(
       margin: margin,
       child: icon == null
-          ? SvgPicture.asset('assets/auth-$svgFile.svg', width: 20)
-          : SvgPicture.string(icon!, width: 20),
+          ? Icon(
+              CamelliaIcons.authProviderIcon(op),
+              size: 18,
+              color: Theme.of(context).colorScheme.onSurface,
+            )
+          : SvgPicture.string(icon!, width: 18, height: 18),
     );
   }
 }
@@ -79,56 +81,40 @@ class ButtonOP extends StatelessWidget {
   final Function() onTap;
 
   const ButtonOP({
-    Key? key,
+    super.key,
     required this.op,
     required this.curOP,
     required this.icon,
     required this.primaryColor,
     required this.height,
     required this.onTap,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
     final branding = _oidcProviderBranding(op);
     final buttonLabel = translate("Continue with {${branding.label}}");
-    return Row(
-      children: [
-        Container(
-          height: height,
-          width: 200,
-          child: Obx(
-            () => ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: curOP.value.isEmpty || curOP.value == op
-                    ? primaryColor
-                    : Colors.grey,
-              ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
-              onPressed: curOP.value.isEmpty
-                  ? onTap
-                  : null,
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 30,
-                    child: _IconOP(
-                      op: branding.iconKey,
-                      icon: icon,
-                      margin: EdgeInsets.only(right: 5),
-                    ),
-                  ),
-                  Expanded(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Center(child: Text(buttonLabel)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+    return SizedBox(
+      width: double.infinity,
+      child: Obx(
+        () => GlassButton(
+          variant: GlassButtonVariant.secondary,
+          expand: true,
+          minHeight: height < 40 ? 40 : height,
+          loading: curOP.value == op,
+          icon: _IconOP(
+            op: branding.iconKey,
+            icon: icon,
+            margin: const EdgeInsets.only(right: 4),
+          ),
+          onPressed: curOP.value.isEmpty ? onTap : null,
+          child: Text(
+            buttonLabel,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
-      ],
+      ),
     );
   }
 }
@@ -375,23 +361,19 @@ class _WidgetOPState extends State<WidgetOP> {
         Obx(
           () => Offstage(
             offstage: widget.curOP.value != widget.config.op,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: 20),
-              child: ElevatedButton(
-                onPressed: () {
-                  _attemptGen++;
-                  widget.curOP.value = '';
-                  _updateTimer?.cancel();
-                  _updateTimer = null;
-                  _resetState();
-                  AuthGenerationTracker.invalidate();
-                  bind.mainAccountAuthCancel();
-                },
-                child: Text(
-                  translate('Cancel'),
-                  style: TextStyle(fontSize: 15),
-                ),
-              ),
+            child: GlassButton(
+              variant: GlassButtonVariant.subtle,
+              minHeight: 34,
+              onPressed: () {
+                _attemptGen++;
+                widget.curOP.value = '';
+                _updateTimer?.cancel();
+                _updateTimer = null;
+                _resetState();
+                AuthGenerationTracker.invalidate();
+                bind.mainAccountAuthCancel();
+              },
+              child: Text(translate('Cancel')),
             ),
           ),
         ),
@@ -427,11 +409,11 @@ class LoginWidgetOP extends StatelessWidget {
       children.removeLast();
     }
     return SingleChildScrollView(
-      child: Container(
-        width: 200,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: children,
         ),
       ),
@@ -481,32 +463,23 @@ class LoginWidgetUserPass extends StatelessWidget {
             reRequestFocus: true,
             errorText: passMsg,
           ),
-          // NOT use Offstage to wrap LinearProgressIndicator
-          if (isInProgress) const LinearProgressIndicator(),
-          const SizedBox(height: 12.0),
-          FittedBox(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  height: 38,
-                  width: 200,
-                  child: Obx(
-                    () => ElevatedButton(
-                      child: Text(
-                        translate('Login'),
-                        style: TextStyle(fontSize: 16),
-                      ),
-                      onPressed:
-                          curOP.value.isEmpty || curOP.value == 'rustdesk'
-                          ? () {
-                              onLogin();
-                            }
-                          : null,
-                    ),
-                  ),
-                ),
-              ],
+          const SizedBox(height: 14.0),
+          SizedBox(
+            width: double.infinity,
+            child: Obx(
+              () => GlassButton(
+                variant: GlassButtonVariant.primary,
+                expand: true,
+                loading: isInProgress,
+                onPressed:
+                    !isInProgress &&
+                        (curOP.value.isEmpty || curOP.value == 'rustdesk')
+                    ? () {
+                        onLogin();
+                      }
+                    : null,
+                child: Text(translate('Login')),
+              ),
             ),
           ),
         ],
@@ -626,8 +599,6 @@ Future<bool?> loginDialog() async {
   String? passwordMsg;
   var isInProgress = false;
   final RxString curOP = ''.obs;
-  // Track hover state for the close icon
-  bool isCloseHovered = false;
 
   void Function(void Function())? dialogSetState;
   void onUsernameChanged() {
@@ -797,47 +768,16 @@ Future<bool?> loginDialog() async {
         );
       });
 
-      final title = Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(translate('Login')).marginOnly(top: MyTheme.dialogPadding),
-          MouseRegion(
-            onEnter: (_) {
-              if (context.mounted) {
-                setState(() => isCloseHovered = true);
-              }
-            },
-            onExit: (_) {
-              if (context.mounted) {
-                setState(() => isCloseHovered = false);
-              }
-            },
-            child: InkWell(
-              child: Icon(
-                Icons.close,
-                size: 25,
-                // No need to handle the branch of null.
-                // Because we can ensure the color is not null when debug.
-                color: isCloseHovered
-                    ? Colors.white
-                    : Theme.of(
-                        context,
-                      ).textTheme.titleLarge?.color?.withValues(alpha: 0.55),
-              ),
-              onTap: onDialogCancel,
-              hoverColor: Colors.red,
-              borderRadius: BorderRadius.circular(5),
-            ),
-          ).marginOnly(top: 10, right: 15),
-        ],
+      final title = ModernDialogHeader(
+        icon: CamelliaIcons.lock,
+        title: translate('Login'),
+        subtitle: translate('Sign in to sync devices and address book'),
+        onClose: onDialogCancel,
       );
-      final titlePadding = EdgeInsets.fromLTRB(MyTheme.dialogPadding, 0, 0, 0);
 
       return CustomAlertDialog(
         title: title,
-        titlePadding: titlePadding,
-        contentBoxConstraints: BoxConstraints(minWidth: 400),
+        contentBoxConstraints: const BoxConstraints(minWidth: 360),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -915,6 +855,7 @@ Future<bool?> verificationCodeDialog(
   String? errorText;
 
   final code = TextEditingController();
+  final emailCtrl = TextEditingController(text: user?.email ?? '');
   bool dialogClosed = false;
 
   try {
@@ -1002,47 +943,40 @@ Future<bool?> verificationCodeDialog(
       getOnSubmit() => codeField.isReady ? onVerify : null;
 
       return CustomAlertDialog(
-        title: Text(translate("Verification code")),
-        contentBoxConstraints: BoxConstraints(maxWidth: 300),
+        title: ModernDialogHeader(
+          icon: Icons.verified_user_outlined,
+          title: translate("Verification code"),
+          onClose: safeClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(maxWidth: 340),
         content: Column(
           children: [
             Offstage(
               offstage: !isEmailVerification || user?.email == null,
               child: TextField(
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: "Email",
-                  prefixIcon: Icon(Icons.email),
+                  prefixIcon: Icon(Icons.email_outlined),
                 ),
                 readOnly: true,
-                controller: TextEditingController(text: user?.email),
+                controller: emailCtrl,
               ).workaroundFreezeLinuxMint(),
             ),
-            isEmailVerification ? const SizedBox(height: 8) : const Offstage(),
+            isEmailVerification ? const SizedBox(height: 10) : const Offstage(),
             codeField,
-            /*
-              CheckboxListTile(
-                contentPadding: const EdgeInsets.all(0),
-                dense: true,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: Row(children: [
-                  Expanded(child: Text(translate("Trust this device")))
-                ]),
-                value: trustThisDevice,
-                onChanged: (v) {
-                  if (v == null) return;
-                  setState(() => trustThisDevice = !trustThisDevice);
-                },
-              ),
-              */
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress) const LinearProgressIndicator(),
           ],
         ),
         onCancel: safeClose,
         onSubmit: getOnSubmit(),
         actions: [
           dialogButton("Cancel", onPressed: safeClose, isOutline: true),
-          dialogButton("Verify", onPressed: getOnSubmit()),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            loading: isInProgress,
+            minHeight: 38,
+            onPressed: isInProgress ? null : getOnSubmit(),
+            child: Text(translate("Verify")),
+          ),
         ],
       );
     });
@@ -1057,6 +991,7 @@ Future<bool?> verificationCodeDialog(
     AuthGenerationTracker.invalidate();
     code.clear();
     code.dispose();
+    emailCtrl.dispose();
   }
 }
 
@@ -1068,10 +1003,14 @@ void logOutConfirmDialog() {
     }
 
     return CustomAlertDialog(
+      title: ModernDialogHeader.warning(
+        title: translate("Logout"),
+        onClose: close,
+      ),
       content: Text(translate("logout_tip")),
       actions: [
         dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit),
+        dialogButton(translate("OK"), onPressed: submit, isDestructive: true),
       ],
       onSubmit: submit,
       onCancel: close,

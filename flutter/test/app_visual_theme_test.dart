@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
+import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -108,4 +109,78 @@ void main() {
       );
     }
   });
+
+  test('MyTheme constants map cleanly to CamelliaColors and design tokens', () {
+    expect(MyTheme.grayBg, CamelliaColors.lightCanvas);
+    expect(MyTheme.accent, CamelliaColors.indigo);
+    expect(MyTheme.accent50, CamelliaColors.indigo50);
+    expect(MyTheme.accent80, CamelliaColors.indigo80);
+    expect(MyTheme.canvasColor, CamelliaColors.darkCanvas);
+    expect(MyTheme.border, CamelliaColors.lightBorder);
+    expect(MyTheme.idColor, CamelliaColors.azureStrong);
+    expect(MyTheme.darkGray, CamelliaColors.lightMuted);
+    expect(MyTheme.cmIdColor, CamelliaColors.aquaStrong);
+    expect(MyTheme.dark, CamelliaColors.lightText);
+    expect(MyTheme.button, CamelliaColors.indigo);
+    expect(MyTheme.hoverBorder, CamelliaColors.indigo);
+  });
+
+  testWidgets(
+    'TabbarTheme integrates with design tokens in light theme',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          key: const ValueKey('light-app'),
+          theme: MyTheme.lightTheme,
+          home: Builder(
+            builder: (context) {
+              final tabbarTheme = TabbarTheme.of(context);
+              final tokens = MyTheme.tokens(context);
+              expect(tabbarTheme, isNotNull);
+              expect(tabbarTheme.selectedTabIconColor, CamelliaColors.indigo);
+              expect(tabbarTheme.unSelectedTabIconColor, tokens.muted);
+              expect(tabbarTheme.selectedTextColor, CamelliaColors.lightText);
+              expect(tabbarTheme.unSelectedTextColor, tokens.muted);
+              expect(tabbarTheme.dividerColor, tokens.border);
+              expect(tabbarTheme.hoverColor, tokens.accentContainer);
+              expect(tabbarTheme.selectedTabBackgroundColor, tokens.surface);
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'TabbarTheme integrates with design tokens in dark theme',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          key: const ValueKey('dark-app'),
+          theme: MyTheme.darkTheme,
+          home: Builder(
+            builder: (context) {
+              final tabbarTheme = TabbarTheme.of(context);
+              final tokens = MyTheme.tokens(context);
+              expect(tabbarTheme, isNotNull);
+              expect(
+                tabbarTheme.selectedTabIconColor,
+                const Color(0xFFAAA7FF),
+              );
+              expect(tabbarTheme.unSelectedTabIconColor, tokens.muted);
+              expect(tabbarTheme.selectedTextColor, CamelliaColors.darkText);
+              expect(tabbarTheme.unSelectedTextColor, tokens.muted);
+              expect(tabbarTheme.dividerColor, tokens.border);
+              expect(tabbarTheme.hoverColor, tokens.accentContainer);
+              expect(tabbarTheme.selectedTabBackgroundColor, tokens.surface);
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+    },
+  );
 }

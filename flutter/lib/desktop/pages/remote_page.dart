@@ -177,6 +177,10 @@ class _RemotePageState extends State<RemotePage>
           _ffi.ffiModel.pi.platform, _ffi.dialogManager);
       _ffi.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: _ffi.sessionId));
+      if (!_rawKeyFocusNode.hasFocus) {
+        _rawKeyFocusNode.requestFocus();
+      }
+      _ffi.inputModel.enterOrLeave(true);
     });
     _ffi.canvasModel.initializeEdgeScrollFallback(this);
     _ffi.start(
@@ -226,6 +230,12 @@ class _RemotePageState extends State<RemotePage>
     _blockableOverlayState.applyFfi(_ffi);
     // Call onSelected in post frame callback, since we cannot guarantee that the callback will not call setState.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        if (!_rawKeyFocusNode.hasFocus) {
+          _rawKeyFocusNode.requestFocus();
+        }
+        _ffi.inputModel.enterOrLeave(true);
+      }
       widget.tabController?.onSelected?.call(widget.id);
     });
 
@@ -498,6 +508,7 @@ class _RemotePageState extends State<RemotePage>
       // unfocus the primary-focus when the whole window is lost focus,
       // and let OS to handle events instead.
       _rawKeyFocusNode.unfocus();
+      _ffi.inputModel.enterOrLeave(false);
     }
     stateGlobal.isFocused.value = false;
     _syncMacOSKeyboardGrab();
@@ -548,6 +559,12 @@ class _RemotePageState extends State<RemotePage>
       }
       _ffi.inputModel.onWindowFocus();
     }
+    if (isWindows) {
+      if (!_rawKeyFocusNode.hasFocus) {
+        _rawKeyFocusNode.requestFocus();
+      }
+      _ffi.inputModel.enterOrLeave(true);
+    }
     _syncMacOSKeyboardGrab(reassert: true, allowInactiveLifecycle: true);
   }
 
@@ -558,6 +575,10 @@ class _RemotePageState extends State<RemotePage>
     // a minimized state.
     if (isWindows) {
       _isWindowBlur = false;
+      if (!_rawKeyFocusNode.hasFocus) {
+        _rawKeyFocusNode.requestFocus();
+      }
+      _ffi.inputModel.enterOrLeave(true);
     }
     WakelockManager.enable(_uniqueKey);
     if (isLinux) {
@@ -696,6 +717,7 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   void dispose() {
+    _ffi.inputModel.enterOrLeave(false);
     WidgetsBinding.instance.removeObserver(this);
     DesktopMultiWindow.removeListener(this);
     _pointerLockCenterDebounceTimer?.cancel();
@@ -846,18 +868,23 @@ class _RemotePageState extends State<RemotePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return WillPopScope(
-        onWillPop: () async {
-          clientClose(sessionId, _ffi);
-          return false;
-        },
-        child: MultiProvider(providers: [
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        clientClose(sessionId, _ffi);
+      },
+      child: MultiProvider(
+        providers: [
           ChangeNotifierProvider.value(value: _ffi.ffiModel),
           ChangeNotifierProvider.value(value: _ffi.imageModel),
           ChangeNotifierProvider.value(value: _ffi.cursorModel),
           ChangeNotifierProvider.value(value: _ffi.canvasModel),
           ChangeNotifierProvider.value(value: _ffi.recordingModel),
-        ], child: buildBody(context)));
+        ],
+        child: buildBody(context),
+      ),
+    );
   }
 
   void enterView(PointerEnterEvent evt) {
@@ -878,7 +905,7 @@ class _RemotePageState extends State<RemotePage>
       _macOSLocalFocusLost = false;
       stateGlobal.getInputSource(force: true);
       _syncMacOSKeyboardGrab(reassert: true, allowInactiveLifecycle: true);
-    } else if (!isWindows) {
+    } else {
       if (!_rawKeyFocusNode.hasFocus) {
         _rawKeyFocusNode.requestFocus();
       }
@@ -906,7 +933,7 @@ class _RemotePageState extends State<RemotePage>
     // See [onWindowBlur].
     if (isMacOS) {
       _syncMacOSKeyboardGrab();
-    } else if (!isWindows) {
+    } else {
       _ffi.inputModel.enterOrLeave(false);
     }
   }
@@ -953,8 +980,11 @@ class _RemotePageState extends State<RemotePage>
           stateGlobal.getInputSource(force: true);
           _syncMacOSKeyboardGrab(
               reassert: !isInputSourceFlutter, allowInactiveLifecycle: true);
-        } else if (!_rawKeyFocusNode.hasFocus) {
-          _rawKeyFocusNode.requestFocus();
+        } else {
+          if (!_rawKeyFocusNode.hasFocus) {
+            _rawKeyFocusNode.requestFocus();
+          }
+          _ffi.inputModel.enterOrLeave(true);
         }
       },
       inputModel: _ffi.inputModel,
@@ -1340,10 +1370,12 @@ class _ImagePaintState extends State<ImagePaint> {
         ));
       }
     }
-    return SizedBox(
-      width: size.width,
-      height: size.height,
-      child: Stack(children: children),
+    return RepaintBoundary(
+      child: SizedBox(
+        width: size.width,
+        height: size.height,
+        child: Stack(children: children),
+      ),
     );
   }
 
@@ -1411,10 +1443,11 @@ class _ImagePaintState extends State<ImagePaint> {
         ],
       );
     }
+    final scrollbarColor = Theme.of(context).colorScheme.outlineVariant;
     if (layoutSize.width < size.width) {
       widget = RawScrollbar(
         thickness: kScrollbarThickness,
-        thumbColor: Colors.grey,
+        thumbColor: scrollbarColor,
         controller: horizontal,
         thumbVisibility: false,
         trackVisibility: false,
@@ -1427,7 +1460,7 @@ class _ImagePaintState extends State<ImagePaint> {
     if (layoutSize.height < size.height) {
       widget = RawScrollbar(
         thickness: kScrollbarThickness,
-        thumbColor: Colors.grey,
+        thumbColor: scrollbarColor,
         controller: vertical,
         thumbVisibility: false,
         trackVisibility: false,

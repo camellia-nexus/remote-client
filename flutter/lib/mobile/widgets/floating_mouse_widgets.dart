@@ -137,7 +137,7 @@ class _FloatingWheelState extends State<FloatingWheel> {
   }
 
   void _resetPosition() {
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     setState(() {
       _position = Offset(
         size.width - _wheelWidth - _kSpaceToHorizontalEdge,
@@ -172,7 +172,7 @@ class _FloatingWheelState extends State<FloatingWheel> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final currentOrientation = MediaQuery.of(context).orientation;
+    final currentOrientation = MediaQuery.orientationOf(context);
     if (_previousOrientation != null &&
         _previousOrientation != currentOrientation) {
       _resetPosition();
@@ -220,7 +220,7 @@ class _FloatingWheelState extends State<FloatingWheel> {
   }
 
   Widget _buildWidget(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: _wheelWidth,
       height: _wheelHeight,
       child: Column(
@@ -279,7 +279,7 @@ class _FloatingWheelState extends State<FloatingWheel> {
                         width: _kBorderWidth)),
               ),
               child: Center(
-                child: Container(
+                child: SizedBox(
                   width: _wheelWidth - 10,
                   height: _wheelWidth - 10,
                   child: Center(
@@ -390,7 +390,7 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final currentOrientation = MediaQuery.of(context).orientation;
+      final currentOrientation = MediaQuery.orientationOf(context);
       _previousOrientation = currentOrientation;
       _resetPosition(currentOrientation);
     });
@@ -409,7 +409,7 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final currentOrientation = MediaQuery.of(context).orientation;
+    final currentOrientation = MediaQuery.orientationOf(context);
     if (_previousOrientation == null ||
         _previousOrientation != currentOrientation) {
       _resetPosition(currentOrientation);
@@ -461,7 +461,7 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     final ps = bind.getLocalFlutterOption(k: _getPositionKey(ori));
     final pos = _loadPositionFromString(ps);
     if (pos == null) {
-      final size = MediaQuery.of(context).size;
+      final size = MediaQuery.sizeOf(context);
       _position = Offset(_getOffsetX(size.width),
           size.height - _kSpaceToVerticalEdge - _kLeftRightButtonHeight);
     } else {
@@ -492,7 +492,7 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
 
   void _onMoveUpdateDelta(Offset delta) {
     final context = this.context;
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     Offset newPosition = _position + delta;
     double minX = _kSpaceToHorizontalEdge;
     double minY = _kSpaceToVerticalEdge;
@@ -722,7 +722,7 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
     super.initState();
     widget.cursorModel.blockEvents = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _lastScreenSize = MediaQuery.of(context).size;
+      _lastScreenSize = MediaQuery.sizeOf(context);
       _resetPosition();
     });
   }
@@ -737,7 +737,7 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final currentScreenSize = MediaQuery.of(context).size;
+    final currentScreenSize = MediaQuery.sizeOf(context);
     if (_lastScreenSize != null && _lastScreenSize != currentScreenSize) {
       _resetPosition();
     }
@@ -745,7 +745,7 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
   }
 
   void _resetPosition() {
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     setState(() {
       _position = Offset(
         _kSpaceToHorizontalEdge + _joystickRadius,

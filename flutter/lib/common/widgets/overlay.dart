@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -231,21 +232,18 @@ class DraggableMobileActions extends StatelessWidget {
                   IconButton(
                     color: Colors.white,
                     onPressed: onBackPressed,
-                    splashRadius: kDesktopIconButtonSplashRadius,
                     icon: const Icon(Icons.arrow_back),
                     iconSize: 24 * scale,
                   ),
                   IconButton(
                     color: Colors.white,
                     onPressed: onHomePressed,
-                    splashRadius: kDesktopIconButtonSplashRadius,
                     icon: const Icon(Icons.home),
                     iconSize: 24 * scale,
                   ),
                   IconButton(
                     color: Colors.white,
                     onPressed: onRecentPressed,
-                    splashRadius: kDesktopIconButtonSplashRadius,
                     icon: const Icon(Icons.more_horiz),
                     iconSize: 24 * scale,
                   ),
@@ -258,7 +256,6 @@ class DraggableMobileActions extends StatelessWidget {
                   IconButton(
                     color: Colors.white,
                     onPressed: onHidePressed,
-                    splashRadius: kDesktopIconButtonSplashRadius,
                     icon: const Icon(Icons.keyboard_arrow_down),
                     iconSize: 24 * scale,
                   ),
@@ -309,7 +306,7 @@ class DraggableKeyPosition {
   // Adjust position to keep it in the screen
   // Only used for desktop and web desktop
   tryAdjust(double w, double h, double scale) {
-    final size = MediaQuery.of(Get.context!).size;
+    final size = MediaQuery.sizeOf(Get.context!);
     w = w * scale;
     h = h * scale;
     double x = _pos.dx;
@@ -399,7 +396,7 @@ class _DraggableState extends State<Draggable> {
 
   void onPanUpdate(DragUpdateDetails d) {
     final offset = d.delta;
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     double x = 0;
     double y = 0;
 
@@ -430,7 +427,7 @@ class _DraggableState extends State<Draggable> {
   }
 
   checkKeyboard() {
-    final bottomHeight = MediaQuery.of(context).viewInsets.bottom;
+    final bottomHeight = MediaQuery.viewInsetsOf(context).bottom;
     final currentVisible = bottomHeight != 0;
 
     // save
@@ -448,7 +445,7 @@ class _DraggableState extends State<Draggable> {
     // onKeyboardVisible
     if (_keyboardVisible && currentVisible) {
       final sumHeight = bottomHeight + widget.height;
-      final contextHeight = MediaQuery.of(context).size.height;
+      final contextHeight = MediaQuery.sizeOf(context).height;
       if (sumHeight + position.dy > contextHeight) {
         final y = contextHeight - sumHeight;
         setState(() {
@@ -521,7 +518,7 @@ class IOSDraggableState extends State<IOSDraggable> {
   DraggableKeyPosition get position => widget.position;
 
   checkKeyboard() {
-    final bottomHeight = MediaQuery.of(context).viewInsets.bottom;
+    final bottomHeight = MediaQuery.viewInsetsOf(context).bottom;
     final currentVisible = bottomHeight != 0;
 
     // save
@@ -539,7 +536,7 @@ class IOSDraggableState extends State<IOSDraggable> {
     // onKeyboardVisible
     if (_keyboardVisible && currentVisible) {
       final sumHeight = bottomHeight + _height;
-      final contextHeight = MediaQuery.of(context).size.height;
+      final contextHeight = MediaQuery.sizeOf(context).height;
       if (sumHeight + position.pos.dy > contextHeight) {
         final y = contextHeight - sumHeight;
         setState(() {
@@ -615,9 +612,11 @@ class QualityMonitor extends StatelessWidget {
           value?.trim().isNotEmpty == true ? value! : '—',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(
-            context,
-          ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+          style: CamelliaTypography.tabular(
+            Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
         ),
       ],
     );
@@ -639,30 +638,22 @@ class QualityMonitor extends StatelessWidget {
         final bitrate = quality.data.targetBitrate == null
             ? '—'
             : '${quality.data.targetBitrate} kbps';
+        final delayMs = int.tryParse(quality.data.delay?.trim() ?? '');
+        final signalColor = CamelliaIcons.signalColor(context, delayMs);
         return AnimatedSwitcher(
-          duration: CamelliaMotion.feedback,
+          duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
           child: !quality.show
               ? const SizedBox.shrink()
               : IgnorePointer(
                   key: const ValueKey('quality-monitor'),
-                  child: Material(
-                    elevation: 8,
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surface.withValues(alpha: 0.94),
-                    shadowColor: Colors.black26,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(
-                        CamelliaRadius.surface,
-                      ),
-                      side: BorderSide(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                      ),
-                    ),
+                  child: GlassSurface(
+                    layer: CamelliaGlassLayer.modal,
+                    elevated: true,
+                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(
-                        minWidth: 200,
-                        maxWidth: 240,
+                        minWidth: 210,
+                        maxWidth: 252,
                       ),
                       child: Padding(
                         padding: const EdgeInsets.all(14),
@@ -671,14 +662,25 @@ class QualityMonitor extends StatelessWidget {
                           children: [
                             Row(
                               children: [
-                                const CamelliaStatusDot(
-                                  color: CamelliaColors.aqua,
+                                CamelliaStatusDot(
+                                  color: signalColor,
                                   size: 8,
                                 ),
                                 const SizedBox(width: 8),
-                                Text(
-                                  translate('Connection quality'),
-                                  style: Theme.of(context).textTheme.titleSmall,
+                                Expanded(
+                                  child: Text(
+                                    translate('Connection quality'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                  ),
+                                ),
+                                Icon(
+                                  CamelliaIcons.signalIcon(delayMs),
+                                  size: 16,
+                                  color: signalColor,
                                 ),
                               ],
                             ),

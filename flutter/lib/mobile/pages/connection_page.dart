@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:auto_size_text_field/auto_size_text_field.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/formatter/id_formatter.dart';
 import 'package:camellia_remote_app/common/widgets/connection_page_title.dart';
 import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
@@ -18,16 +20,17 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'home_page.dart';
 
+enum _MobileConnectMode { desktop, files, camera, terminal }
+
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
-  ConnectionPage({Key? key, required this.appBarActions, this.shareSection})
-    : super(key: key);
+  const ConnectionPage({super.key, required this.appBarActions, this.shareSection});
 
   @override
-  final icon = const Icon(Icons.connected_tv_outlined);
+  Icon get icon => const Icon(Icons.connected_tv_outlined);
 
   @override
-  final title = translate("Connection");
+  String get title => translate("Connection");
 
   @override
   final List<Widget> appBarActions;
@@ -43,6 +46,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   final _idController = IDTextEditingController();
   final RxBool _idEmpty = true.obs;
   final RxBool _idFocused = false.obs;
+  _MobileConnectMode _connectMode = _MobileConnectMode.desktop;
 
   final FocusNode _idFocusNode = FocusNode();
   final TextEditingController _idEditingController = TextEditingController();
@@ -136,11 +140,53 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   /// Callback for the connect button.
-  /// Connects to the selected peer.
+  /// Connects to the selected peer using the active session mode.
   void onConnect() {
     var id = _idController.id;
-    connect(context, id);
+    HapticFeedback.mediumImpact();
+    connect(
+      context,
+      id,
+      isFileTransfer: _connectMode == _MobileConnectMode.files,
+      isViewCamera: _connectMode == _MobileConnectMode.camera,
+      isTerminal: _connectMode == _MobileConnectMode.terminal,
+    );
   }
+
+  Future<void> _pasteFromClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final raw = data?.text?.trim() ?? '';
+    if (raw.isEmpty || !mounted) return;
+    final numericMatch = RegExp(r'\d[\d\s\-]{4,}\d').firstMatch(raw);
+    final extracted = numericMatch != null
+        ? numericMatch.group(0)!.replaceAll(RegExp(r'[\s\-]'), '')
+        : raw;
+    HapticFeedback.lightImpact();
+    setState(() {
+      _idController.id = extracted;
+    });
+  }
+
+  String _modeLabel(_MobileConnectMode mode) => switch (mode) {
+    _MobileConnectMode.desktop => translate('Control'),
+    _MobileConnectMode.files => translate('Transfer file'),
+    _MobileConnectMode.camera => translate('View camera'),
+    _MobileConnectMode.terminal => translate('Terminal'),
+  };
+
+  IconData _modeIcon(_MobileConnectMode mode) => switch (mode) {
+    _MobileConnectMode.desktop => Icons.desktop_windows_rounded,
+    _MobileConnectMode.files => Icons.folder_copy_rounded,
+    _MobileConnectMode.camera => Icons.videocam_rounded,
+    _MobileConnectMode.terminal => Icons.terminal_rounded,
+  };
+
+  Color _modeAccent(_MobileConnectMode mode) => switch (mode) {
+    _MobileConnectMode.desktop => CamelliaColors.indigo,
+    _MobileConnectMode.files => CamelliaColors.azure,
+    _MobileConnectMode.camera => CamelliaColors.aqua,
+    _MobileConnectMode.terminal => CamelliaColors.orchid,
+  };
 
   void onFocusChanged() {
     _idEmpty.value = _idEditingController.text.isEmpty;
@@ -162,14 +208,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// UI for the remote ID TextField.
   /// Search for a peer and connect to it if the id exists.
   Widget _buildRemoteIDTextField() {
+    final glass = CamelliaGlassTokens.of(context);
+    final activeAccent = _modeAccent(_connectMode);
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: kMobilePageConstraints,
-        child: CamelliaSection(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-          accent: CamelliaColors.coral,
+        child: GlassCard(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+          elevated: true,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -181,7 +229,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
               if (!isWebDesktop)
                 Row(
                   children: [
-                    const CamelliaAnimatedBrandMark(size: 40),
+                    const CamelliaAnimatedBrandMark(size: 38),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -189,7 +237,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         children: [
                           Text(
                             translate('Control Remote Desktop'),
-                            style: Theme.of(context).textTheme.titleMedium,
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
                           ),
                           Text(
                             translate('Remote ID'),
@@ -201,25 +250,44 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         ],
                       ),
                     ),
+                    GlassIconButton(
+                      icon: Icons.content_paste_rounded,
+                      tooltip: translate('Paste'),
+                      size: 36,
+                      iconSize: 17,
+                      onPressed: _pasteFromClipboard,
+                    ),
                   ],
                 ).marginOnly(bottom: 14),
               Obx(
                 () => AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
+                  duration: CamelliaMotion.resolve(
+                    context,
+                    CamelliaMotion.state,
+                  ),
+                  curve: CamelliaMotion.springSnappy,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
+                    horizontal: 10,
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: AppVisual.inset(context),
-                    borderRadius: BorderRadius.circular(AppVisual.radius),
+                    color: AppVisual.inset(context).withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
                     border: Border.all(
                       color: _idFocused.value
-                          ? CamelliaColors.azure
-                          : AppVisual.border(context),
-                      width: _idFocused.value ? 1.4 : 1,
+                          ? activeAccent
+                          : glass.specularBottom,
+                      width: _idFocused.value ? 1.5 : 1.0,
                     ),
+                    boxShadow: _idFocused.value
+                        ? [
+                            BoxShadow(
+                              color: activeAccent.withValues(alpha: 0.20),
+                              blurRadius: 12,
+                              spreadRadius: 1,
+                            ),
+                          ]
+                        : const [],
                   ),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
@@ -235,6 +303,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               child: IconButton(
                                 tooltip: translate('Clear'),
                                 onPressed: () {
+                                  HapticFeedback.selectionClick();
                                   setState(() {
                                     _idController.clear();
                                   });
@@ -246,21 +315,22 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               ),
                             ),
                           ),
-                          Tooltip(
-                            message: translate('Connect'),
-                            child: SizedBox.square(
-                              dimension: 46,
-                              child: FilledButton(
-                                style: FilledButton.styleFrom(
-                                  padding: EdgeInsets.zero,
-                                  backgroundColor: CamelliaColors.azure,
-                                ),
-                                onPressed: onConnect,
-                                child: const Icon(
-                                  Icons.arrow_forward_rounded,
-                                  size: 23,
-                                ),
-                              ),
+                          GlassButton(
+                            variant: GlassButtonVariant.primary,
+                            tooltip: translate('Connect'),
+                            minHeight: 46,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.control,
+                            ),
+                            onPressed: onConnect,
+                            child: const Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 22,
+                              color: Colors.white,
                             ),
                           ),
                         ],
@@ -269,8 +339,69 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   ),
                 ),
               ),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final mode in _MobileConnectMode.values)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _buildModeChip(mode),
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModeChip(_MobileConnectMode mode) {
+    final selected = _connectMode == mode;
+    final accent = _modeAccent(mode);
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        setState(() => _connectMode = mode);
+      },
+      child: AnimatedContainer(
+        duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+        curve: CamelliaMotion.springSnappy,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? accent.withValues(
+                  alpha: theme.brightness == Brightness.dark ? 0.24 : 0.14,
+                )
+              : AppVisual.inset(context).withValues(alpha: 0.65),
+          borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+          border: Border.all(
+            color: selected
+                ? accent.withValues(alpha: 0.55)
+                : AppVisual.border(context).withValues(alpha: 0.55),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _modeIcon(mode),
+              size: 15,
+              color: selected ? accent : AppVisual.subduedText(context),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _modeLabel(mode),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: selected ? accent : theme.colorScheme.onSurface,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -346,10 +477,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
               onChanged: (String text) {
                 _idController.id = text;
               },
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 28,
-                color: CamelliaColors.azure,
+              style: CamelliaTypography.tabular(
+                TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 28,
+                  letterSpacing: 0.4,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               ),
               decoration: InputDecoration(
                 labelText: translate('Remote ID'),
@@ -398,49 +532,39 @@ class _ConnectionPageState extends State<ConnectionPage> {
             maxHeight = maxHeight.clamp(0, 200);
             return Align(
               alignment: Alignment.topLeft,
-              child: Container(
-                decoration: BoxDecoration(
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.24),
-                      blurRadius: 14,
-                      spreadRadius: 1,
+              child: GlassSurface(
+                layer: CamelliaGlassLayer.modal,
+                elevated: true,
+                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: maxHeight,
+                      maxWidth: optionsWidth,
                     ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(AppVisual.radius),
-                  child: Material(
-                    elevation: 0,
-                    color: Theme.of(context).colorScheme.surface,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: maxHeight,
-                        maxWidth: optionsWidth,
-                      ),
-                      child:
-                          _allPeersLoader.peers.isEmpty &&
-                              !_allPeersLoader.isPeersLoaded
-                          ? const SizedBox(
-                              height: 80,
-                              child: Center(
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                    child:
+                        _allPeersLoader.peers.isEmpty &&
+                            !_allPeersLoader.isPeersLoaded
+                        ? const SizedBox(
+                            height: 80,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
                               ),
-                            )
-                          : ListView(
-                              padding: const EdgeInsets.only(top: 5),
-                              children: options
-                                  .map(
-                                    (peer) => AutocompletePeerTile(
-                                      onSelect: () => onSelected(peer),
-                                      peer: peer,
-                                    ),
-                                  )
-                                  .toList(),
                             ),
-                    ),
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.only(top: 5),
+                            children: options
+                                .map(
+                                  (peer) => AutocompletePeerTile(
+                                    onSelect: () => onSelected(peer),
+                                    peer: peer,
+                                  ),
+                                )
+                                .toList(),
+                          ),
                   ),
                 ),
               ),

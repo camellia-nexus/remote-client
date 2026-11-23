@@ -1956,18 +1956,55 @@ pub fn set_option(key: &str, value: &str) {
     set_options(options).ok();
 }
 
-#[tokio::main(flavor = "current_thread")]
-pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
+static IPC_CONFIG_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<HashMap<String, String>>> =
+    std::sync::OnceLock::new();
+
+fn get_ipc_config_sender() -> &'static std::sync::mpsc::SyncSender<HashMap<String, String>> {
+    IPC_CONFIG_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<HashMap<String, String>>(32);
+        if let Err(err) = std::thread::Builder::new()
+            .name("ipc-config-worker".to_string())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::error!("Failed to build ipc config worker runtime: {}", e);
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    while let Ok(mut opts) = rx.recv() {
+                        // Coalesce rapid successive config mutations
+                        while let Ok(next) = rx.try_recv() {
+                            opts.extend(next);
+                        }
+                        let _nat = CheckTestNatType::new();
+                        if let Ok(mut c) = connect(1000, "").await {
+                            if let Ok(_) = c.send(&Data::Options(Some(opts.clone()))).await {
+                                c.next_timeout(1000).await.ok();
+                            }
+                        }
+                    }
+                });
+            })
+        {
+            log::error!("Failed to spawn ipc-config-worker thread: {}", err);
+        }
+        tx
+    })
+}
+
+pub fn set_options(value: HashMap<String, String>) -> ResultType<()> {
     if value.contains_key("custom-rendezvous-server") || value.contains_key("rendezvous-servers") {
         crate::common::bump_rendezvous_generation();
     }
-    let _nat = CheckTestNatType::new();
-    if let Ok(mut c) = connect(1000, "").await {
-        c.send(&Data::Options(Some(value.clone()))).await?;
-        // do not put below before connect, because we need to check should_exit
-        c.next_timeout(1000).await.ok();
+    Config::set_options(value.clone());
+    if let Err(e) = get_ipc_config_sender().try_send(value) {
+        log::debug!("ipc config worker queue busy or send failed: {}", e);
     }
-    Config::set_options(value);
     Ok(())
 }
 

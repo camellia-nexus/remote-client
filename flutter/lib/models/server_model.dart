@@ -502,7 +502,11 @@ class ServerModel with ChangeNotifier {
     } else {
       await checkRequestNotificationPermission();
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
-        await checkFloatingWindowPermission();
+        final hasFloat = await checkFloatingWindowPermission();
+        if (!hasFloat) {
+          // Disable floating window if overlay permission is not granted to prevent crash
+          bind.mainSetLocalOption(key: kOptionDisableFloatingWindow, value: 'Y');
+        }
       }
       startService();
     }

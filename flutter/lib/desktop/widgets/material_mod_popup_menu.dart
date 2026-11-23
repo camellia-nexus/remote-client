@@ -5,8 +5,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
-import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/desktop/widgets/menu_button.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 
 // Examples can assume:
 // enum Commands { heroAndScholar, hurricaneCame }
@@ -124,7 +125,12 @@ class PopupMenuDivider extends PopupMenuEntry<Never> {
 
 class _PopupMenuDividerState extends State<PopupMenuDivider> {
   @override
-  Widget build(BuildContext context) => Divider(height: widget.height);
+  Widget build(BuildContext context) => Divider(
+    height: widget.height,
+    indent: 10,
+    endIndent: 10,
+    color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.65),
+  );
 }
 
 // This widget only exists to enable _PopupMenuRoute to save the sizes of
@@ -277,16 +283,16 @@ class PopupMenuItem<T> extends PopupMenuEntry<T> {
   /// The cursor for a mouse pointer when it enters or is hovering over the
   /// widget.
   ///
-  /// If [mouseCursor] is a [MaterialStateProperty<MouseCursor>],
-  /// [MaterialStateProperty.resolve] is used for the following [MaterialState]s:
+  /// If [mouseCursor] is a [WidgetStateProperty<MouseCursor>],
+  /// [WidgetStateProperty.resolve] is used for the following [WidgetState]s:
   ///
-  ///  * [MaterialState.hovered].
-  ///  * [MaterialState.focused].
-  ///  * [MaterialState.disabled].
+  ///  * [WidgetState.hovered].
+  ///  * [WidgetState.focused].
+  ///  * [WidgetState.disabled].
   /// {@endtemplate}
   ///
   /// If null, then the value of [PopupMenuThemeData.mouseCursor] is used. If
-  /// that is also null, then [MaterialStateMouseCursor.clickable] is used.
+  /// that is also null, then [WidgetStateMouseCursor.clickable] is used.
   final MouseCursor? mouseCursor;
 
   /// The widget below this widget in the tree.
@@ -347,13 +353,19 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final CamelliaGlassTokens glass = CamelliaGlassTokens.of(context);
     final PopupMenuThemeData popupMenuTheme = PopupMenuTheme.of(context);
     TextStyle style =
         widget.textStyle ??
         popupMenuTheme.textStyle ??
-        theme.textTheme.titleMedium!;
+        theme.textTheme.bodyMedium ??
+        const TextStyle(fontSize: 14);
 
-    if (!widget.enabled) style = style.copyWith(color: theme.disabledColor);
+    if (!widget.enabled) {
+      style = style.copyWith(
+        color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.45),
+      );
+    }
 
     Widget item = AnimatedDefaultTextStyle(
       style: style,
@@ -380,11 +392,16 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
       child: Semantics(
         enabled: widget.enabled,
         button: true,
-        child: InkWell(
-          onTap: widget.enabled ? handleTap : null,
-          canRequestFocus: widget.enabled,
-          mouseCursor: widget.mouseCursor ?? SystemMouseCursors.click,
-          child: item,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5),
+          child: InkWell(
+            onTap: widget.enabled ? handleTap : null,
+            canRequestFocus: widget.enabled,
+            borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            hoverColor: glass.hoverOverlay,
+            mouseCursor: widget.mouseCursor ?? SystemMouseCursors.click,
+            child: item,
+          ),
         ),
       ),
     );
@@ -551,7 +568,7 @@ class _CheckedPopupMenuItemState<T>
   }
 }
 
-class _PopupMenu<T> extends StatelessWidget {
+class _PopupMenu<T> extends StatefulWidget {
   const _PopupMenu({
     Key? key,
     required this.route,
@@ -564,47 +581,52 @@ class _PopupMenu<T> extends StatelessWidget {
   final BoxConstraints? constraints;
 
   @override
+  State<_PopupMenu<T>> createState() => _PopupMenuState<T>();
+}
+
+class _PopupMenuState<T> extends State<_PopupMenu<T>> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final double unit =
-        1.0 /
-        (route.items.length +
-            1.5); // 1.0 for the width and 0.5 for the last item's fade.
+    final route = widget.route;
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
     final List<Widget> children = <Widget>[];
-    final PopupMenuThemeData popupMenuTheme = PopupMenuTheme.of(context);
+    final highlightColor = CamelliaGlassTokens.of(context).hoverOverlay;
 
     for (int i = 0; i < route.items.length; i += 1) {
-      final double start = (i + 1) * unit;
-      final double end = (start + 1.5 * unit).clamp(0.0, 1.0);
-      final CurvedAnimation opacity = CurvedAnimation(
-        parent: route.animation!,
-        curve: Interval(start, end),
-      );
       Widget item = route.items[i];
       if (route.initialValue != null &&
           route.items[i].represents(route.initialValue)) {
-        item = Container(color: Theme.of(context).highlightColor, child: item);
+        item = Container(color: highlightColor, child: item);
       }
       children.add(
         _MenuItem(
           onLayout: (Size size) {
             route.itemSizes[i] = size;
           },
-          child: FadeTransition(opacity: opacity, child: item),
+          child: item,
         ),
       );
     }
 
-    final CurveTween opacity = CurveTween(
-      curve: const Interval(0.0, 1.0 / 3.0),
+    final CurveTween opacityTween = CurveTween(
+      curve: const Interval(0.0, 0.55, curve: Curves.easeOut),
     );
-    final CurveTween width = CurveTween(curve: Interval(0.0, unit));
-    final CurveTween height = CurveTween(
-      curve: Interval(0.0, unit * route.items.length),
-    );
+    final Animatable<double> scaleTween = Tween<double>(
+      begin: reduceMotion ? 1.0 : 0.94,
+      end: 1.0,
+    ).chain(CurveTween(curve: CamelliaMotion.springSnappy));
 
     final Widget child = ConstrainedBox(
       constraints:
-          constraints ??
+          widget.constraints ??
           const BoxConstraints(
             minWidth: _kMenuMinWidth,
             maxWidth: _kMenuMaxWidth,
@@ -615,38 +637,45 @@ class _PopupMenu<T> extends StatelessWidget {
           scopesRoute: true,
           namesRoute: true,
           explicitChildNodes: true,
-          label: semanticLabel,
+          label: widget.semanticLabel,
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(
               vertical: _kMenuVerticalPadding,
             ),
-            controller: ScrollController(),
+            controller: _scrollController,
             child: ListBody(children: children),
           ),
         ),
       ),
     );
 
-    return AnimatedBuilder(
-      animation: route.animation!,
-      builder: (BuildContext context, Widget? child) {
-        return FadeTransition(
-          opacity: opacity.animate(route.animation!),
-          child: Material(
-            shape: route.shape ?? popupMenuTheme.shape,
-            color: route.color ?? popupMenuTheme.color,
-            type: MaterialType.card,
-            elevation: route.elevation ?? popupMenuTheme.elevation ?? 8.0,
-            child: Align(
-              alignment: AlignmentDirectional.topEnd,
-              widthFactor: width.evaluate(route.animation!),
-              heightFactor: height.evaluate(route.animation!),
-              child: child,
-            ),
-          ),
-        );
-      },
-      child: child,
+    final glassMenu = GlassSurface(
+      layer: CamelliaGlassLayer.modal,
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+      tintColor: route.color,
+      elevated: true,
+      child: Material(
+        type: MaterialType.transparency,
+        child: child,
+      ),
+    );
+
+    if (reduceMotion) {
+      return FadeTransition(
+        opacity: opacityTween.animate(route.animation!),
+        child: glassMenu,
+      );
+    }
+
+    return FadeTransition(
+      opacity: opacityTween.animate(route.animation!),
+      child: ScaleTransition(
+        scale: scaleTween.animate(route.animation!),
+        alignment: AlignmentDirectional.topStart.resolve(
+          Directionality.of(context),
+        ),
+        child: glassMenu,
+      ),
     );
   }
 }
@@ -826,7 +855,7 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
   Animation<double> createAnimation() {
     return CurvedAnimation(
       parent: super.createAnimation(),
-      curve: Curves.linear,
+      curve: CamelliaMotion.standard,
       reverseCurve: const Interval(0.0, _kMenuCloseIntervalEnd),
     );
   }
@@ -868,7 +897,11 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
     if (this.menuWrapper != null) {
       menu = this.menuWrapper!(menu);
     }
-    final MediaQueryData mediaQuery = MediaQuery.of(context);
+    final EdgeInsets padding = MediaQuery.paddingOf(context);
+    final Set<Rect> avoidBounds = MediaQuery.displayFeaturesOf(context)
+        .where((d) => d.bounds.shortestSide > 0)
+        .map((d) => d.bounds)
+        .toSet();
     return MediaQuery.removePadding(
       context: context,
       removeTop: true,
@@ -883,8 +916,8 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
               itemSizes,
               selectedItemIndex,
               Directionality.of(context),
-              mediaQuery.padding,
-              _avoidBounds(mediaQuery),
+              padding,
+              avoidBounds,
             ),
             child: capturedThemes.wrap(menu),
           );
@@ -892,13 +925,9 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
       ),
     );
   }
-
-  Set<Rect> _avoidBounds(MediaQueryData mediaQuery) {
-    return DisplayFeatureSubScreen.avoidBounds(mediaQuery).toSet();
-  }
 }
 
-class PopupMenu<T> extends StatelessWidget {
+class PopupMenu<T> extends StatefulWidget {
   PopupMenu({
     Key? key,
     required this.items,
@@ -914,17 +943,32 @@ class PopupMenu<T> extends StatelessWidget {
   final String? semanticLabel;
   final BoxConstraints? constraints;
 
+  @override
+  State<PopupMenu<T>> createState() => _StandalonePopupMenuState<T>();
+}
+
+class _StandalonePopupMenuState<T> extends State<PopupMenu<T>> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   Widget _buildMenu(BuildContext context) {
     final List<Widget> children = <Widget>[];
-    for (int i = 0; i < items.length; i += 1) {
-      Widget item = items[i];
-      if (initialValue != null && items[i].represents(initialValue)) {
-        item = Container(color: Theme.of(context).highlightColor, child: item);
+    final highlightColor = CamelliaGlassTokens.of(context).hoverOverlay;
+    for (int i = 0; i < widget.items.length; i += 1) {
+      Widget item = widget.items[i];
+      if (widget.initialValue != null &&
+          widget.items[i].represents(widget.initialValue)) {
+        item = Container(color: highlightColor, child: item);
       }
       children.add(
         _MenuItem(
           onLayout: (Size size) {
-            itemSizes[i] = size;
+            widget.itemSizes[i] = size;
           },
           child: item,
         ),
@@ -933,7 +977,7 @@ class PopupMenu<T> extends StatelessWidget {
 
     final child = ConstrainedBox(
       constraints:
-          constraints ??
+          widget.constraints ??
           const BoxConstraints(
             minWidth: _kMenuMinWidth,
             maxWidth: _kMenuMaxWidth,
@@ -944,41 +988,31 @@ class PopupMenu<T> extends StatelessWidget {
           scopesRoute: true,
           namesRoute: true,
           explicitChildNodes: true,
-          label: semanticLabel,
+          label: widget.semanticLabel,
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(
               vertical: _kMenuVerticalPadding,
             ),
-            controller: ScrollController(),
+            controller: _scrollController,
             child: ListBody(children: children),
           ),
         ),
       ),
     );
 
-    final PopupMenuThemeData popupMenuTheme = PopupMenuTheme.of(context);
-    return Material(
-      shape: popupMenuTheme.shape,
-      color: popupMenuTheme.color,
-      type: MaterialType.card,
-      elevation: popupMenuTheme.elevation ?? 8.0,
-      child: child,
+    return GlassSurface(
+      layer: CamelliaGlassLayer.modal,
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+      elevated: true,
+      child: Material(
+        type: MaterialType.transparency,
+        child: child,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    int? selectedItemIndex;
-    if (initialValue != null) {
-      for (
-        int index = 0;
-        selectedItemIndex == null && index < items.length;
-        index += 1
-      ) {
-        if (items[index].represents(initialValue)) selectedItemIndex = index;
-      }
-    }
-
     return MediaQuery.removePadding(
       context: context,
       removeTop: true,
@@ -1164,7 +1198,6 @@ class PopupMenuButton<T> extends StatefulWidget {
     this.elevation,
     this.padding = const EdgeInsets.all(8.0),
     this.child,
-    this.splashRadius,
     this.icon,
     this.iconSize,
     this.offset = Offset.zero,
@@ -1219,11 +1252,6 @@ class PopupMenuButton<T> extends StatefulWidget {
   /// this button appears as the trailing element of a list item, it's useful to be able
   /// to set the padding to zero.
   final EdgeInsetsGeometry padding;
-
-  /// The splash radius.
-  ///
-  /// If null, default splash radius of [InkWell] or [IconButton] is used.
-  final double? splashRadius;
 
   /// If provided, [child] is the widget used for this button
   /// and the button will utilize an [InkWell] for taps.
@@ -1392,7 +1420,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
 
   bool get _canRequestFocus {
     final NavigationMode mode =
-        MediaQuery.maybeOf(context)?.navigationMode ??
+        MediaQuery.maybeNavigationModeOf(context) ??
         NavigationMode.traditional;
     switch (mode) {
       case NavigationMode.traditional:
@@ -1408,6 +1436,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
         widget.enableFeedback ??
         PopupMenuTheme.of(context).enableFeedback ??
         true;
+    final glass = CamelliaGlassTokens.of(context);
 
     assert(debugCheckHasMaterialLocalizations(context));
 
@@ -1420,6 +1449,8 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
           onHover: widget.onHover,
           canRequestFocus: _canRequestFocus,
           enableFeedback: enableFeedback,
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          hoverColor: glass.hoverOverlay,
           child: widget.child,
         ),
       );
@@ -1431,32 +1462,32 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
           widget.tooltip ?? MaterialLocalizations.of(context).showMenuTooltip,
       onPressed: widget.enabled ? showButtonMenu : null,
       enableFeedback: enableFeedback,
-      color: MyTheme.button,
-      hoverColor: MyTheme.accent,
+      color: glass.floatingTint,
+      hoverColor: glass.hoverOverlay,
     );
   }
 }
 
-// This MaterialStateProperty is passed along to the menu item's InkWell which
-// resolves the property against MaterialState.disabled, MaterialState.hovered,
-// MaterialState.focused.
+// This WidgetStateProperty is passed along to the menu item's InkWell which
+// resolves the property against WidgetState.disabled, WidgetState.hovered,
+// WidgetState.focused.
 // ignore: unused_element
-class _EffectiveMouseCursor extends MaterialStateMouseCursor {
+class _EffectiveMouseCursor extends WidgetStateMouseCursor {
   const _EffectiveMouseCursor(this.widgetCursor, this.themeCursor);
 
   final MouseCursor? widgetCursor;
-  final MaterialStateProperty<MouseCursor?>? themeCursor;
+  final WidgetStateProperty<MouseCursor?>? themeCursor;
 
   @override
-  MouseCursor resolve(Set<MaterialState> states) {
-    return MaterialStateProperty.resolveAs<MouseCursor?>(
+  MouseCursor resolve(Set<WidgetState> states) {
+    return WidgetStateProperty.resolveAs<MouseCursor?>(
           widgetCursor,
           states,
         ) ??
         themeCursor?.resolve(states) ??
-        MaterialStateMouseCursor.clickable.resolve(states);
+        WidgetStateMouseCursor.clickable.resolve(states);
   }
 
   @override
-  String get debugDescription => 'MaterialStateMouseCursor(PopupMenuItemState)';
+  String get debugDescription => 'WidgetStateMouseCursor(PopupMenuItemState)';
 }

@@ -1,12 +1,17 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+
+import 'camellia_design.dart';
+import 'glass_components.dart';
 
 enum DeviceCategoryLayout { selector, bar, rail }
 
-DeviceCategoryLayout deviceCategoryLayoutForWidth(double width) => width < 520
-    ? DeviceCategoryLayout.selector
-    : width < 840
-    ? DeviceCategoryLayout.bar
-    : DeviceCategoryLayout.rail;
+/// Returns the horizontal category bar layout across desktop and tablet widths,
+/// keeping compact dropdown selector only for ultra-narrow containers.
+/// The redundant vertical category rail has been removed in favor of unified
+/// horizontal Glass Pill Tabs.
+DeviceCategoryLayout deviceCategoryLayoutForWidth(double width) =>
+    width < 520 ? DeviceCategoryLayout.selector : DeviceCategoryLayout.bar;
 
 double deviceSearchWidth(double availableWidth, {bool focused = false}) {
   if (availableWidth < 520) return availableWidth;
@@ -26,7 +31,7 @@ class DeviceOptionMenuItem<T> {
   final IconData icon;
 }
 
-class DeviceOptionMenuButton<T> extends StatelessWidget {
+class DeviceOptionMenuButton<T> extends StatefulWidget {
   const DeviceOptionMenuButton({
     super.key,
     required this.tooltip,
@@ -45,69 +50,124 @@ class DeviceOptionMenuButton<T> extends StatelessWidget {
   final bool enabled;
 
   @override
+  State<DeviceOptionMenuButton<T>> createState() =>
+      _DeviceOptionMenuButtonState<T>();
+}
+
+class _DeviceOptionMenuButtonState<T> extends State<DeviceOptionMenuButton<T>> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final activeAccent = dark ? scheme.secondary : scheme.primary;
+    final radius = BorderRadius.circular(CamelliaRadius.control);
+
     return SizedBox.square(
       dimension: 44,
-      child: PopupMenuButton<T>(
-        tooltip: tooltip,
-        enabled: enabled,
-        position: PopupMenuPosition.under,
-        offset: const Offset(0, 4),
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 184, maxWidth: 216),
-        onSelected: onSelected,
-        itemBuilder: (context) => [
-          for (final option in options)
-            PopupMenuItem<T>(
-              value: option.value,
-              height: 40,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Semantics(
-                selected: option.value == selectedValue,
-                child: Row(
-                  children: [
-                    SizedBox(width: 24, child: Icon(option.icon, size: 18)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        option.label,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium,
-                      ),
+      child: MouseRegion(
+        onEnter: (_) {
+          if (mounted) setState(() => _hovered = true);
+        },
+        onExit: (_) {
+          if (mounted) setState(() => _hovered = false);
+        },
+        child: Theme(
+          data: theme.copyWith(
+            highlightColor: Colors.transparent,
+            focusColor: Colors.transparent,
+            splashColor: Colors.transparent,
+            splashFactory: NoSplash.splashFactory,
+          ),
+          child: PopupMenuButton<T>(
+            tooltip: widget.tooltip,
+            enabled: widget.enabled,
+            position: PopupMenuPosition.under,
+            borderRadius: radius,
+            splashRadius: 0,
+            offset: const Offset(0, 6),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 184, maxWidth: 224),
+            onSelected: widget.onSelected,
+            itemBuilder: (context) => [
+              for (final option in widget.options)
+                PopupMenuItem<T>(
+                  value: option.value,
+                  height: 40,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Semantics(
+                    selected: option.value == widget.selectedValue,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          child: Icon(
+                            option.icon,
+                            size: 18,
+                            color: option.value == widget.selectedValue
+                                ? activeAccent
+                                : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            option.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: option.value == widget.selectedValue
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 18,
+                          child: option.value == widget.selectedValue
+                              ? Icon(
+                                  CamelliaIcons.check,
+                                  size: 18,
+                                  color: activeAccent,
+                                )
+                              : null,
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 18,
-                      child: option.value == selectedValue
-                          ? Icon(
-                              Icons.check_rounded,
-                              size: 18,
-                              color: theme.colorScheme.primary,
-                            )
-                          : null,
+                  ),
+                ),
+            ],
+            child: Semantics(
+              button: true,
+              enabled: widget.enabled,
+              label: widget.tooltip,
+              excludeSemantics: true,
+              child: Center(
+                child: AnimatedContainer(
+                  duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _hovered && widget.enabled
+                        ? Color.alphaBlend(glass.hoverOverlay, glass.floatingTint)
+                        : glass.floatingTint,
+                    borderRadius: radius,
+                  ),
+                  child: Center(
+                    child: Icon(
+                      widget.icon,
+                      size: 19,
+                      color: widget.enabled
+                          ? scheme.onSurface
+                          : scheme.onSurface.withValues(alpha: 0.38),
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-        ],
-        child: Semantics(
-          button: true,
-          enabled: enabled,
-          label: tooltip,
-          excludeSemantics: true,
-          child: Center(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainer,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, size: 19),
             ),
           ),
         ),

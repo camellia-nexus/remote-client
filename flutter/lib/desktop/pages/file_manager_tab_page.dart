@@ -163,7 +163,7 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
         return false;
       }
     }
-    if (connLength <= 1) {
+    if (connLength <= 0) {
       tabController.clear();
       return true;
     } else {

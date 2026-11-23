@@ -3,7 +3,8 @@ import 'dart:core';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../../common.dart';
+import '../../ui/camellia_design.dart';
+import '../../ui/glass_components.dart';
 import './material_mod_popup_menu.dart' as mod_menu;
 
 // https://stackoverflow.com/questions/68318314/flutter-popup-menu-inside-popup-menu
@@ -64,27 +65,33 @@ class MyPopupMenuItemState<T, W extends PopupMenuChildrenItem<T>>
     TextStyle style =
         widget.textStyle ??
         popupMenuTheme.textStyle ??
-        theme.textTheme.titleMedium!;
+        theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.onSurface,
+        ) ??
+        TextStyle(color: theme.colorScheme.onSurface);
     return Obx(
-      () => mod_menu.PopupMenuButton<T>(
-        enabled: enabled.value,
-        position: widget.position,
-        offset: widget.offset,
-        onSelected: handleTap,
-        itemBuilder: widget.itemBuilder,
-        padding: EdgeInsets.zero,
-        child: AnimatedDefaultTextStyle(
-          style: style,
-          duration: kThemeChangeDuration,
-          child: Container(
-            alignment: AlignmentDirectional.centerStart,
-            constraints: BoxConstraints(
-              minHeight: widget.height,
-              maxHeight: widget.height,
+      () => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5),
+        child: mod_menu.PopupMenuButton<T>(
+          enabled: enabled.value,
+          position: widget.position,
+          offset: widget.offset,
+          onSelected: handleTap,
+          itemBuilder: widget.itemBuilder,
+          padding: EdgeInsets.zero,
+          child: AnimatedDefaultTextStyle(
+            style: style,
+            duration: kThemeChangeDuration,
+            child: Container(
+              alignment: AlignmentDirectional.centerStart,
+              constraints: BoxConstraints(
+                minHeight: widget.height,
+                maxHeight: widget.height,
+              ),
+              padding:
+                  widget.padding ?? const EdgeInsets.symmetric(horizontal: 12),
+              child: widget.child,
             ),
-            padding:
-                widget.padding ?? const EdgeInsets.symmetric(horizontal: 16),
-            child: widget.child,
           ),
         ),
       ),
@@ -103,14 +110,22 @@ class MenuConfig {
   final double height;
   final double dividerHeight;
   final double? boxWidth;
-  final Color commonColor;
+  final Color? commonColor;
 
   const MenuConfig({
-    required this.commonColor,
+    this.commonColor,
     this.height = kMinInteractiveDimension,
     this.dividerHeight = 16.0,
     this.boxWidth,
   });
+
+  Color resolveAccent(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (commonColor == null || commonColor == CamelliaColors.coral) {
+      return scheme.primary;
+    }
+    return commonColor!;
+  }
 }
 
 typedef DismissCallback = Function();
@@ -127,16 +142,26 @@ abstract class MenuEntryBase<T> {
   });
   List<mod_menu.PopupMenuEntry<T>> build(BuildContext context, MenuConfig conf);
 
-  enabledStyle(BuildContext context) => TextStyle(
-    color: Theme.of(context).textTheme.titleLarge?.color,
-    fontSize: MenuConfig.fontSize,
-    fontWeight: FontWeight.normal,
-  );
-  disabledStyle() => TextStyle(
-    color: Colors.grey,
-    fontSize: MenuConfig.fontSize,
-    fontWeight: FontWeight.normal,
-  );
+  TextStyle enabledStyle(BuildContext context, {bool destructive = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final glass = CamelliaGlassTokens.of(context);
+    return (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
+        .copyWith(
+          color: destructive ? glass.statusAlert : scheme.onSurface,
+          fontSize: MenuConfig.fontSize,
+          fontWeight: FontWeight.w500,
+        );
+  }
+
+  TextStyle disabledStyle(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
+        .copyWith(
+          color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+          fontSize: MenuConfig.fontSize,
+          fontWeight: FontWeight.normal,
+        );
+  }
 }
 
 class MenuEntryDivider<T> extends MenuEntryBase<T> {
@@ -216,83 +241,68 @@ class MenuEntryRadios<T> extends MenuEntryBase<T> {
     MenuConfig conf,
     MenuEntryRadioOption opt,
   ) {
-    Widget getTextChild() {
-      final enabledTextChild = Text(opt.text, style: enabledStyle(context));
-      final disabledTextChild = Text(opt.text, style: disabledStyle());
+    final isOptEnabled = opt.enabled?.value ?? true;
+    final accent = conf.resolveAccent(context);
+    final muted = Theme.of(
+      context,
+    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.45);
+
+    Widget buildLabel() {
       if (opt.enabled == null) {
-        return enabledTextChild;
-      } else {
-        return Obx(
-          () => opt.enabled!.isTrue ? enabledTextChild : disabledTextChild,
+        return Text(
+          opt.text,
+          style: enabledStyle(context),
+          overflow: TextOverflow.ellipsis,
         );
       }
+      return Obx(
+        () => Text(
+          opt.text,
+          style: opt.enabled!.isTrue
+              ? enabledStyle(context)
+              : disabledStyle(context),
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
     }
 
-    final child = Container(
-      padding: padding,
-      alignment: AlignmentDirectional.centerStart,
-      constraints: BoxConstraints(
-        minHeight: conf.height,
-        maxHeight: conf.height,
-      ),
-      child: Row(
-        children: [
-          getTextChild(),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Transform.scale(
-                scale: MenuConfig.iconScale,
-                child: Obx(
-                  () => opt.value == curOption.value
-                      ? IconButton(
-                          padding: const EdgeInsets.fromLTRB(
-                            8.0,
-                            0.0,
-                            8.0,
-                            0.0,
-                          ),
-                          hoverColor: Colors.transparent,
-                          focusColor: Colors.transparent,
-                          onPressed: () {},
-                          icon: Icon(
-                            Icons.check,
-                            color: (opt.enabled ?? true.obs).isTrue
-                                ? conf.commonColor
-                                : Colors.grey,
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    onPressed() {
-      if (opt.dismissOnClicked && Navigator.canPop(context)) {
-        Navigator.pop(context);
-        if (opt.dismissCallback != null) {
-          opt.dismissCallback!();
-        }
-      }
-      setOption(opt.value);
-    }
-
-    return mod_menu.PopupMenuItem(
+    return mod_menu.PopupMenuItem<T>(
       padding: EdgeInsets.zero,
       height: conf.height,
+      enabled: isOptEnabled,
+      closeOnTap: opt.dismissOnClicked,
+      onTap: isOptEnabled
+          ? () {
+              if (opt.dismissOnClicked) {
+                opt.dismissCallback?.call();
+              }
+              setOption(opt.value);
+            }
+          : null,
       child: Container(
         width: conf.boxWidth,
-        child: opt.enabled == null
-            ? TextButton(child: child, onPressed: onPressed)
-            : Obx(
-                () => TextButton(
-                  child: child,
-                  onPressed: opt.enabled!.isTrue ? onPressed : null,
-                ),
-              ),
+        padding: padding ?? const EdgeInsets.symmetric(horizontal: 12),
+        alignment: AlignmentDirectional.centerStart,
+        constraints: BoxConstraints(
+          minHeight: conf.height,
+          maxHeight: conf.height,
+        ),
+        child: Row(
+          children: [
+            Expanded(child: buildLabel()),
+            const SizedBox(width: 8),
+            Obx(() {
+              final selected = opt.value == curOption.value;
+              final active = opt.enabled?.value ?? true;
+              if (!selected) return const SizedBox(width: 18);
+              return Icon(
+                CamelliaIcons.check,
+                size: 18,
+                color: active ? accent : muted,
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
@@ -345,63 +355,54 @@ class MenuEntrySubRadios<T> extends MenuEntryBase<T> {
     MenuConfig conf,
     MenuEntryRadioOption opt,
   ) {
-    return mod_menu.PopupMenuItem(
+    final isOptEnabled = opt.enabled?.value ?? true;
+    final accent = conf.resolveAccent(context);
+    final muted = Theme.of(
+      context,
+    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.45);
+    return mod_menu.PopupMenuItem<T>(
       padding: EdgeInsets.zero,
       height: conf.height,
+      enabled: isOptEnabled,
+      closeOnTap: opt.dismissOnClicked,
+      onTap: isOptEnabled
+          ? () {
+              if (opt.dismissOnClicked) {
+                opt.dismissCallback?.call();
+              }
+              setOption(opt.value);
+            }
+          : null,
       child: Container(
         width: conf.boxWidth,
-        child: TextButton(
-          child: Container(
-            padding: padding,
-            alignment: AlignmentDirectional.centerStart,
-            constraints: BoxConstraints(
-              minHeight: conf.height,
-              maxHeight: conf.height,
+        padding: padding ?? const EdgeInsets.symmetric(horizontal: 12),
+        alignment: AlignmentDirectional.centerStart,
+        constraints: BoxConstraints(
+          minHeight: conf.height,
+          maxHeight: conf.height,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                opt.text,
+                style: isOptEnabled
+                    ? enabledStyle(context)
+                    : disabledStyle(context),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-            child: Row(
-              children: [
-                Text(
-                  opt.text,
-                  style: TextStyle(
-                    color: Theme.of(context).textTheme.titleLarge?.color,
-                    fontSize: MenuConfig.fontSize,
-                    fontWeight: FontWeight.normal,
-                  ),
-                ),
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Transform.scale(
-                      scale: MenuConfig.iconScale,
-                      child: Obx(
-                        () => opt.value == curOption.value
-                            ? IconButton(
-                                padding: EdgeInsets.zero,
-                                hoverColor: Colors.transparent,
-                                focusColor: Colors.transparent,
-                                onPressed: () {},
-                                icon: Icon(
-                                  Icons.check,
-                                  color: conf.commonColor,
-                                ),
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            const SizedBox(width: 8),
+            Obx(
+              () => opt.value == curOption.value
+                  ? Icon(
+                      CamelliaIcons.check,
+                      size: 18,
+                      color: isOptEnabled ? accent : muted,
+                    )
+                  : const SizedBox(width: 18),
             ),
-          ),
-          onPressed: () {
-            if (opt.dismissOnClicked && Navigator.canPop(context)) {
-              Navigator.pop(context);
-              if (opt.dismissCallback != null) {
-                opt.dismissCallback!();
-              }
-            }
-            setOption(opt.value);
-          },
+          ],
         ),
       ),
     );
@@ -412,6 +413,7 @@ class MenuEntrySubRadios<T> extends MenuEntryBase<T> {
     BuildContext context,
     MenuConfig conf,
   ) {
+    final scheme = Theme.of(context).colorScheme;
     return [
       PopupMenuChildrenItem(
         enabled: super.enabled,
@@ -421,23 +423,17 @@ class MenuEntrySubRadios<T> extends MenuEntryBase<T> {
             options.map((opt) => _buildSecondMenu(context, conf, opt)).toList(),
         child: Row(
           children: [
-            const SizedBox(width: MenuConfig.midPadding),
-            Text(
-              text,
-              style: TextStyle(
-                color: Theme.of(context).textTheme.titleLarge?.color,
-                fontSize: MenuConfig.fontSize,
-                fontWeight: FontWeight.normal,
+            Expanded(
+              child: Text(
+                text,
+                style: enabledStyle(context),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Icon(
-                  Icons.keyboard_arrow_right,
-                  color: conf.commonColor,
-                ),
-              ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: scheme.onSurfaceVariant,
             ),
           ],
         ),
@@ -488,13 +484,11 @@ abstract class MenuEntrySwitchBase<T> extends MenuEntryBase<T> {
     BuildContext context,
     MenuConfig conf,
   ) {
-    textStyle ??= TextStyle(
-      color: Theme.of(context).textTheme.titleLarge?.color,
-      fontSize: MenuConfig.fontSize,
-      fontWeight: FontWeight.normal,
-    ).obs;
+    final scheme = Theme.of(context).colorScheme;
+    textStyle ??=
+        (isEnabled ? enabledStyle(context) : disabledStyle(context)).obs;
     return [
-      mod_menu.PopupMenuItem(
+      mod_menu.PopupMenuItem<T>(
         padding: EdgeInsets.zero,
         height: conf.height,
         enabled: isEnabled,
@@ -512,14 +506,24 @@ abstract class MenuEntrySwitchBase<T> extends MenuEntryBase<T> {
             padding: padding ?? const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                Expanded(child: Obx(() => Text(text, style: textStyle!.value))),
+                Expanded(
+                  child: Obx(
+                    () => Text(
+                      text,
+                      style: textStyle!.value,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 IgnorePointer(
                   child: Transform.scale(
                     scale: MenuConfig.iconScale,
                     child: Obx(() {
                       if (switchType == SwitchType.sswitch) {
-                        return Switch(
+                        return Switch.adaptive(
                           value: curOption.value,
+                          activeTrackColor: scheme.primary,
                           onChanged: isEnabled ? (_) {} : null,
                         );
                       }
@@ -646,6 +650,7 @@ class MenuEntrySwitch2<T> extends MenuEntrySwitchBase<T> {
          textStyle: textStyle,
          padding: padding,
          dismissOnClicked: dismissOnClicked,
+         enabled: enabled,
          dismissCallback: dismissCallback,
        );
 
@@ -676,6 +681,7 @@ class MenuEntrySubMenu<T> extends MenuEntryBase<T> {
     BuildContext context,
     MenuConfig conf,
   ) {
+    final scheme = Theme.of(context).colorScheme;
     super.enabled ??= true.obs;
     return [
       PopupMenuChildrenItem(
@@ -689,26 +695,24 @@ class MenuEntrySubMenu<T> extends MenuEntryBase<T> {
             .toList(),
         child: Row(
           children: [
-            const SizedBox(width: MenuConfig.midPadding),
-            Obx(
-              () => Text(
-                text,
-                style: super.enabled!.value
-                    ? enabledStyle(context)
-                    : disabledStyle(),
+            Expanded(
+              child: Obx(
+                () => Text(
+                  text,
+                  style: super.enabled!.value
+                      ? enabledStyle(context)
+                      : disabledStyle(context),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: Obx(
-                  () => Icon(
-                    Icons.keyboard_arrow_right,
-                    color: super.enabled!.value
-                        ? conf.commonColor
-                        : Colors.grey,
-                  ),
-                ),
+            Obx(
+              () => Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: super.enabled!.value
+                    ? scheme.onSurfaceVariant
+                    : scheme.onSurfaceVariant.withValues(alpha: 0.45),
               ),
             ),
           ],
@@ -720,6 +724,7 @@ class MenuEntrySubMenu<T> extends MenuEntryBase<T> {
 
 class MenuEntryButton<T> extends MenuEntryBase<T> {
   final Widget Function(TextStyle? style) childBuilder;
+  final bool isDestructive;
   Function() proc;
   final EdgeInsets? padding;
 
@@ -727,6 +732,7 @@ class MenuEntryButton<T> extends MenuEntryBase<T> {
     required this.childBuilder,
     required this.proc,
     this.padding,
+    this.isDestructive = false,
     dismissOnClicked = false,
     RxBool? enabled,
     dismissCallback,
@@ -747,7 +753,9 @@ class MenuEntryButton<T> extends MenuEntryBase<T> {
           child: Align(
             alignment: AlignmentDirectional.centerStart,
             child: childBuilder(
-              super.enabled!.value ? enabledStyle(context) : disabledStyle(),
+              super.enabled!.value
+                  ? enabledStyle(context, destructive: isDestructive)
+                  : disabledStyle(context),
             ),
           ),
         ),
@@ -761,7 +769,7 @@ class MenuEntryButton<T> extends MenuEntryBase<T> {
     MenuConfig conf,
   ) {
     return [
-      mod_menu.PopupMenuItem(
+      mod_menu.PopupMenuItem<T>(
         padding: EdgeInsets.zero,
         height: conf.height,
         enabled: super.enabled?.value ?? true,
@@ -777,7 +785,11 @@ class MenuEntryButton<T> extends MenuEntryBase<T> {
 }
 
 class CustomPopupMenuTheme {
-  static const Color commonColor = MyTheme.accent;
-  static const double height = 42.0;
+  static const Color commonColor = CamelliaColors.indigo;
+  static Color accentColor(BuildContext context) =>
+      Theme.of(context).colorScheme.primary;
+  static Color dangerColor(BuildContext context) =>
+      CamelliaGlassTokens.of(context).statusAlert;
+  static const double height = 40.0;
   static const double dividerHeight = 8.0;
 }

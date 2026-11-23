@@ -7,6 +7,7 @@ import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
 import 'package:camellia_remote_app/common/widgets/gestures.dart';
 import 'package:camellia_remote_app/common/widgets/login.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/generated_bridge.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
@@ -149,23 +150,23 @@ void main() {
       );
 
       // Initially empty: button is enabled
-      final elevatedButtonFinder = find.byType(ElevatedButton);
-      expect(elevatedButtonFinder, findsOneWidget);
-      ElevatedButton button = tester.widget<ElevatedButton>(elevatedButtonFinder);
+      final buttonFinder = find.byType(GlassButton);
+      expect(buttonFinder, findsOneWidget);
+      GlassButton button = tester.widget<GlassButton>(buttonFinder);
       expect(button.onPressed, isNotNull);
 
       // Tap button: starts auth, sets curOP
-      await tester.tap(elevatedButtonFinder);
+      await tester.tap(buttonFinder);
       await tester.pump();
       expect(tapCount, equals(1));
       expect(curOP.value, equals('google'));
 
       // Now curOP is not empty: button is disabled
-      button = tester.widget<ElevatedButton>(elevatedButtonFinder);
+      button = tester.widget<GlassButton>(buttonFinder);
       expect(button.onPressed, isNull);
 
       // Re-entrant taps are blocked
-      await tester.tap(elevatedButtonFinder);
+      await tester.tap(buttonFinder);
       await tester.pump();
       expect(tapCount, equals(1));
     });

@@ -4,31 +4,34 @@
     <base href="$FLUTTER_BASE_HREF">
     <meta charset="UTF-8">
     <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-    <meta name="description" content="Camellia Web Client">
-    <meta name="theme-color" content="#247BFF">
+    <meta name="description" content="Camellia Remote secure cross-platform remote access in the browser.">
+    <meta name="theme-color" content="#4F46E5">
     <meta name="color-scheme" content="light dark">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="Camellia">
-    <link rel="apple-touch-icon" href="icons/Icon-192.png">
+    <meta name="apple-mobile-web-app-title" content="Camellia Remote">
+    <link rel="apple-touch-icon" href="icons/Icon-maskable-192.png">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="manifest" href="manifest.json">
-    <title>Camellia Web Client</title>
+    <title>Camellia Remote</title>
     <style>
       :root {
-        --camellia-primary: #247bff;
-        --camellia-page: #f7f9fc;
-        --camellia-surface: #ffffff;
+        --camellia-primary: #4F46E5;
+        --camellia-accent: #0EA5E9;
+        --camellia-page: #F4F7FB;
+        --camellia-surface: #FFFFFF;
         --camellia-ink: #172033;
+        --camellia-glow: rgba(79, 70, 229, 0.24);
+        --camellia-glow-peak: rgba(14, 165, 233, 0.34);
       }
       html,
       body {
         height: 100%;
         margin: 0;
         background: var(--camellia-page);
-        font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
       }
       #loading {
         position: fixed;
@@ -37,24 +40,33 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 16px;
+        gap: 18px;
         color: var(--camellia-ink);
+        letter-spacing: -0.01em;
       }
       #loading .mark {
-        width: 56px;
-        height: 56px;
-        border-radius: 8px;
-        background: var(--camellia-primary);
+        width: 72px;
+        height: 72px;
+        border-radius: 17px;
         display: grid;
         place-items: center;
-        color: #fff;
-        font-weight: 700;
-        font-size: 24px;
+        filter: drop-shadow(0 8px 22px var(--camellia-glow));
+        animation: breathe-glow 2.8s ease-in-out infinite;
+      }
+      #loading .mark svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #loading .label {
+        font-size: 14px;
+        font-weight: 500;
+        opacity: 0.86;
       }
       #loading .pulse {
-        width: 90px;
+        width: 104px;
         height: 4px;
-        border-radius: 2px;
+        border-radius: 999px;
         overflow: hidden;
         background: color-mix(in srgb, var(--camellia-primary) 16%, transparent);
         position: relative;
@@ -64,20 +76,36 @@
         position: absolute;
         inset: 0;
         transform: translateX(-70%);
-        background: var(--camellia-primary);
-        animation: slide 1.5s infinite;
+        background: linear-gradient(90deg, var(--camellia-accent), var(--camellia-primary));
+        animation: slide 1.5s ease-in-out infinite;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --camellia-page: #171a20;
-          --camellia-surface: #20252d;
-          --camellia-ink: #eef3fb;
+          --camellia-page: #080D18;
+          --camellia-surface: #111A2B;
+          --camellia-ink: #EDF4FF;
+          --camellia-glow: rgba(79, 70, 229, 0.38);
+          --camellia-glow-peak: rgba(124, 58, 237, 0.48);
         }
       }
       @media (prefers-reduced-motion: reduce) {
+        #loading .mark {
+          animation: none;
+        }
         #loading .pulse::after {
           animation: none;
           transform: translateX(0);
+        }
+      }
+      @keyframes breathe-glow {
+        0%,
+        100% {
+          transform: scale(1);
+          filter: drop-shadow(0 8px 22px var(--camellia-glow));
+        }
+        50% {
+          transform: scale(1.03);
+          filter: drop-shadow(0 12px 30px var(--camellia-glow-peak));
         }
       }
       @keyframes slide {
@@ -92,11 +120,53 @@
   </head>
   <body>
     <div id="loading">
-      <div class="mark">C</div>
-      <div>Preparing Camellia Web Client...</div>
+      <div class="mark" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+          <defs>
+            <linearGradient id="splash-plate" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024">
+              <stop offset="0" stop-color="#F8FAFF"/>
+              <stop offset="1" stop-color="#E8EEFF"/>
+            </linearGradient>
+            <linearGradient id="splash-specular" gradientUnits="userSpaceOnUse" x1="512" y1="0" x2="512" y2="480">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.62"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="splash-rim" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="1024">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.88"/>
+              <stop offset="1" stop-color="#D2DCF6" stop-opacity="0.92"/>
+            </linearGradient>
+            <linearGradient id="splash-rear" gradientUnits="userSpaceOnUse" x1="185.1" y1="216.3" x2="636.5" y2="605.4">
+              <stop offset="0" stop-color="#0EA5E9"/>
+              <stop offset="1" stop-color="#06B6D4"/>
+            </linearGradient>
+            <linearGradient id="splash-connector" gradientUnits="userSpaceOnUse" x1="457.5" y1="457.5" x2="566.5" y2="566.5">
+              <stop offset="0" stop-color="#FF5C7A"/>
+              <stop offset="1" stop-color="#6366F1"/>
+            </linearGradient>
+            <linearGradient id="splash-front" gradientUnits="userSpaceOnUse" x1="387.5" y1="418.6" x2="838.9" y2="807.7">
+              <stop offset="0" stop-color="#4F46E5"/>
+              <stop offset="1" stop-color="#7C3AED"/>
+            </linearGradient>
+            <linearGradient id="splash-frame-specular" gradientUnits="userSpaceOnUse" x1="512" y1="180" x2="512" y2="620">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+              <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.06"/>
+              <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <rect width="1024" height="1024" rx="235.5" fill="url(#splash-plate)"/>
+          <rect x="8" y="8" width="1008" height="1008" rx="229.5" fill="url(#splash-specular)"/>
+          <rect x="10" y="10" width="1004" height="1004" rx="227.5" fill="none" stroke="url(#splash-rim)" stroke-width="12"/>
+          <path d="M301.9 216.3H519.8A116.7 116.7 0 0 1 636.5 333V488.7A116.7 116.7 0 0 1 519.8 605.4H301.9A116.7 116.7 0 0 1 185.1 488.7V333A116.7 116.7 0 0 1 301.9 216.3Z M325.2 286.3A70 70 0 0 0 255.2 356.3V465.3A70 70 0 0 0 325.2 535.3H496.4A70 70 0 0 0 566.5 465.3V356.3A70 70 0 0 0 496.4 286.3H325.2Z" fill="url(#splash-rear)" fill-rule="evenodd"/>
+          <path d="M301.9 216.3H519.8A116.7 116.7 0 0 1 636.5 333V488.7A116.7 116.7 0 0 1 519.8 605.4H301.9A116.7 116.7 0 0 1 185.1 488.7V333A116.7 116.7 0 0 1 301.9 216.3Z M325.2 286.3A70 70 0 0 0 255.2 356.3V465.3A70 70 0 0 0 325.2 535.3H496.4A70 70 0 0 0 566.5 465.3V356.3A70 70 0 0 0 496.4 286.3H325.2Z" fill="url(#splash-frame-specular)" fill-rule="evenodd"/>
+          <path d="M457.5 457.5 L566.5 566.5" stroke="url(#splash-connector)" stroke-width="93.4" stroke-linecap="round"/>
+          <path d="M504.2 418.6H722.1A116.7 116.7 0 0 1 838.9 535.3V691A116.7 116.7 0 0 1 722.1 807.7H504.2A116.7 116.7 0 0 1 387.5 691V535.3A116.7 116.7 0 0 1 504.2 418.6Z M527.6 488.7A70 70 0 0 0 457.5 558.7V667.7A70 70 0 0 0 527.6 737.7H698.8A70 70 0 0 0 768.8 667.7V558.7A70 70 0 0 0 698.8 488.7H527.6Z" fill="url(#splash-front)" fill-rule="evenodd"/>
+          <path d="M504.2 418.6H722.1A116.7 116.7 0 0 1 838.9 535.3V691A116.7 116.7 0 0 1 722.1 807.7H504.2A116.7 116.7 0 0 1 387.5 691V535.3A116.7 116.7 0 0 1 504.2 418.6Z M527.6 488.7A70 70 0 0 0 457.5 558.7V667.7A70 70 0 0 0 527.6 737.7H698.8A70 70 0 0 0 768.8 667.7V558.7A70 70 0 0 0 698.8 488.7H527.6Z" fill="url(#splash-frame-specular)" fill-rule="evenodd"/>
+        </svg>
+      </div>
+      <div class="label">Preparing Camellia Remote...</div>
       <div class="pulse" aria-hidden="true"></div>
     </div>
-    <noscript>Camellia Web Client requires JavaScript to run.</noscript>
+    <noscript>Camellia Remote requires JavaScript to run.</noscript>
     <script src="bootstrap.js" defer></script>
     <script type="module" src="js/dist/web_bridge.js"></script>
     <script src="flutter_bootstrap.js" async></script>

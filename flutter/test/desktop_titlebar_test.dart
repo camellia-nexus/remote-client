@@ -88,4 +88,37 @@ void main() {
     expect(controller.menuCount, 1);
     await tester.pump(const Duration(milliseconds: 400));
   });
+
+  testWidgets('caption buttons feature modern vector icons and hover styling', (
+    tester,
+  ) async {
+    final controller = _FakeWindowController();
+    await tester.pumpWidget(_app(controller));
+
+    // Verify modern vector icons are present
+    expect(find.byIcon(Icons.remove_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.crop_square_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.close_rounded), findsOneWidget);
+
+    // Hover over close button to trigger destructive hover state
+    final closeFinder = find.byTooltip('Close');
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    await gesture.moveTo(tester.getCenter(closeFinder));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+
+    // Find the AnimatedContainer decoration for close button
+    final closeContainers = tester.widgetList<AnimatedContainer>(
+      find.descendant(
+        of: closeFinder,
+        matching: find.byType(AnimatedContainer),
+      ),
+    );
+    expect(closeContainers.isNotEmpty, isTrue);
+    final closeDec = closeContainers.first.decoration as BoxDecoration?;
+    expect(closeDec?.color, const Color(0xFFC42B1C));
+
+    await gesture.removePointer();
+  });
 }

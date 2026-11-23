@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/generated_bridge.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
@@ -155,7 +156,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Find OK button
-      final okButtonFinder = find.widgetWithText(ElevatedButton, 'OK');
+      final okButtonFinder = find.widgetWithText(GlassButton, 'OK');
       expect(okButtonFinder, findsOneWidget);
 
       // Enter new password
@@ -186,7 +187,7 @@ void main() {
       setSharedAbPasswordDialog('non_existent_ab', peer);
       await tester.pumpAndSettle();
 
-      final cancelButtonFinder = find.widgetWithText(OutlinedButton, 'Cancel');
+      final cancelButtonFinder = find.widgetWithText(GlassButton, 'Cancel');
       expect(cancelButtonFinder, findsOneWidget);
 
       await tester.tap(cancelButtonFinder);

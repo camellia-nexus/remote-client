@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../common.dart';
 import '../../ui/camellia_design.dart';
+import '../../ui/glass_components.dart';
 
-/// Local, Material 3 settings primitives.
+/// Liquid Glass settings primitives shared across Desktop, Mobile, and Web.
 ///
-/// Keeping these primitives in-tree makes the settings surface share the same
-/// spacing, focus, and accessibility behavior as the rest of the application.
+/// Keeping these primitives in-tree ensures every settings surface shares the
+/// same frosted material depth, specular rim, focus ring, and accessibility
+/// ergonomics as the rest of Camellia Remote.
 class SettingsThemeData {
   const SettingsThemeData({
     required this.settingsListBackground,
@@ -23,6 +27,41 @@ class SettingsThemeData {
     required this.titleTextStyle,
     required this.tileTextStyle,
   });
+
+  factory SettingsThemeData.adaptive(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final accent = isDark ? scheme.secondary : scheme.primary;
+    return SettingsThemeData(
+      settingsListBackground: Colors.transparent,
+      settingsSectionBackground: glass.floatingTint,
+      dividerColor: glass.specularBottom.withValues(alpha: isDark ? 0.55 : 0.7),
+      tileHighlightColor: accent.withValues(alpha: isDark ? 0.14 : 0.08),
+      titleTextColor: accent,
+      leadingIconsColor: accent,
+      trailingTextColor: scheme.onSurfaceVariant,
+      tileDescriptionTextColor: scheme.onSurfaceVariant,
+      settingsTileTextColor: scheme.onSurface,
+      inactiveTitleColor: tokens.muted.withValues(alpha: 0.62),
+      inactiveSubtitleColor: tokens.muted.withValues(alpha: 0.52),
+      inactiveSwitchColor: tokens.muted.withValues(alpha: 0.34),
+      titleTextStyle:
+          Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.2,
+          ) ??
+          const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+      tileTextStyle:
+          Theme.of(
+            context,
+          ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600) ??
+          const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+    );
+  }
 
   final Color settingsListBackground;
   final Color settingsSectionBackground;
@@ -44,41 +83,45 @@ class SettingsList extends StatelessWidget {
   const SettingsList({
     super.key,
     required this.sections,
-    required this.lightTheme,
-    required this.darkTheme,
+    this.lightTheme,
+    this.darkTheme,
     this.contentPadding = const EdgeInsets.fromLTRB(16, 12, 16, 32),
   });
 
   final List<Widget> sections;
-  final SettingsThemeData lightTheme;
-  final SettingsThemeData darkTheme;
+  final SettingsThemeData? lightTheme;
+  final SettingsThemeData? darkTheme;
   final EdgeInsetsGeometry contentPadding;
 
   @override
   Widget build(BuildContext context) {
+    final adaptive = SettingsThemeData.adaptive(context);
     final settingsTheme = Theme.of(context).brightness == Brightness.dark
-        ? darkTheme
-        : lightTheme;
-    return _SettingsTheme(
-      data: settingsTheme,
-      child: ColoredBox(
-        color: settingsTheme.settingsListBackground,
-        child: Scrollbar(
-          child: ListView.separated(
-            primary: true,
-            padding: contentPadding,
-            itemCount: sections.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 16),
-            itemBuilder: (context, index) => Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 720),
-                child: sections[index],
-              ),
-            ),
+        ? (darkTheme ?? adaptive)
+        : (lightTheme ?? adaptive);
+    final list = Scrollbar(
+      child: ListView.separated(
+        primary: true,
+        padding: contentPadding,
+        itemCount: sections.length,
+        separatorBuilder: (_, _) => const SizedBox(height: 16),
+        itemBuilder: (context, index) => Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: sections[index],
           ),
         ),
       ),
+    );
+    return _SettingsTheme(
+      data: settingsTheme,
+      child: settingsTheme.settingsListBackground == Colors.transparent
+          ? list
+          : ColoredBox(
+              color: settingsTheme.settingsListBackground,
+              child: list,
+            ),
     );
   }
 }
@@ -98,7 +141,7 @@ class SettingsSection extends StatelessWidget {
       children: [
         if (title != null)
           Padding(
-            padding: const EdgeInsetsDirectional.only(start: 4, bottom: 10),
+            padding: const EdgeInsetsDirectional.only(start: 6, bottom: 9),
             child: DefaultTextStyle.merge(
               style: settingsTheme.titleTextStyle.copyWith(
                 color: settingsTheme.titleTextColor,
@@ -106,26 +149,27 @@ class SettingsSection extends StatelessWidget {
               child: title!,
             ),
           ),
-        Material(
-          color: settingsTheme.settingsSectionBackground,
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-            side: BorderSide(color: settingsTheme.dividerColor),
-          ),
-          child: Column(
-            children: [
-              for (var index = 0; index < tiles.length; index++) ...[
-                tiles[index],
-                if (index != tiles.length - 1)
-                  Divider(
-                    height: 1,
-                    thickness: 1,
-                    indent: 60,
-                    color: settingsTheme.dividerColor,
-                  ),
+        GlassSurface(
+          layer: CamelliaGlassLayer.floating,
+          tintColor: settingsTheme.settingsSectionBackground,
+          borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              children: [
+                for (var index = 0; index < tiles.length; index++) ...[
+                  tiles[index],
+                  if (index != tiles.length - 1)
+                    Divider(
+                      height: 1,
+                      thickness: 0.85,
+                      indent: 62,
+                      endIndent: 12,
+                      color: settingsTheme.dividerColor,
+                    ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ],
@@ -145,6 +189,15 @@ class CustomSettingsSection extends StatelessWidget {
 
 abstract class AbstractSettingsTile extends StatelessWidget {
   const AbstractSettingsTile({super.key});
+}
+
+class CustomSettingsTile extends AbstractSettingsTile {
+  const CustomSettingsTile({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 typedef SettingsTilePressed = void Function(BuildContext context);
@@ -189,6 +242,7 @@ class SettingsTile extends AbstractSettingsTile {
   @override
   Widget build(BuildContext context) {
     final settingsTheme = _SettingsTheme.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final interactive = enabled && (onPressed != null || onToggle != null);
     final titleColor = enabled
         ? settingsTheme.settingsTileTextColor
@@ -196,22 +250,30 @@ class SettingsTile extends AbstractSettingsTile {
     final subtitleColor = enabled
         ? settingsTheme.tileDescriptionTextColor
         : settingsTheme.inactiveSubtitleColor;
+    final iconColor = enabled
+        ? settingsTheme.leadingIconsColor
+        : settingsTheme.inactiveTitleColor;
 
     final tile = ListTile(
       enabled: enabled,
-      minVerticalPadding: 8,
-      minTileHeight: 52,
-      contentPadding: const EdgeInsetsDirectional.fromSTEB(16, 2, 12, 2),
+      titleAlignment: ListTileTitleAlignment.center,
+      minVerticalPadding: 10,
+      minTileHeight: 54,
+      contentPadding: const EdgeInsetsDirectional.fromSTEB(14, 2, 14, 2),
       leading: leading == null
           ? null
-          : IconTheme.merge(
-              data: IconThemeData(
-                color: enabled
-                    ? settingsTheme.leadingIconsColor
-                    : settingsTheme.inactiveTitleColor,
-                size: 22,
+          : Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: isDark ? 0.16 : 0.10),
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: leading!,
+              child: IconTheme.merge(
+                data: IconThemeData(color: iconColor, size: 19),
+                child: leading!,
+              ),
             ),
       title: DefaultTextStyle.merge(
         style: settingsTheme.tileTextStyle.copyWith(color: titleColor),
@@ -220,7 +282,7 @@ class SettingsTile extends AbstractSettingsTile {
       subtitle: description == null
           ? null
           : Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: 3),
               child: DefaultTextStyle.merge(
                 style: Theme.of(
                   context,
@@ -231,7 +293,12 @@ class SettingsTile extends AbstractSettingsTile {
       trailing: _isSwitch
           ? Switch.adaptive(
               value: initialValue!,
-              onChanged: enabled ? onToggle : null,
+              onChanged: enabled
+                  ? (v) {
+                      HapticFeedback.selectionClick();
+                      onToggle?.call(v);
+                    }
+                  : null,
             )
           : _SettingsTileTrailing(
               value: value,
@@ -241,6 +308,7 @@ class SettingsTile extends AbstractSettingsTile {
       onTap: !interactive
           ? null
           : () {
+              HapticFeedback.selectionClick();
               if (_isSwitch) {
                 onToggle?.call(!initialValue!);
               } else {
@@ -249,6 +317,7 @@ class SettingsTile extends AbstractSettingsTile {
             },
       hoverColor: settingsTheme.tileHighlightColor,
       focusColor: settingsTheme.tileHighlightColor,
+      splashColor: settingsTheme.tileHighlightColor,
     );
 
     return Semantics(
@@ -283,6 +352,7 @@ class _SettingsTileTrailing extends StatelessWidget {
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: color),
         child: Row(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             if (value != null)
               Flexible(
@@ -292,7 +362,7 @@ class _SettingsTileTrailing extends StatelessWidget {
                 ),
               ),
             if (value != null && trailing != null) const SizedBox(width: 8),
-            if (trailing != null) trailing!,
+            ?trailing,
           ],
         ),
       ),
@@ -308,11 +378,8 @@ class _SettingsTheme extends InheritedWidget {
   static SettingsThemeData of(BuildContext context) {
     final inherited = context
         .dependOnInheritedWidgetOfExactType<_SettingsTheme>();
-    assert(
-      inherited != null,
-      'Settings widgets require a SettingsList ancestor.',
-    );
-    return inherited!.data;
+    if (inherited != null) return inherited.data;
+    return SettingsThemeData.adaptive(context);
   }
 
   @override

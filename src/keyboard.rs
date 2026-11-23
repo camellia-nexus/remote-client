@@ -294,6 +294,14 @@ pub mod client {
         }
     }
 
+    pub fn has_active_grab_owner() -> bool {
+        if let Ok(gs) = GRAB_STATE.lock() {
+            gs.owner.is_some()
+        } else {
+            false
+        }
+    }
+
     pub fn start_grab_loop() {
         let mut lock = IS_GRAB_STARTED.lock().unwrap();
         if *lock {
@@ -371,7 +379,7 @@ pub mod client {
                 // Drop stale `Wait` events that do not correspond to the
                 // current grab owner. This prevents a late PointerExit from
                 // session A from releasing session B's freshly acquired grab.
-                if gs.owner != Some(session_id) {
+                if session_id != 0 && gs.owner != Some(session_id) {
                     log::debug!(
                         "[grab] Wait(0x{:x}): ignored, owner={}",
                         session_id,
@@ -388,58 +396,61 @@ pub mod client {
                 // A deferred release is scheduled so that a genuine leave within
                 // the debounce window is not permanently lost.
                 #[cfg(target_os = "linux")]
-                if let Some(t) = gs.last_grab {
-                    let elapsed = t.elapsed().as_millis();
-                    if elapsed < GRAB_DEBOUNCE_MS {
-                        if !gs.deferred_pending {
-                            log::debug!(
-                                "[grab] Wait(0x{:x}): debounced ({}ms < {}ms), scheduling deferred release",
-                                session_id, elapsed, GRAB_DEBOUNCE_MS,
-                            );
-                            gs.deferred_pending = true;
-                            let remaining = (GRAB_DEBOUNCE_MS - elapsed) as u64 + 50;
-                            let snapshot = gs.last_grab;
-                            let mode = keyboard_mode.to_string();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(remaining));
-                                let release_keys = {
-                                    let mut gs = GRAB_STATE.lock().unwrap();
-                                    // Release only if no new Run has refreshed the grab since.
-                                    if gs.owner == Some(session_id) && gs.last_grab == snapshot {
-                                        let to_release = take_remote_keys();
-                                        gs.deferred_pending = false;
-                                        log::debug!(
-                                            "[grab] Wait(0x{:x}): deferred release",
-                                            session_id
-                                        );
-                                        KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
-                                        gs.owner = None;
-                                        gs.last_grab = None;
-                                        reset_session_translator_state(session_id);
-                                        if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
-                                            snap.reset();
+                if session_id != 0 {
+                    if let Some(t) = gs.last_grab {
+                        let elapsed = t.elapsed().as_millis();
+                        if elapsed < GRAB_DEBOUNCE_MS {
+                            if !gs.deferred_pending {
+                                log::debug!(
+                                    "[grab] Wait(0x{:x}): debounced ({}ms < {}ms), scheduling deferred release",
+                                    session_id, elapsed, GRAB_DEBOUNCE_MS,
+                                );
+                                gs.deferred_pending = true;
+                                let remaining = (GRAB_DEBOUNCE_MS - elapsed) as u64 + 50;
+                                let snapshot = gs.last_grab;
+                                let mode = keyboard_mode.to_string();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(remaining));
+                                    let release_keys = {
+                                        let mut gs = GRAB_STATE.lock().unwrap();
+                                        // Release only if no new Run has refreshed the grab since.
+                                        if gs.owner == Some(session_id) && gs.last_grab == snapshot
+                                        {
+                                            let to_release = take_remote_keys();
+                                            gs.deferred_pending = false;
+                                            log::debug!(
+                                                "[grab] Wait(0x{:x}): deferred release",
+                                                session_id
+                                            );
+                                            KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
+                                            gs.owner = None;
+                                            gs.last_grab = None;
+                                            reset_session_translator_state(session_id);
+                                            if let Ok(mut snap) = HOOK_MODIFIER_SNAPSHOT.lock() {
+                                                snap.reset();
+                                            }
+                                            Some(to_release)
+                                        } else {
+                                            log::debug!(
+                                                "[grab] Wait(0x{:x}): deferred release cancelled (grab refreshed)",
+                                                session_id,
+                                            );
+                                            None
                                         }
-                                        Some(to_release)
-                                    } else {
-                                        log::debug!(
-                                            "[grab] Wait(0x{:x}): deferred release cancelled (grab refreshed)",
-                                            session_id,
-                                        );
-                                        None
+                                    };
+                                    if let Some(to_release) = release_keys {
+                                        disable_grab_if_released();
+                                        release_remote_keys_for_events(&mode, to_release);
                                     }
-                                };
-                                if let Some(to_release) = release_keys {
-                                    disable_grab_if_released();
-                                    release_remote_keys_for_events(&mode, to_release);
-                                }
-                            });
-                        } else {
-                            log::debug!(
-                                "[grab] Wait(0x{:x}): debounced, deferred release already pending",
-                                session_id,
-                            );
+                                });
+                            } else {
+                                log::debug!(
+                                    "[grab] Wait(0x{:x}): debounced, deferred release already pending",
+                                    session_id,
+                                );
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
 
@@ -790,7 +801,29 @@ fn start_grab_loop() {
                 return None;
             }
 
-            let res = if KEYBOARD_HOOKED.load(Ordering::SeqCst) {
+            #[cfg(target_os = "windows")]
+            {
+                let is_our_window_active = unsafe {
+                    let hwnd = winapi::um::winuser::GetForegroundWindow();
+                    if hwnd.is_null() {
+                        false
+                    } else {
+                        let mut proc_id = 0;
+                        winapi::um::winuser::GetWindowThreadProcessId(hwnd, &mut proc_id);
+                        proc_id == std::process::id()
+                    }
+                };
+                if !is_our_window_active {
+                    if KEYBOARD_HOOKED.load(Ordering::SeqCst) {
+                        KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
+                    }
+                    return Some(event);
+                }
+            }
+
+            let has_owner = client::has_active_grab_owner();
+            let session_id = get_active_session_id();
+            let res = if KEYBOARD_HOOKED.load(Ordering::SeqCst) && has_owner && session_id != 0 {
                 client::process_event(&get_keyboard_mode(), &event, None);
                 if is_press {
                     None
@@ -798,6 +831,9 @@ fn start_grab_loop() {
                     Some(event)
                 }
             } else {
+                if KEYBOARD_HOOKED.load(Ordering::SeqCst) && (!has_owner || session_id == 0) {
+                    KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
+                }
                 Some(event)
             };
 
@@ -1812,5 +1848,29 @@ pub mod input_source {
                 CONFIG_INPUT_SOURCE_2_TIP.to_string(),
             ),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keyboard_grab_lifecycle() {
+        IS_RDEV_ENABLED.store(true, Ordering::SeqCst);
+        client::change_grab_status(GrabState::Wait, "legacy", 0);
+        KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
+        assert!(!client::has_active_grab_owner());
+        assert!(!KEYBOARD_HOOKED.load(Ordering::SeqCst));
+
+        let fake_session: u128 = 0x12345678;
+        client::change_grab_status(GrabState::Run, "legacy", fake_session);
+        assert!(client::has_active_grab_owner());
+        assert!(KEYBOARD_HOOKED.load(Ordering::SeqCst));
+
+        client::change_grab_status(GrabState::Wait, "legacy", 0);
+        assert!(!client::has_active_grab_owner());
+        assert!(!KEYBOARD_HOOKED.load(Ordering::SeqCst));
+        IS_RDEV_ENABLED.store(false, Ordering::SeqCst);
     }
 }

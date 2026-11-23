@@ -93,6 +93,13 @@ class PlatformFFI {
       stateGlobal.isWebVisible = !web.document.hidden;
     }).toJS;
     web.document.addEventListener('visibilitychange', visibilityListener);
+
+    final beforeUnloadListener = ((web.Event e) {
+      if (!stateGlobal.isInMainPage || stateGlobal.videoConnCount.value > 0) {
+        e.preventDefault();
+      }
+    }).toJS;
+    web.window.addEventListener('beforeunload', beforeUnloadListener);
   }
 
   static final PlatformFFI instance = PlatformFFI._();
@@ -447,7 +454,7 @@ class PlatformFFI {
     js.context['dialog'] = ((JSAny? type, JSAny? title, JSAny? text) {
       final uuid = Uuid();
       msgBox(
-        SessionID(uuid.v4()),
+        UuidValue.fromString(uuid.v4()),
         (type?.dartify() ?? '').toString(),
         (title?.dartify() ?? '').toString(),
         (text?.dartify() ?? '').toString(),

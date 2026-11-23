@@ -304,7 +304,7 @@ pub fn mask_text_secrets(text: &str) -> String {
         if let Some(idx) = line_str.to_lowercase().find("token=") {
             let prefix = &line_str[..idx + 6];
             let end_idx = line_str[idx + 6..]
-                .find(|c: char| c == '&' || c == ' ' || c == '\n')
+                .find(['&', ' ', '\n'])
                 .map(|e| idx + 6 + e)
                 .unwrap_or(line_str.len());
             line_str = format!("{prefix}[REDACTED_TOKEN]{}", &line_str[end_idx..]);
@@ -312,7 +312,7 @@ pub fn mask_text_secrets(text: &str) -> String {
         if let Some(idx) = line_str.to_lowercase().find("password=") {
             let prefix = &line_str[..idx + 9];
             let end_idx = line_str[idx + 9..]
-                .find(|c: char| c == '&' || c == ' ' || c == '\n')
+                .find(['&', ' ', '\n'])
                 .map(|e| idx + 9 + e)
                 .unwrap_or(line_str.len());
             line_str = format!("{prefix}[REDACTED_PASSWORD]{}", &line_str[end_idx..]);

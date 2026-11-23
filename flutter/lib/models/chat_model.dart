@@ -13,12 +13,12 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:uuid/uuid.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../consts.dart';
 import '../common.dart';
 import '../common/widgets/overlay.dart';
 import '../main.dart';
+import '../ui/glass_components.dart';
 import 'chat_types.dart';
 import 'model.dart';
 
@@ -136,12 +136,13 @@ class ChatModel with ChangeNotifier {
   ChatModel(this.parent) {
     sessionId = parent.target!.sessionId;
     inputNode = FocusNode(
-      onKey: (_, event) {
-        bool isShiftPressed = event.isKeyPressed(LogicalKeyboardKey.shiftLeft);
-        bool isEnterPressed = event.isKeyPressed(LogicalKeyboardKey.enter);
+      onKeyEvent: (_, event) {
+        if (event is! KeyDownEvent) return KeyEventResult.ignored;
+        final isShiftPressed = HardwareKeyboard.instance.isShiftPressed;
+        final isEnterPressed = event.logicalKey == LogicalKeyboardKey.enter;
 
         // don't send empty messages
-        if (isEnterPressed && isEnterPressed && textController.text.isEmpty) {
+        if (isEnterPressed && textController.text.isEmpty) {
           return KeyEventResult.handled;
         }
 
@@ -185,7 +186,11 @@ class ChatModel with ChangeNotifier {
               }
             },
             backgroundColor: Theme.of(context).colorScheme.primary,
-            child: SvgPicture.asset('assets/chat2.svg'),
+            foregroundColor: Theme.of(context).colorScheme.onPrimary,
+            child: Icon(
+              CamelliaIcons.chat,
+              color: Theme.of(context).colorScheme.onPrimary,
+            ),
           ),
         );
       },

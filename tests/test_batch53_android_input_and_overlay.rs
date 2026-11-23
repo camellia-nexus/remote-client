@@ -184,12 +184,16 @@ fn test_compat006_floating_window_touch_lifecycle_and_stop_fallback() {
     );
 
     // 5. Dart server_page stop_service contract
+    let stop_idx = server_page
+        .find("case \"stop_service\":")
+        .expect("COMPAT-006: server_page.dart must handle stop_service message");
+    let stop_snippet = &server_page[stop_idx..server_page.len().min(stop_idx + 240)];
     assert!(
-        server_page.contains("case \"stop_service\":\n          {\n            print(\n              \"stop_service by kotlin"),
+        stop_snippet.contains("gFFI.serverModel.stopService();"),
         "COMPAT-006: server_page.dart must handle stop_service message"
     );
     assert!(
-        !server_page.contains("case \"stop_service\":\n          {\n            print(\n              \"stop_service by kotlin, isStart:${gFFI.serverModel.isStart}\",\n            );\n            if (gFFI.serverModel.isStart) {"),
+        !stop_snippet.contains("if (gFFI.serverModel.isStart)"),
         "COMPAT-006: server_page.dart must not gate stopService() on isStart"
     );
 }

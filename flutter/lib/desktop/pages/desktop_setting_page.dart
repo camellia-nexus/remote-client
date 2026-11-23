@@ -8,12 +8,15 @@ import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
 import 'package:camellia_remote_app/common/widgets/audio_input.dart';
+import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/common/widgets/settings_overlay.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_home_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/remote_toolbar.dart';
-import 'package:camellia_remote_app/mobile/widgets/dialog.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
+import 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
+export 'package:camellia_remote_app/common/widgets/socks5_proxy_dialog.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/printer_model.dart';
 import 'package:camellia_remote_app/models/server_model.dart';
@@ -21,11 +24,14 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/plugin/manager.dart';
 import 'package:camellia_remote_app/plugin/widgets/desktop_settings.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+import 'package:camellia_remote_app/common/widgets/settings_components.dart';
+import 'package:camellia_remote_app/desktop/widgets/desktop_shell.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
 
@@ -82,6 +88,8 @@ class DesktopSettingPage extends StatefulWidget {
     SettingsTabKey.about,
   ];
 
+  static SettingsTabKey? pendingInitialTabKey;
+
   DesktopSettingPage({Key? key, required this.initialTabkey}) : super(key: key);
 
   @override
@@ -94,6 +102,14 @@ class DesktopSettingPage extends StatefulWidget {
       if (index == -1) {
         return;
       }
+      final context = globalKey.currentContext;
+      if (context != null) {
+        final shell = CamelliaDesktopShell.of(context);
+        if (shell != null) {
+          shell.setDestination(DesktopNavDestination.settings);
+        }
+      }
+      pendingInitialTabKey = page;
       if (Get.isRegistered<PageController>(tag: _kSettingPageControllerTag)) {
         PageController controller = Get.find<PageController>(
           tag: _kSettingPageControllerTag,
@@ -102,15 +118,36 @@ class DesktopSettingPage extends StatefulWidget {
           tag: _kSettingPageTabKeyTag,
         );
         selected.value = page;
-        controller.jumpToPage(index);
+        if (controller.hasClients) {
+          controller.jumpToPage(index);
+        }
       } else {
-        final context = globalKey.currentContext;
         if (context == null) return;
-        showSettingsOverlay<void>(
-          context: context,
-          title: translate('Settings'),
-          builder: (_) => DesktopSettingPage(initialTabkey: page),
-        );
+        final shell = CamelliaDesktopShell.of(context);
+        if (shell == null) {
+          showSettingsOverlay<void>(
+            context: context,
+            title: translate('Settings'),
+            builder: (_) => DesktopSettingPage(initialTabkey: page),
+          );
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (Get.isRegistered<PageController>(
+              tag: _kSettingPageControllerTag,
+            )) {
+              final controller = Get.find<PageController>(
+                tag: _kSettingPageControllerTag,
+              );
+              final selected = Get.find<Rx<SettingsTabKey>>(
+                tag: _kSettingPageTabKeyTag,
+              );
+              selected.value = page;
+              if (controller.hasClients) {
+                controller.jumpToPage(index);
+              }
+            }
+          });
+        }
       }
     } catch (e) {
       debugPrintStack(label: '$e');
@@ -134,7 +171,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   Timer? _videoConnTimer;
 
   _DesktopSettingPageState(SettingsTabKey initialTabkey) {
-    var initialIndex = DesktopSettingPage.tabKeys.indexOf(initialTabkey);
+    final effectiveTab =
+        DesktopSettingPage.pendingInitialTabKey ?? initialTabkey;
+    DesktopSettingPage.pendingInitialTabKey = null;
+    var initialIndex = DesktopSettingPage.tabKeys.indexOf(effectiveTab);
     if (initialIndex == -1) {
       initialIndex = 0;
     }
@@ -156,7 +196,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
-      shouldBeBlocked(_block, canBeBlocked);
+      shouldBeBlocked(_block, _shouldUseBlock);
     }
   }
 
@@ -277,6 +317,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     return children;
   }
 
+  Future<bool> _shouldUseBlock() async =>
+      await canBeBlocked() && stateGlobal.videoConnCount > 0;
+
   Widget _buildBlock({required List<Widget> children}) {
     // check both mouseMoveTime and videoConnCount
     return Obx(() {
@@ -287,7 +330,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           buildRemoteBlock(
             block: _block,
             mask: false,
-            use: canBeBlocked,
+            use: _shouldUseBlock,
             child: preventMouseKeyBuilder(
               child: Row(children: children),
               block: videoConnBlock,
@@ -303,79 +346,201 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: CamelliaBackdrop(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final compact = constraints.maxWidth < 720;
-            final sidebarWidth = compact ? 72.0 : _kTabWidth;
-            return _buildBlock(
-              children: <Widget>[
-                AnimatedContainer(
-                  duration: AppMotion.duration(context, AppMotion.stateChange),
-                  curve: Curves.easeOutCubic,
-                  width: sidebarWidth,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
-                    border: Border(
-                      right: BorderSide(color: AppVisual.border(context)),
+    final inShell = CamelliaDesktopShell.of(context) != null;
+    final bodyContent = LayoutBuilder(
+      builder: (context, constraints) {
+        final useHorizontalTabs = inShell || constraints.maxWidth < 860;
+        final compact = constraints.maxWidth < 720;
+        final glass = CamelliaGlassTokens.of(context);
+        final pageArea = Expanded(
+          child: LayoutBuilder(
+            builder: (context, contentConstraints) {
+              final contentWidth = contentConstraints.maxWidth
+                  .clamp(0.0, 860.0)
+                  .toDouble();
+              return Center(
+                child: SizedBox(
+                  width: contentWidth,
+                  height: contentConstraints.maxHeight,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 8 : 20,
+                      0,
+                      compact ? 8 : 20,
+                      10,
+                    ),
+                    child: PageView(
+                      controller: controller,
+                      physics: const NeverScrollableScrollPhysics(),
+                      children: _children(),
                     ),
                   ),
-                  child: Column(
-                    children: [
-                      SizedBox(height: compact ? 10 : 14),
-                      Flexible(
-                        child: _listView(
-                          tabs: _settingTabs(),
-                          compact: compact,
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
-                Expanded(
-                  child: Column(
-                    children: [
-                      _contentHeader(context, compact: compact),
-                      Divider(height: 1, color: AppVisual.border(context)),
-                      Expanded(
-                        child: LayoutBuilder(
-                          builder: (context, contentConstraints) {
-                            final contentWidth = contentConstraints.maxWidth
-                                .clamp(0.0, 840.0)
-                                .toDouble();
-                            return Center(
-                              child: SizedBox(
-                                width: contentWidth,
-                                height: contentConstraints.maxHeight,
-                                child: Padding(
-                                  padding: EdgeInsets.fromLTRB(
-                                    compact ? 8 : 20,
-                                    0,
-                                    compact ? 8 : 20,
-                                    8,
-                                  ),
-                                  child: PageView(
-                                    controller: controller,
-                                    physics:
-                                        const NeverScrollableScrollPhysics(),
-                                    children: _children(),
-                                  ),
-                                ),
+              );
+            },
+          ),
+        );
+
+        if (useHorizontalTabs) {
+          return _buildBlock(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _contentHeader(context, compact: compact),
+                    _horizontalTabStrip(context, tabs: _settingTabs()),
+                    Divider(
+                      height: 1,
+                      thickness: 0.85,
+                      color: glass.specularBottom,
+                    ),
+                    pageArea,
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+
+        return _buildBlock(
+          children: <Widget>[
+            GlassSurface(
+              layer: CamelliaGlassLayer.sidebar,
+              borderRadius: BorderRadius.zero,
+              showShadow: false,
+              child: SizedBox(
+                width: _kTabWidth,
+                child: Column(
+                  children: [
+                    const SizedBox(height: 14),
+                    Flexible(
+                      child: _listView(tabs: _settingTabs(), compact: false),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            VerticalDivider(
+              width: 1,
+              thickness: 0.85,
+              color: glass.specularBottom,
+            ),
+            Expanded(
+              child: Column(
+                children: [
+                  _contentHeader(context, compact: false),
+                  Divider(
+                    height: 1,
+                    thickness: 0.85,
+                    color: glass.specularBottom,
+                  ),
+                  pageArea,
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: inShell ? bodyContent : CamelliaBackdrop(child: bodyContent),
+    );
+  }
+
+  Widget _horizontalTabStrip(
+    BuildContext context, {
+    required List<_TabInfo> tabs,
+  }) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = isDark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+      child: Obx(() {
+        final activeKey = selectedTab.value;
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (var i = 0; i < tabs.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                      onTap: () {
+                        selectedTab.value = tabs[i].key;
+                        if (controller.hasClients) {
+                          controller.jumpToPage(i);
+                        }
+                      },
+                      child: AnimatedContainer(
+                        duration: CamelliaMotion.resolve(
+                          context,
+                          CamelliaMotion.feedback,
+                        ),
+                        curve: CamelliaMotion.springSnappy,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 13,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: tabs[i].key == activeKey
+                              ? accent.withValues(alpha: isDark ? 0.22 : 0.14)
+                              : glass.floatingTint.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(
+                            CamelliaRadius.pill,
+                          ),
+                          border: Border.all(
+                            color: tabs[i].key == activeKey
+                                ? accent.withValues(alpha: 0.48)
+                                : glass.specularBottom,
+                            width: 0.85,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              tabs[i].key == activeKey
+                                  ? tabs[i].selected
+                                  : tabs[i].unselected,
+                              size: 16,
+                              color: tabs[i].key == activeKey
+                                  ? accent
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              translate(tabs[i].label),
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: tabs[i].key == activeKey
+                                    ? (isDark
+                                          ? theme.colorScheme.onSurface
+                                          : accent)
+                                    : theme.colorScheme.onSurfaceVariant,
+                                fontWeight: tabs[i].key == activeKey
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
                               ),
-                            );
-                          },
+                            ),
+                          ],
                         ),
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ],
-            );
-          },
-        ),
-      ),
+            ],
+          ),
+        );
+      }),
     );
   }
 
@@ -387,28 +552,30 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         orElse: () => tabs.first,
       );
       return Container(
-        height: compact ? 58 : 64,
-        padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 22),
-        color: Theme.of(context).colorScheme.surface,
+        height: compact ? 54 : 60,
+        padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 20),
+        color: Colors.transparent,
         child: Row(
           children: [
             if (isWeb) ...[
-              IconButton(
+              GlassIconButton(
+                icon: Icons.arrow_back_rounded,
+                size: 36,
+                iconSize: 18,
                 tooltip: MaterialLocalizations.of(context).backButtonTooltip,
                 onPressed: () {
                   if (Navigator.canPop(context)) {
                     Navigator.pop(context);
                   }
                 },
-                icon: const Icon(Icons.arrow_back_rounded),
               ),
               const SizedBox(width: 8),
             ],
             AppIconBadge(
               icon: tab.selected,
               colors: AppVisual.connectGradient,
-              size: compact ? 34 : 38,
-              iconSize: compact ? 18 : 20,
+              size: compact ? 32 : 36,
+              iconSize: compact ? 17 : 19,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -420,7 +587,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                     translate(tab.label),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   if (!compact)
                     Text(
@@ -564,38 +733,137 @@ class _GeneralState extends State<_General> {
   }
 
   Widget theme() {
-    final current = MyTheme.getThemeModePreference().toShortString();
+    final current = switch (MyTheme.getThemePreference()) {
+      CamelliaThemePreference.light => 'light',
+      CamelliaThemePreference.dark => 'dark',
+      CamelliaThemePreference.midnight => 'midnight',
+      CamelliaThemePreference.system => 'system',
+    };
     onChanged(String value) async {
-      await MyTheme.changeDarkMode(MyTheme.themeModeFromString(value));
+      await MyTheme.changeThemePreference(
+        MyTheme.themePreferenceFromString(value),
+      );
       setState(() {});
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
-    return _Card(
-      title: 'Theme',
-      children: [
-        _Radio<String>(
-          context,
-          value: 'light',
-          groupValue: current,
-          label: 'Light',
-          onChanged: isOptFixed ? null : onChanged,
+    final currentStyle = MyTheme.getThemeStyle().name;
+    onStyleChanged(String value) async {
+      await MyTheme.changeThemeStyle(
+        CamelliaThemeStyle.fromString(value),
+      );
+      setState(() {});
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+          child: SettingsSection(
+            title: Text(translate('Theme')),
+            tiles: [
+              CustomSettingsTile(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 460;
+                      return GlassSegmentedControl<String>(
+                        compact: compact,
+                        expand: true,
+                        selected: current,
+                        items: [
+                          GlassSegmentItem(
+                            value: 'light',
+                            icon: Icons.light_mode_rounded,
+                            label: compact ? null : translate('Light'),
+                            tooltip: translate('Light'),
+                          ),
+                          GlassSegmentItem(
+                            value: 'dark',
+                            icon: Icons.dark_mode_rounded,
+                            label: compact ? null : translate('Dark'),
+                            tooltip: translate('Dark'),
+                          ),
+                          GlassSegmentItem(
+                            value: 'midnight',
+                            icon: Icons.nights_stay_rounded,
+                            label: compact ? null : translate('OLED Midnight'),
+                            tooltip: translate('OLED Midnight'),
+                          ),
+                          GlassSegmentItem(
+                            value: 'system',
+                            icon: Icons.brightness_auto_rounded,
+                            label: compact ? null : translate('Follow System'),
+                            tooltip: translate('Follow System'),
+                          ),
+                        ],
+                        onChanged: isOptFixed ? (_) {} : onChanged,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              CustomSettingsTile(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          translate('Theme Style'),
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 460;
+                          return GlassSegmentedControl<String>(
+                            compact: compact,
+                            expand: true,
+                            selected: currentStyle,
+                            items: [
+                              GlassSegmentItem(
+                                value: 'auroraFrost',
+                                icon: Icons.auto_awesome_rounded,
+                                label: compact ? null : translate('Aurora Frost'),
+                                tooltip: translate('Aurora Frost'),
+                              ),
+                              GlassSegmentItem(
+                                value: 'obsidianCyber',
+                                icon: Icons.space_dashboard_rounded,
+                                label: compact ? null : translate('Obsidian Cyber'),
+                                tooltip: translate('Obsidian Cyber'),
+                              ),
+                              GlassSegmentItem(
+                                value: 'nordicTitanium',
+                                icon: Icons.texture_rounded,
+                                label: compact ? null : translate('Nordic Titanium'),
+                                tooltip: translate('Nordic Titanium'),
+                              ),
+                            ],
+                            onChanged: onStyleChanged,
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-        _Radio<String>(
-          context,
-          value: 'dark',
-          groupValue: current,
-          label: 'Dark',
-          onChanged: isOptFixed ? null : onChanged,
-        ),
-        _Radio<String>(
-          context,
-          value: 'system',
-          groupValue: current,
-          label: 'Follow System',
-          onChanged: isOptFixed ? null : onChanged,
-        ),
-      ],
+      ),
     );
   }
 
@@ -767,7 +1035,7 @@ class _GeneralState extends State<_General> {
                   ctx,
                   alignment: 0.5,
                   duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
+                  curve: CamelliaMotion.standard,
                 );
               }
             });
@@ -1025,7 +1293,9 @@ class _GeneralState extends State<_General> {
                 Expanded(
                   child: Text(
                     '${translate("Failed to load language list")}: ${data['error']}',
-                    style: const TextStyle(color: Colors.red),
+                    style: TextStyle(
+                      color: CamelliaGlassTokens.of(context).statusAlert,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1810,9 +2080,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 Offstage(
                   offstage: !hasWhitelist.value,
                   child: MouseRegion(
-                    child: const Icon(
+                    child: Icon(
                       Icons.warning_amber_rounded,
-                      color: Color.fromARGB(255, 255, 204, 0),
+                      color: CamelliaGlassTokens.of(context).statusHighLatency,
                     ).marginOnly(right: 5),
                     cursor: SystemMouseCursors.click,
                   ),
@@ -2043,168 +2313,125 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         bind.mainGetBuildinOption(key: kOptionHideWebSocketSetting) == 'Y';
 
     if (hideServer && hideProxy && hideWebSocket) {
-      return Offstage();
+      return const Offstage();
     }
-
-    // Helper function to create network setting ListTiles
-    Widget listTile({
-      required IconData icon,
-      required String title,
-      VoidCallback? onTap,
-      Widget? trailing,
-      bool showTooltip = false,
-      String tooltipMessage = '',
-    }) {
-      final titleWidget = showTooltip
-          ? Row(
-              children: [
-                Tooltip(
-                  waitDuration: Duration(milliseconds: 1000),
-                  message: translate(tooltipMessage),
-                  child: Row(
-                    children: [
-                      Text(
-                        translate(title),
-                        style: TextStyle(fontSize: _kContentFontSize),
-                      ),
-                      SizedBox(width: 5),
-                      Icon(
-                        Icons.help_outline,
-                        size: 14,
-                        color: Theme.of(
-                          context,
-                        ).textTheme.titleLarge?.color?.withValues(alpha: 0.7),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            )
-          : Text(
-              translate(title),
-              style: TextStyle(fontSize: _kContentFontSize),
-            );
-
-      return ListTile(
-        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
-        title: titleWidget,
-        enabled: !locked,
-        onTap: onTap,
-        trailing: trailing,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: EdgeInsets.symmetric(horizontal: 16),
-        minLeadingWidth: 0,
-        horizontalTitleGap: 10,
-      );
-    }
-
-    Widget switchWidget(
-      IconData icon,
-      String title,
-      String tooltipMessage,
-      String optionKey,
-    ) => listTile(
-      icon: icon,
-      title: title,
-      showTooltip: true,
-      tooltipMessage: tooltipMessage,
-      trailing: Switch(
-        value: mainGetBoolOptionSync(optionKey),
-        onChanged:
-            locked ||
-                isOptionFixed(optionKey) ||
-                _pendingSwitchKeys.contains(optionKey)
-            ? null
-            : (value) async {
-                _pendingSwitchKeys.add(optionKey);
-                setState(() {});
-                try {
-                  await mainSetBoolOption(optionKey, value);
-                } finally {
-                  _pendingSwitchKeys.remove(optionKey);
-                  if (mounted) {
-                    setState(() {});
-                  }
-                }
-              },
-      ),
-    );
 
     final outgoingOnly = bind.isOutgoingOnly();
 
-    final divider = const Divider(height: 1, indent: 16, endIndent: 16);
-    return _Card(
-      title: 'Network',
-      children: [
-        Container(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!hideServer)
-                listTile(
-                  icon: Icons.dns_outlined,
-                  title: 'ID/Relay Server',
-                  onTap: () => showServerSettings(gFFI.dialogManager, setState),
-                ),
-              if (!hideProxy && !hideServer) divider,
-              if (!hideProxy)
-                listTile(
-                  icon: Icons.network_ping_outlined,
-                  title: 'Socks5/Http(s) Proxy',
-                  onTap: changeSocks5Proxy,
-                ),
-              if (!hideWebSocket && (!hideServer || !hideProxy)) divider,
-              if (!hideWebSocket)
-                switchWidget(
-                  Icons.web_asset_outlined,
-                  'Use WebSocket',
-                  translate('websocket_tip'),
-                  kOptionAllowWebSocket,
-                ),
-              if (!isWeb)
-                futureBuilder(
-                  future: bind.mainIsUsingPublicServer(),
-                  hasData: (isUsingPublicServer) {
-                    if (isUsingPublicServer || outgoingOnly) {
-                      return Offstage();
-                    } else {
-                      return Column(
-                        children: [
-                          if (!hideServer || !hideProxy || !hideWebSocket)
-                            divider,
-                          listTile(
-                            icon: Icons.lan_outlined,
-                            title: 'Disable UDP',
-                            showTooltip: true,
-                            tooltipMessage: translate('disable-udp-tip'),
-                            trailing: Switch(
-                              value:
-                                  bind.mainGetOptionSync(
-                                    key: kOptionDisableUdp,
-                                  ) ==
-                                  'Y',
-                              onChanged:
-                                  locked || isOptionFixed(kOptionDisableUdp)
-                                  ? null
-                                  : (value) async {
-                                      await bind.mainSetOption(
-                                        key: kOptionDisableUdp,
-                                        value: value ? 'Y' : 'N',
-                                      );
-                                      setState(() {});
-                                    },
-                            ),
-                          ),
-                        ],
-                      );
-                    }
-                  },
-                ),
-            ],
+    final tiles = <AbstractSettingsTile>[];
+    if (!hideServer) {
+      tiles.add(
+        SettingsTile(
+          leading: const Icon(Icons.dns_outlined),
+          title: Text(translate('ID/Relay Server')),
+          enabled: !locked,
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+          onPressed: (_) => showServerSettings(gFFI.dialogManager, setState),
+        ),
+      );
+    }
+    if (!hideProxy) {
+      tiles.add(
+        SettingsTile(
+          leading: const Icon(Icons.network_ping_outlined),
+          title: Text(translate('Socks5/Http(s) Proxy')),
+          enabled: !locked,
+          trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+          onPressed: (_) => changeSocks5Proxy(),
+        ),
+      );
+    }
+    if (!hideWebSocket) {
+      tiles.add(
+        SettingsTile.switchTile(
+          leading: const Icon(Icons.web_asset_outlined),
+          title: Text(translate('Use WebSocket')),
+          description: Text(translate('websocket_tip')),
+          enabled: !locked &&
+              !isOptionFixed(kOptionAllowWebSocket) &&
+              !_pendingSwitchKeys.contains(kOptionAllowWebSocket),
+          initialValue: mainGetBoolOptionSync(kOptionAllowWebSocket),
+          onToggle: (value) async {
+            _pendingSwitchKeys.add(kOptionAllowWebSocket);
+            setState(() {});
+            try {
+              await mainSetBoolOption(kOptionAllowWebSocket, value);
+            } finally {
+              _pendingSwitchKeys.remove(kOptionAllowWebSocket);
+              if (mounted) {
+                setState(() {});
+              }
+            }
+          },
+        ),
+      );
+    }
+
+    final sectionWidget = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+          child: SettingsSection(
+            title: Text(translate('Network')),
+            tiles: tiles,
           ),
         ),
-      ],
+      ),
     );
+
+    if (!isWeb) {
+      return Column(
+        children: [
+          sectionWidget,
+          futureBuilder(
+            future: bind.mainIsUsingPublicServer(),
+            hasData: (isUsingPublicServer) {
+              if (isUsingPublicServer || outgoingOnly) {
+                return const Offstage();
+              } else {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(maxWidth: _kCardFixedWidth),
+                      child: SettingsSection(
+                        tiles: [
+                          SettingsTile.switchTile(
+                            leading: const Icon(Icons.lan_outlined),
+                            title: Text(translate('Disable UDP')),
+                            description: Text(translate('disable-udp-tip')),
+                            enabled:
+                                !locked && !isOptionFixed(kOptionDisableUdp),
+                            initialValue:
+                                bind.mainGetOptionSync(
+                                  key: kOptionDisableUdp,
+                                ) ==
+                                'Y',
+                            onToggle: (value) async {
+                              await bind.mainSetOption(
+                                key: kOptionDisableUdp,
+                                value: value ? 'Y' : 'N',
+                              );
+                              setState(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }
+            },
+          ),
+        ],
+      );
+    }
+
+    return sectionWidget;
   }
 }
 
@@ -2726,21 +2953,6 @@ class _PluginState extends State<_Plugin> {
       ),
     );
   }
-
-  Widget accountAction() {
-    return Obx(
-      () => _Button(
-        gFFI.userModel.userName.value.isEmpty
-            ? 'Login'
-            : '${translate('Logout')} (${gFFI.userModel.accountLabelWithHandle})',
-        () => {
-          gFFI.userModel.userName.value.isEmpty
-              ? loginDialog()
-              : logOutConfirmDialog(),
-        },
-      ),
-    );
-  }
 }
 
 class _Printer extends StatefulWidget {
@@ -2946,87 +3158,155 @@ class _AboutState extends State<_About> {
         final version = data['version'].toString();
         final buildDate = data['buildDate'].toString();
         final fingerprint = data['fingerprint'].toString();
-        const linkStyle = TextStyle(decoration: TextDecoration.underline);
+        final theme = Theme.of(context);
+        final tokens = AppVisual.tokens(context);
+        final scheme = theme.colorScheme;
+        final isDark = theme.brightness == Brightness.dark;
+
         return SingleChildScrollView(
-          child: _Card(
-            title: 'About Camellia Remote',
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 8.0),
-                  SelectionArea(
-                    child: Text(
-                      '${translate('Version')}: $version',
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  SelectionArea(
-                    child: Text(
-                      '${translate('Build Date')}: $buildDate',
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  if (!isWeb)
-                    SelectionArea(
-                      child: Text(
-                        '${translate('Fingerprint')}: $fingerprint',
-                      ).marginSymmetric(vertical: 4.0),
-                    ),
-                  InkWell(
-                    onTap: () {
-                      launchUrlString(
-                        'https://github.com/camellia-computing/remote-client/blob/main/docs/privacy.md',
-                      );
-                    },
-                    child: Text(
-                      translate('Privacy Statement'),
-                      style: linkStyle,
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  InkWell(
-                    onTap: () {
-                      launchUrlString(
-                        'https://github.com/camellia-computing/remote-client',
-                      );
-                    },
-                    child: Text(
-                      translate('Website'),
-                      style: linkStyle,
-                    ).marginSymmetric(vertical: 4.0),
-                  ),
-                  Container(
-                    decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 24,
-                      horizontal: 8,
-                    ),
-                    child: SelectionArea(
-                      child: Row(
+          padding: const EdgeInsets.only(bottom: _kListViewBottomMargin),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: tokens.surface,
+                        borderRadius:
+                            BorderRadius.circular(CamelliaRadius.surface),
+                        border: Border.all(color: tokens.border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: tokens.shadow.withValues(
+                              alpha: isDark ? 0.3 : 0.08,
+                            ),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Copyright © ${DateTime.now().toString().substring(0, 4)} Camellia Computing\n$license',
-                                  style: const TextStyle(color: Colors.white),
+                          const CamelliaBrandMark(size: 48, withPlate: true),
+                          const SizedBox(height: 14),
+                          Text(
+                            'Camellia Remote',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: scheme.primary.withValues(
+                                alpha: isDark ? 0.18 : 0.10,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              'v$version',
+                              style: CamelliaTypography.tabular(
+                                TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: scheme.primary,
+                                  height: 1.2,
+                                  leadingDistribution:
+                                      TextLeadingDistribution.even,
                                 ),
-                                Text(
-                                  translate('Slogan_tip'),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            translate('Slogan_tip'),
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: tokens.muted,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ).marginSymmetric(vertical: 4.0),
-                ],
-              ).marginOnly(left: _kContentHMargin),
-            ],
+                    const SizedBox(height: 16),
+                    SettingsSection(
+                      title: Text(translate('About')),
+                      tiles: [
+                        SettingsTile(
+                          leading: const Icon(Icons.info_outline_rounded),
+                          title: Text(translate('Version')),
+                          value: SelectableText(version),
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.calendar_today_outlined),
+                          title: Text(translate('Build Date')),
+                          value: SelectableText(buildDate),
+                        ),
+                        if (!isWeb)
+                          SettingsTile(
+                            leading: const Icon(Icons.fingerprint_rounded),
+                            title: Text(translate('Fingerprint')),
+                            value: SelectableText(
+                              fingerprint,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        SettingsTile(
+                          leading: const Icon(Icons.privacy_tip_outlined),
+                          title: Text(translate('Privacy Statement')),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            size: 18,
+                          ),
+                          onPressed: (_) {
+                            launchUrlString(
+                              'https://github.com/camellia-nexus/remote-client/blob/main/docs/privacy.md',
+                            );
+                          },
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.language_rounded),
+                          title: Text(translate('Website')),
+                          trailing: const Icon(
+                            Icons.open_in_new_rounded,
+                            size: 18,
+                          ),
+                          onPressed: (_) {
+                            launchUrlString(
+                              'https://github.com/camellia-computing/remote-client',
+                            );
+                          },
+                        ),
+                        SettingsTile(
+                          leading: const Icon(Icons.copyright_rounded),
+                          title: Text(
+                            'Copyright © ${DateTime.now().year} Camellia Computing',
+                          ),
+                          description: SelectableText(
+                            license,
+                            style: TextStyle(fontSize: 12, color: tokens.muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -3045,21 +3325,21 @@ Widget _Card({
   List<Widget>? title_suffix,
 }) {
   return Padding(
-    padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
     child: Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
-        child: CamelliaSection(
+        child: GlassCard(
           accent: CamelliaColors.indigo,
           title: translate(title),
           trailing: title_suffix == null
               ? null
               : Row(mainAxisSize: MainAxisSize.min, children: title_suffix),
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [...children.map((e) => e.marginOnly(top: 4))],
+            children: [...children.map((e) => e.marginOnly(top: 6))],
           ),
         ),
       ),
@@ -3090,7 +3370,7 @@ Widget _OptionCheckBox(
   final isOptFixed = isOptionFixed(key);
   if (reverse) value = !value;
   var ref = value.obs;
-  onChanged(option) async {
+  onChanged(bool? option) async {
     if (option != null) {
       if (reverse) option = !option;
       final setter =
@@ -3111,32 +3391,40 @@ Widget _OptionCheckBox(
     enabled = false;
   }
 
-  return GestureDetector(
-    child: Obx(
-      () => Row(
-        children: [
-          Checkbox(
-            value: ref.value,
-            onChanged: enabled && !isOptFixed ? onChanged : null,
-          ).marginOnly(right: 5),
-          Offstage(
-            offstage: !ref.value || checkedIcon == null,
-            child: checkedIcon?.marginOnly(right: 5),
+  final interactive = enabled && !isOptFixed;
+  return Material(
+    type: MaterialType.transparency,
+    child: InkWell(
+      borderRadius: BorderRadius.circular(CamelliaRadius.control),
+      onTap: interactive ? () => onChanged(!ref.value) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Obx(
+          () => Row(
+            children: [
+              if (ref.value && checkedIcon != null) ...[
+                checkedIcon,
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: Text(
+                  translate(label),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: disabledTextColor(context, enabled),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Switch.adaptive(
+                value: ref.value,
+                onChanged: interactive ? onChanged : null,
+              ),
+            ],
           ),
-          Expanded(
-            child: Text(
-              translate(label),
-              style: TextStyle(color: disabledTextColor(context, enabled)),
-            ),
-          ),
-        ],
+        ),
       ),
-    ).marginOnly(left: _kCheckBoxLeftMargin),
-    onTap: enabled && !isOptFixed
-        ? () {
-            onChanged(!ref.value);
-          }
-        : null,
+    ),
   );
 }
 
@@ -3314,7 +3602,7 @@ class _WaylandCardState extends State<WaylandCard> {
       showConfirmMsgBox,
       tip: 'clear_Wayland_screen_selection_tip',
       style: ButtonStyle(
-        backgroundColor: MaterialStateProperty.all<Color>(
+        backgroundColor: WidgetStateProperty.all<Color>(
           Theme.of(context).colorScheme.error.withValues(alpha: 0.75),
         ),
       ),
@@ -3364,7 +3652,7 @@ class _WaylandCardState extends State<WaylandCard> {
           showConfirmMsgBox,
           tip: 'clear-shortcuts-inhibitor-permission-tip',
           style: ButtonStyle(
-            backgroundColor: MaterialStateProperty.all<Color>(
+            backgroundColor: WidgetStateProperty.all<Color>(
               Theme.of(context).colorScheme.error.withValues(alpha: 0.75),
             ),
           ),
@@ -3382,27 +3670,26 @@ Widget _Button(
   String? tip,
   ButtonStyle? style,
 }) {
-  var button = ElevatedButton(
+  final isDanger = style?.backgroundColor != null;
+  final button = GlassButton(
+    variant: isDanger ? GlassButtonVariant.danger : GlassButtonVariant.secondary,
+    minHeight: 38,
+    tooltip: tip == null ? null : translate(tip),
     onPressed: enabled ? onPressed : null,
-    child: Text(translate(label)).marginSymmetric(horizontal: 15),
-    style: style,
+    child: Text(translate(label)),
   );
-  StatefulWidget child;
-  if (tip == null) {
-    child = button;
-  } else {
-    child = Tooltip(message: translate(tip), child: button);
-  }
-  return Row(children: [child]).marginOnly(left: _kContentHMargin);
+  return Row(children: [button]).marginOnly(left: _kContentHMargin);
 }
 
 // ignore: non_constant_identifier_names
 Widget _SubButton(String label, Function() onPressed, [bool enabled = true]) {
   return Row(
     children: [
-      ElevatedButton(
+      GlassButton(
+        variant: GlassButtonVariant.secondary,
+        minHeight: 36,
         onPressed: enabled ? onPressed : null,
-        child: Text(translate(label)).marginSymmetric(horizontal: 15),
+        child: Text(translate(label)),
       ),
     ],
   ).marginOnly(left: _kContentHSubMargin);
@@ -3430,39 +3717,85 @@ Widget _SubLabeledWidget(
 Widget _lock(bool locked, String label, Function() onUnlock) {
   return Offstage(
     offstage: !locked,
-    child: Row(
-      children: [
-        Flexible(
-          child: SizedBox(
-            width: _kCardFixedWidth,
-            child: Card(
-              child: ElevatedButton(
-                child: SizedBox(
-                  height: 25,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.security_sharp, size: 20),
-                      Text(translate(label)).marginOnly(left: 5),
-                    ],
-                  ).marginSymmetric(vertical: 2),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _kCardFixedWidth),
+          child: Builder(
+            builder: (context) {
+              final theme = Theme.of(context);
+              final accent = theme.brightness == Brightness.dark
+                  ? theme.colorScheme.secondary
+                  : theme.colorScheme.primary;
+              return GlassSurface(
+                layer: CamelliaGlassLayer.floating,
+                tintColor: accent.withValues(alpha: 0.12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
                 ),
-                onPressed: () async {
-                  final unlockPin = bind.mainGetUnlockPin();
-                  if (unlockPin.isEmpty || isUnlockPinDisabled()) {
-                    bool checked = await callMainCheckSuperUserPermission();
-                    if (checked) {
-                      onUnlock();
-                    }
-                  } else {
-                    checkUnlockPinDialog(onUnlock);
-                  }
-                },
-              ).marginSymmetric(horizontal: 2, vertical: 4),
-            ).marginOnly(left: _kCardLeftMargin),
-          ).marginOnly(top: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(CamelliaIcons.lock, size: 19, color: accent),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            translate(label),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            translate(
+                              'Unlock protected controls to modify security and service settings.',
+                            ),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GlassButton(
+                      variant: GlassButtonVariant.primary,
+                      minHeight: 38,
+                      icon: const Icon(Icons.lock_open_rounded, size: 17),
+                      onPressed: () async {
+                        final unlockPin = bind.mainGetUnlockPin();
+                        if (unlockPin.isEmpty || isUnlockPinDisabled()) {
+                          final checked =
+                              await callMainCheckSuperUserPermission();
+                          if (checked) {
+                            onUnlock();
+                          }
+                        } else {
+                          checkUnlockPinDialog(onUnlock);
+                        }
+                      },
+                      child: Text(translate(label)),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ),
-      ],
+      ),
     ),
   );
 }
@@ -3529,215 +3862,3 @@ class _CountDownButtonState extends State<_CountDownButton> {
     );
   }
 }
-
-//#endregion
-
-//#region dialogs
-
-const String kStoredPasswordSentinel =
-    '\u0000\u0000STORED_PASSWORD\u0000\u0000';
-
-void changeSocks5Proxy() async {
-  var socks = await bind.mainGetSocks();
-
-  String proxy = '';
-  String proxyMsg = '';
-  String username = '';
-  String password = '';
-  if (socks.length == 3) {
-    proxy = socks[0];
-    username = socks[1];
-    password = socks[2];
-  }
-  var proxyController = TextEditingController(text: proxy);
-  var userController = TextEditingController(text: username);
-  var pwdController = TextEditingController(text: password);
-  RxBool obscure = true.obs;
-
-  // proxy settings
-  // The following option is a not real key, it is just used for custom client advanced settings.
-  const String optionProxyUrl = "proxy-url";
-  final isOptFixed = isOptionFixed(optionProxyUrl);
-
-  var isInProgress = false;
-  gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    safeClose() {
-      if (isClosed) return;
-      isClosed = true;
-      proxyController.clear();
-      userController.clear();
-      pwdController.clear();
-      proxyController.dispose();
-      userController.dispose();
-      pwdController.dispose();
-      close();
-    }
-
-    submit() async {
-      if (isInProgress) return;
-      setState(() {
-        proxyMsg = '';
-        isInProgress = true;
-      });
-      cancel() {
-        setState(() {
-          isInProgress = false;
-        });
-      }
-
-      proxy = proxyController.text.trim();
-      username = userController.text.trim();
-      password = pwdController.text.trim();
-
-      if (proxy.isNotEmpty) {
-        String domainPort = proxy;
-        if (domainPort.contains('://')) {
-          domainPort = domainPort.split('://')[1];
-        }
-        proxyMsg = translate(
-          await bind.mainTestIfValidServer(
-            server: domainPort,
-            testWithProxy: false,
-          ),
-        );
-        if (proxyMsg.isEmpty) {
-          // ignore
-        } else {
-          cancel();
-          return;
-        }
-      }
-      await bind.mainSetSocks(
-        proxy: proxy,
-        username: username,
-        password: password,
-      );
-      safeClose();
-    }
-
-    return CustomAlertDialog(
-      title: Text(translate('Socks5/Http(s) Proxy')),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 500),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Row(
-                        children: [
-                          Text(translate('Server')).marginOnly(right: 4),
-                          Tooltip(
-                            waitDuration: Duration(milliseconds: 0),
-                            message: translate("default_proxy_tip"),
-                            child: Icon(
-                              Icons.help_outline_outlined,
-                              size: 16,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.color
-                                  ?.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
-                      labelText: isMobile ? translate('Server') : null,
-                      helperText: isMobile
-                          ? translate("default_proxy_tip")
-                          : null,
-                      helperMaxLines: isMobile ? 3 : null,
-                    ),
-                    controller: proxyController,
-                    autofocus: true,
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Username")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    controller: userController,
-                    decoration: InputDecoration(
-                      labelText: isMobile ? translate('Username') : null,
-                    ),
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Password")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: Obx(
-                    () => TextField(
-                      obscureText: obscure.value,
-                      decoration: InputDecoration(
-                        labelText: isMobile ? translate('Password') : null,
-                        hintText: password == kStoredPasswordSentinel
-                            ? translate('Unchanged')
-                            : null,
-                        suffixIcon: IconButton(
-                          onPressed: () => obscure.value = !obscure.value,
-                          icon: Icon(
-                            obscure.value
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                        ),
-                      ),
-                      controller: pwdController,
-                      enabled: !isOptFixed,
-                      maxLength: bind.mainMaxEncryptLen(),
-                    ).workaroundFreezeLinuxMint(),
-                  ),
-                ),
-              ],
-            ),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress)
-              const LinearProgressIndicator().marginOnly(top: 8),
-          ],
-        ),
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        if (!isOptFixed) dialogButton('OK', onPressed: submit),
-      ],
-      onSubmit: submit,
-      onCancel: safeClose,
-    );
-  });
-}
-
-//#endregion

@@ -79,7 +79,7 @@ pub fn signal_receiver() -> broadcast::Receiver<Vec<i32>> {
 fn start_hbbs_sync() -> broadcast::Sender<Vec<i32>> {
     let (tx, _rx) = broadcast::channel::<Vec<i32>>(16);
     std::thread::spawn(move || start_hbbs_sync_async());
-    return tx;
+    tx
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,15 +1,22 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
-import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
+import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/common/widgets/login.dart';
+import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 class WebClientSettingsPage extends StatefulWidget {
-  const WebClientSettingsPage({super.key});
+  const WebClientSettingsPage({super.key, this.embedded = false});
+
+  /// When true (e.g. hosted inside [showSettingsOverlay]), omits the outer
+  /// [Scaffold] and [AppBar] so the page never renders a duplicated header.
+  final bool embedded;
 
   @override
   State<WebClientSettingsPage> createState() => _WebClientSettingsPageState();
@@ -98,26 +105,35 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     }
   }
 
-  void _openServerSettings() async {
+  Future<void> _openServerSettings() async {
     final serverConfig = await _loadServerConfig();
     if (!mounted) return;
     if (serverConfig == null) {
-      showDialog<void>(
+      await showDialog<void>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(translate('ID/Relay Server')),
-          content: Text(translate('Failed to load server configuration')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text(translate('Cancel')),
+        builder: (ctx) => CustomAlertDialog(
+          title: ModernDialogHeader.warning(
+            title: translate('ID/Relay Server'),
+            subtitle: translate('Failed to load server configuration'),
+          ),
+          content: Text(
+            translate(
+              'Please verify your browser network connection and retry loading endpoint settings.',
             ),
-            ElevatedButton(
+            style: Theme.of(ctx).textTheme.bodyMedium,
+          ),
+          actions: [
+            dialogButton(
+              'Cancel',
+              onPressed: () => Navigator.of(ctx).pop(),
+              isOutline: true,
+            ),
+            dialogButton(
+              'Retry',
               onPressed: () {
                 Navigator.of(ctx).pop();
                 _openServerSettings();
               },
-              child: Text(translate('Retry')),
             ),
           ],
         ),
@@ -175,86 +191,72 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 }
               }
 
-              Widget buildField({
-                required String label,
-                required TextEditingController controller,
-                required String error,
-                String? hint,
-              }) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: controller,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: hint,
-                        errorText: error.isEmpty ? null : error,
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              return AlertDialog(
+              return CustomAlertDialog(
                 title: Row(
                   children: [
-                    Expanded(child: Text(translate('ID/Relay Server'))),
+                    Expanded(
+                      child: ModernDialogHeader(
+                        icon: Icons.dns_rounded,
+                        title: translate('ID/Relay Server'),
+                        subtitle: translate(
+                          'Configure server endpoints and key',
+                        ),
+                      ),
+                    ),
                     ...ServerConfigImportExportWidgets(controllers, errMsgs),
                   ],
                 ),
-                content: SizedBox(
-                  width: 580,
+                content: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 540),
                   child: SingleChildScrollView(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        buildField(
-                          label: translate('ID Server'),
+                        GlassInput(
+                          labelText: translate('ID Server'),
                           controller: idCtrl,
-                          error: idErr.value,
-                          hint: 'host[:port]',
+                          errorText: idErr.value.isEmpty ? null : idErr.value,
+                          hintText: 'host[:port]',
+                          tabularNums: true,
                         ),
-                        const SizedBox(height: 10),
-                        buildField(
-                          label: translate('Relay Server'),
+                        const SizedBox(height: 12),
+                        GlassInput(
+                          labelText: translate('Relay Server'),
                           controller: relayCtrl,
-                          error: relayErr.value,
-                          hint: 'host[:port]',
+                          errorText: relayErr.value.isEmpty
+                              ? null
+                              : relayErr.value,
+                          hintText: 'host[:port]',
+                          tabularNums: true,
                         ),
-                        const SizedBox(height: 10),
-                        buildField(
-                          label: translate('API Server'),
+                        const SizedBox(height: 12),
+                        GlassInput(
+                          labelText: translate('API Server'),
                           controller: apiCtrl,
-                          error: apiErr.value,
-                          hint: 'https://api.example.com',
+                          errorText: apiErr.value.isEmpty ? null : apiErr.value,
+                          hintText: 'https://api.example.com',
                         ),
-                        const SizedBox(height: 10),
-                        buildField(
-                          label: 'Key',
+                        const SizedBox(height: 12),
+                        GlassInput(
+                          labelText: translate('Key'),
                           controller: keyCtrl,
-                          error: '',
+                          tabularNums: true,
                         ),
-                        if (isInProgress) ...[
-                          const SizedBox(height: 12),
-                          const LinearProgressIndicator(),
-                        ],
                       ],
                     ),
                   ),
                 ),
                 actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(dialogContext).pop(),
+                  GlassButton(
+                    variant: GlassButtonVariant.secondary,
+                    onPressed: isInProgress
+                        ? null
+                        : () => Navigator.of(dialogContext).pop(),
                     child: Text(translate('Cancel')),
                   ),
-                  FilledButton(
+                  GlassButton(
+                    variant: GlassButtonVariant.primary,
+                    loading: isInProgress,
                     onPressed: isInProgress ? null : submit,
                     child: Text(translate('OK')),
                   ),
@@ -281,19 +283,42 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     return translate(raw);
   }
 
-  Widget _sectionCard(String title, List<Widget> children) {
-    return Card(
+  Widget _sectionCard({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required List<Widget> children,
+  }) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final accent = theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    return GlassCard(
+      title: translate(title),
+      subtitle: subtitle == null ? null : translate(subtitle),
+      leading: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        ),
+        child: Icon(icon, size: 17, color: accent),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-            child: Text(
-              translate(title),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-          ),
-          ...children,
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 1,
+                thickness: 0.8,
+                color: glass.specularBottom.withValues(alpha: 0.55),
+              ),
+            children[i],
+          ],
         ],
       ),
     );
@@ -307,60 +332,200 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     required ValueChanged<String?>? onChanged,
     String? subtitle,
   }) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final dropdownField = DropdownButtonFormField<String>(
-          initialValue: value,
-          items: items,
-          isDense: true,
-          isExpanded: true,
-          onChanged: onChanged,
-          decoration: const InputDecoration(
-            isDense: true,
-            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        final dropdownField = GlassSurface(
+          layer: CamelliaGlassLayer.floating,
+          showShadow: false,
+          enableBlur: false,
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: value,
+              items: items,
+              isExpanded: true,
+              isDense: true,
+              dropdownColor: theme.colorScheme.surfaceContainerHigh,
+              icon: Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurface,
+              ),
+              onChanged: onChanged,
+            ),
           ),
         );
 
-        if (constraints.maxWidth < 420) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(icon, size: 24),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            translate(title),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          if (subtitle != null)
-                            Text(
-                              subtitle,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                        ],
+        final headerRow = Row(
+          children: [
+            Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    translate(title),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
                   ],
-                ),
+                ],
+              ),
+            ),
+          ],
+        );
+
+        if (constraints.maxWidth < 460) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                headerRow,
                 const SizedBox(height: 8),
-                dropdownField,
+                SizedBox(height: 38, child: dropdownField),
               ],
             ),
           );
         }
 
-        return ListTile(
-          leading: Icon(icon),
-          title: Text(translate(title)),
-          subtitle: subtitle == null ? null : Text(subtitle),
-          trailing: SizedBox(width: 220, child: dropdownField),
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Row(
+            children: [
+              Expanded(child: headerRow),
+              const SizedBox(width: 14),
+              SizedBox(
+                width: 210,
+                height: 38,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                    border: Border.all(color: glass.specularBottom, width: 0.6),
+                  ),
+                  child: dropdownField,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeRow(BuildContext context) {
+    final theme = Theme.of(context);
+    return ValueListenableBuilder<CamelliaThemePreference>(
+      valueListenable: MyTheme.themeNotifier,
+      builder: (context, pref, _) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 480;
+              final switcher = GlassSegmentedControl<CamelliaThemePreference>(
+                compact: compact,
+                expand: compact,
+                selected: pref,
+                items: [
+                  GlassSegmentItem(
+                    value: CamelliaThemePreference.system,
+                    icon: Icons.brightness_auto_rounded,
+                    label: compact ? null : translate('Follow System'),
+                    tooltip: translate('Follow System'),
+                  ),
+                  GlassSegmentItem(
+                    value: CamelliaThemePreference.light,
+                    icon: Icons.light_mode_rounded,
+                    label: compact ? null : translate('Light'),
+                    tooltip: translate('Light'),
+                  ),
+                  GlassSegmentItem(
+                    value: CamelliaThemePreference.dark,
+                    icon: Icons.dark_mode_rounded,
+                    label: compact ? null : translate('Dark'),
+                    tooltip: translate('Dark'),
+                  ),
+                  GlassSegmentItem(
+                    value: CamelliaThemePreference.midnight,
+                    icon: Icons.nights_stay_rounded,
+                    label: compact ? null : translate('OLED Midnight'),
+                    tooltip: translate('OLED Midnight'),
+                  ),
+                ],
+                onChanged: (next) async {
+                  await MyTheme.changeThemePreference(next);
+                  if (mounted) {
+                    setState(() {});
+                  }
+                },
+              );
+
+              final labelCol = Row(
+                children: [
+                  Icon(
+                    Icons.palette_outlined,
+                    size: 20,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          translate('Theme'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          translate(
+                            'Switch between Light, Dark, OLED Midnight, or System appearance.',
+                          ),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+
+              if (constraints.maxWidth < 620) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [labelCol, const SizedBox(height: 10), switcher],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: labelCol),
+                  const SizedBox(width: 14),
+                  switcher,
+                ],
+              );
+            },
+          ),
         );
       },
     );
@@ -368,6 +533,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
     final allowWebSocket = mainGetBoolOptionSync(kOptionAllowWebSocket);
 
     final viewStyleRaw = bind.mainGetUserDefaultOption(key: kOptionViewStyle);
@@ -421,15 +588,18 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
       currentLang = defaultOptionLang;
     }
 
-    return Scaffold(
-      appBar: AppBar(title: Text(translate('Settings'))),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _sectionCard('General', [
+    final listContent = ListView(
+      padding: EdgeInsets.all(widget.embedded ? 16 : 20),
+      children: [
+        _sectionCard(
+          icon: Icons.tune_rounded,
+          title: 'General',
+          subtitle: 'Appearance and display language',
+          children: [
+            _buildThemeRow(context),
             if (_langsLoaded && _langs.isNotEmpty)
               _dropdownTile(
-                icon: Icons.language,
+                icon: Icons.language_rounded,
                 title: 'Language',
                 value: currentLang,
                 items: _langs
@@ -441,9 +611,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 onChanged: isOptionFixed(kCommConfKeyLang)
                     ? null
                     : (v) async {
-                        if (v == null) {
-                          return;
-                        }
+                        if (v == null) return;
                         await bind.mainSetLocalOption(
                           key: kCommConfKeyLang,
                           value: v,
@@ -453,131 +621,243 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
               )
             else if (_langsLoaded && _langsError != null)
               ListTile(
-                leading: const Icon(Icons.language),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.language_rounded, color: glass.statusAlert),
                 title: Text(translate('Language')),
                 subtitle: Text(
                   '${translate("Failed to load language list")}: $_langsError',
-                  style: const TextStyle(color: Colors.red),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: glass.statusAlert,
+                  ),
                 ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.refresh),
+                trailing: GlassIconButton(
+                  icon: CamelliaIcons.refresh,
+                  size: 36,
+                  iconSize: 18,
                   tooltip: translate('Retry'),
                   onPressed: _loadLanguages,
                 ),
               ),
-          ]),
-          const SizedBox(height: 12),
-          _sectionCard('Account', [
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: Icons.person_outline_rounded,
+          title: 'Account',
+          subtitle: 'Sync address book and trusted sessions',
+          children: [
             Obx(() {
               final isLogin = gFFI.userModel.userName.value.isNotEmpty;
-              return ListTile(
-                leading: const Icon(Icons.person_outline),
-                title: Text(isLogin ? translate('Logout') : translate('Login')),
-                subtitle: isLogin
-                    ? Text(gFFI.userModel.userName.value)
-                    : Text(translate('Not logged in')),
-                onTap: () async {
-                  if (isLogin) {
-                    await gFFI.userModel.logOut();
-                  } else {
-                    await loginDialog();
-                  }
-                  if (mounted) {
-                    setState(() {});
-                  }
-                },
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.account_circle_outlined,
+                      size: 22,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isLogin
+                                ? gFFI.userModel.userName.value
+                                : translate('Not logged in'),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            isLogin
+                                ? translate('Signed in to Camellia account')
+                                : translate(
+                                    'Sign in to access your synced devices',
+                                  ),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GlassButton(
+                      variant: isLogin
+                          ? GlassButtonVariant.secondary
+                          : GlassButtonVariant.primary,
+                      minHeight: 38,
+                      onPressed: () async {
+                        if (isLogin) {
+                          await gFFI.userModel.logOut();
+                        } else {
+                          await loginDialog();
+                        }
+                        if (mounted) {
+                          setState(() {});
+                        }
+                      },
+                      child: Text(
+                        isLogin ? translate('Logout') : translate('Login'),
+                      ),
+                    ),
+                  ],
+                ),
               );
             }),
-          ]),
-          const SizedBox(height: 12),
-          _sectionCard('Network', [
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: Icons.hub_outlined,
+          title: 'Network',
+          subtitle: 'Relay routing and browser transport status',
+          children: [
             ListTile(
-              leading: const Icon(Icons.dns_outlined),
-              title: Text(translate('ID/Relay Server')),
-              subtitle: Text(translate('Configure server endpoints and key')),
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                Icons.dns_outlined,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              title: Text(
+                translate('ID/Relay Server'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                translate('Configure server endpoints and key'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: GlassButton(
+                variant: GlassButtonVariant.secondary,
+                minHeight: 34,
+                onPressed: _openServerSettings,
+                child: Text(translate('Configure')),
+              ),
               onTap: _openServerSettings,
             ),
-            const Divider(height: 1),
             ListTile(
-              leading: const Icon(Icons.web_asset_outlined),
-              title: Text(translate('Use WebSocket')),
-              subtitle: Text(
-                'Web client transport is WS/WSS only (browser limitation).',
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                Icons.web_asset_outlined,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-              trailing: Icon(
-                allowWebSocket ? Icons.check_circle : Icons.info_outline,
-                color: allowWebSocket ? Colors.green : Colors.orange,
+              title: Text(
+                translate('Use WebSocket'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                translate(
+                  'Web client transport is WS/WSS only (browser limitation).',
+                ),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              trailing: GlassBadge(
+                label: allowWebSocket
+                    ? translate('Active')
+                    : translate('Required'),
+                tone: allowWebSocket
+                    ? GlassBadgeTone.online
+                    : GlassBadgeTone.warning,
+                showDot: true,
+                compact: true,
               ),
             ),
-            const Divider(height: 1),
-            const ListTile(
-              leading: Icon(Icons.lock_outline),
-              title: Text('Direct IP access unavailable'),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                CamelliaIcons.lock,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              title: Text(
+                translate('Direct IP access unavailable'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               subtitle: Text(
-                'Use a device ID with the authenticated ID/Relay route. Direct endpoints stay disabled until they support peer identity verification and end-to-end session encryption.',
+                translate(
+                  'Use a device ID with the authenticated ID/Relay route. Direct endpoints stay disabled until they support peer identity verification and end-to-end session encryption.',
+                ),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
-          ]),
-          const SizedBox(height: 12),
-          _sectionCard('Display', [
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: CamelliaIcons.display,
+          title: 'Display',
+          subtitle: 'Default scaling, video quality, and codec preferences',
+          children: [
             _dropdownTile(
               icon: Icons.desktop_windows_outlined,
               title: 'Default View Style',
               value: viewStyle,
-              items: const [
+              items: [
                 DropdownMenuItem(
                   value: kRemoteViewStyleOriginal,
-                  child: Text('Scale original'),
+                  child: Text(translate('Scale original')),
                 ),
                 DropdownMenuItem(
                   value: kRemoteViewStyleAdaptive,
-                  child: Text('Scale adaptive'),
+                  child: Text(translate('Scale adaptive')),
                 ),
               ],
               onChanged: isOptionFixed(kOptionViewStyle)
                   ? null
                   : (v) => _setUserDefaultOption(kOptionViewStyle, v ?? ''),
             ),
-            const Divider(height: 1),
             _dropdownTile(
               icon: Icons.swap_vert_outlined,
               title: 'Default Scroll Style',
               value: scrollStyle,
-              items: const [
+              items: [
                 DropdownMenuItem(
                   value: kRemoteScrollStyleAuto,
-                  child: Text('ScrollAuto'),
+                  child: Text(translate('ScrollAuto')),
                 ),
                 DropdownMenuItem(
                   value: kRemoteScrollStyleBar,
-                  child: Text('Scrollbar'),
+                  child: Text(translate('Scrollbar')),
                 ),
               ],
               onChanged: isOptionFixed(kOptionScrollStyle)
                   ? null
                   : (v) => _setUserDefaultOption(kOptionScrollStyle, v ?? ''),
             ),
-            const Divider(height: 1),
             _dropdownTile(
               icon: Icons.high_quality_outlined,
               title: 'Default Image Quality',
               value: imageQuality,
-              items: const [
+              items: [
                 DropdownMenuItem(
                   value: kRemoteImageQualityBest,
-                  child: Text('Good image quality'),
+                  child: Text(translate('Good image quality')),
                 ),
                 DropdownMenuItem(
                   value: kRemoteImageQualityBalanced,
-                  child: Text('Balanced'),
+                  child: Text(translate('Balanced')),
                 ),
                 DropdownMenuItem(
                   value: kRemoteImageQualityLow,
-                  child: Text('Optimize reaction time'),
+                  child: Text(translate('Optimize reaction time')),
                 ),
                 DropdownMenuItem(
                   value: kRemoteImageQualityCustom,
-                  child: Text('Custom'),
+                  child: Text(translate('Custom')),
                 ),
               ],
               onChanged: isOptionFixed(kOptionImageQuality)
@@ -586,44 +866,58 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
             ),
             if (imageQuality == kRemoteImageQualityCustom)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                padding: const EdgeInsets.only(top: 6, bottom: 10),
                 child: customImageQualitySetting(),
               ),
-            const Divider(height: 1),
             _dropdownTile(
               icon: Icons.video_settings_outlined,
               title: 'Default Codec',
               value: codecPreference,
-              items: const [
-                DropdownMenuItem(value: 'auto', child: Text('Auto')),
-                DropdownMenuItem(value: 'vp8', child: Text('VP8')),
-                DropdownMenuItem(value: 'vp9', child: Text('VP9')),
-                DropdownMenuItem(value: 'av1', child: Text('AV1')),
-                DropdownMenuItem(value: 'h264', child: Text('H264')),
-                DropdownMenuItem(value: 'h265', child: Text('H265')),
+              items: [
+                DropdownMenuItem(value: 'auto', child: Text(translate('Auto'))),
+                const DropdownMenuItem(value: 'vp8', child: Text('VP8')),
+                const DropdownMenuItem(value: 'vp9', child: Text('VP9')),
+                const DropdownMenuItem(value: 'av1', child: Text('AV1')),
+                const DropdownMenuItem(value: 'h264', child: Text('H264')),
+                const DropdownMenuItem(value: 'h265', child: Text('H265')),
               ],
               onChanged: isOptionFixed(kOptionCodecPreference)
                   ? null
                   : (v) =>
                         _setUserDefaultOption(kOptionCodecPreference, v ?? ''),
             ),
-          ]),
-          const SizedBox(height: 12),
-          _sectionCard('Other Default Options', [
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: Icons.checklist_rounded,
+          title: 'Other Default Options',
+          subtitle: 'Session ergonomics and input behavior',
+          children: [
             ...otherDefaultSettings().map((item) {
               final key = item.$2;
               final value = bind.mainGetUserDefaultOption(key: key) == 'Y';
-              return SwitchListTile(
+              return SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
                 value: value,
                 onChanged: isOptionFixed(key)
                     ? null
                     : (v) => _setUserDefaultBool(key, v),
-                title: Text(_otherLabel(item.$1)),
+                title: Text(
+                  _otherLabel(item.$1),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               );
             }),
-          ]),
-          const SizedBox(height: 12),
-          _sectionCard('About', [
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: CamelliaIcons.shield,
+          title: translate('About'),
+          children: [
             FutureBuilder<_AboutInfo>(
               future: _aboutFuture,
               builder: (context, snapshot) {
@@ -632,34 +926,41 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 final buildDate = info?.buildDate ?? '';
                 final fingerprint = info?.fingerprint ?? '';
                 final year = DateTime.now().year;
+                final monoStyle = CamelliaTypography.tabular(
+                  theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                );
                 return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  padding: const EdgeInsets.only(top: 6),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       SelectionArea(
                         child: Text(
                           '${translate('Version')}: ${version.isEmpty ? '-' : version}',
+                          style: monoStyle,
                         ),
                       ),
                       const SizedBox(height: 6),
                       SelectionArea(
                         child: Text(
                           '${translate('Build Date')}: ${buildDate.isEmpty ? '-' : buildDate}',
+                          style: monoStyle,
                         ),
                       ),
                       const SizedBox(height: 6),
                       SelectionArea(
                         child: Text(
                           '${translate('Fingerprint')}: ${fingerprint.isEmpty ? '-' : fingerprint}',
+                          style: monoStyle,
                         ),
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 12),
                       Text(
                         'Copyright © $year Camellia Computing.',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black54,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -667,9 +968,24 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 );
               },
             ),
-          ]),
-        ],
+          ],
+        ),
+      ],
+    );
+
+    if (widget.embedded) {
+      return Material(type: MaterialType.transparency, child: listContent);
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: Text(translate('Settings')),
       ),
+      body: CamelliaBackdrop(child: SafeArea(child: listContent)),
     );
   }
 }

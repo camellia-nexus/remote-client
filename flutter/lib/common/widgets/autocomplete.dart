@@ -7,6 +7,7 @@ import '../../../models/platform_model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/peer_card.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 
 @visibleForTesting
 List<Peer> mergeAutocompletePeers({
@@ -283,10 +284,10 @@ class AutocompletePeerTile extends StatefulWidget {
   final Peer peer;
 
   const AutocompletePeerTile({
-    Key? key,
+    super.key,
     required this.onSelect,
     required this.peer,
-  }) : super(key: key);
+  });
 
   @override
   AutocompletePeerTileState createState() => AutocompletePeerTileState();
@@ -303,128 +304,134 @@ class AutocompletePeerTileState extends State<AutocompletePeerTile> {
 
   @override
   Widget build(BuildContext context) {
-    final double tileRadius = 5;
+    final tokens = AppVisual.tokens(context);
     final name =
         '${widget.peer.username}${widget.peer.username.isNotEmpty && widget.peer.hostname.isNotEmpty ? '@' : ''}${widget.peer.hostname}';
     final greyStyle = TextStyle(
-        fontSize: 11,
-        color: Theme.of(context).textTheme.titleLarge?.color?.withValues(alpha: 0.6));
-    final child = GestureDetector(
-        onTap: () => widget.onSelect(),
-        child: Padding(
-            padding: EdgeInsets.only(left: 5, right: 5),
-            child: Container(
-                height: 42,
-                margin: EdgeInsets.only(bottom: 5),
-                child: Row(
-                  mainAxisSize: MainAxisSize.max,
+      fontSize: 11,
+      color: tokens.muted,
+    );
+
+    final child = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        onTap: widget.onSelect,
+        child: Container(
+          height: 44,
+          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: tokens.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: tokens.border.withValues(alpha: 0.5),
+                    width: 1,
+                  ),
+                ),
+                alignment: Alignment.center,
+                width: 34,
+                height: 34,
+                padding: const EdgeInsets.all(4),
+                child: getPlatformImage(
+                  widget.peer.platform,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                        decoration: BoxDecoration(
-                          color: str2color(
-                              '${widget.peer.id}${widget.peer.platform}', 0x7f),
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(tileRadius),
-                            bottomLeft: Radius.circular(tileRadius),
+                    Row(
+                      children: [
+                        CamelliaStatusDot(
+                          color: widget.peer.online
+                              ? tokens.success
+                              : tokens.muted,
+                          size: 7,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            widget.peer.alias.isEmpty
+                                ? formatID(widget.peer.id)
+                                : widget.peer.alias,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(
+                                  fontSize: 13,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w600,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
                           ),
                         ),
-                        alignment: Alignment.center,
-                        width: 42,
-                        height: null,
-                        child: Padding(
-                            padding: EdgeInsets.all(6),
-                            child: getPlatformImage(widget.peer.platform,
-                                size: 30))),
-                    Expanded(
-                      child: Container(
-                          padding: EdgeInsets.only(left: 10),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surface,
-                            borderRadius: BorderRadius.only(
-                              topRight: Radius.circular(tileRadius),
-                              bottomRight: Radius.circular(tileRadius),
+                        if (widget.peer.alias.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, right: 4),
+                            child: Text(
+                              "(${widget.peer.id})",
+                              style: greyStyle.copyWith(
+                                height: 1.2,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                  child: Container(
-                                      margin: EdgeInsets.only(top: 2),
-                                      child: Container(
-                                          margin: EdgeInsets.only(top: 2),
-                                          child: Column(
-                                            children: [
-                                              Container(
-                                                  margin:
-                                                      EdgeInsets.only(top: 2),
-                                                  child: Row(children: [
-                                                    getOnline(
-                                                        8, widget.peer.online),
-                                                    Expanded(
-                                                        child: Text(
-                                                      widget.peer.alias.isEmpty
-                                                          ? formatID(
-                                                              widget.peer.id)
-                                                          : widget.peer.alias,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
-                                                      style: Theme.of(context)
-                                                          .textTheme
-                                                          .titleSmall,
-                                                    )),
-                                                    widget.peer.alias.isNotEmpty
-                                                        ? Padding(
-                                                            padding:
-                                                                const EdgeInsets
-                                                                    .only(
-                                                                    left: 5,
-                                                                    right: 5),
-                                                            child: Text(
-                                                              "(${widget.peer.id})",
-                                                              style: greyStyle,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                            ))
-                                                        : Container(),
-                                                  ])),
-                                              Align(
-                                                alignment: Alignment.centerLeft,
-                                                child: Text(
-                                                  name,
-                                                  style: greyStyle,
-                                                  textAlign: TextAlign.start,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                            ],
-                                          )))),
-                            ],
-                          )),
-                    )
+                      ],
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      name,
+                      style: greyStyle.copyWith(height: 1.2),
+                      textAlign: TextAlign.start,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
-                ))));
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
     final colors = _frontN(widget.peer.tags, 25)
         .map((e) => gFFI.abModel.getCurrentAbTagColor(e))
         .toList();
+
     return Tooltip(
       message: !(isDesktop || isWebDesktop)
           ? ''
           : widget.peer.tags.isNotEmpty
               ? '${translate('Tags')}: ${widget.peer.tags.join(', ')}'
               : '',
-      child: Stack(children: [
-        child,
-        if (colors.isNotEmpty)
-          Positioned(
-            top: 5,
-            right: 10,
-            child: CustomPaint(
-              painter: TagPainter(radius: 3, colors: colors),
+      child: Stack(
+        children: [
+          child,
+          if (colors.isNotEmpty)
+            Positioned(
+              top: 5,
+              right: 10,
+              child: CustomPaint(
+                painter: TagPainter(radius: 3, colors: colors),
+              ),
             ),
-          )
-      ]),
+        ],
+      ),
     );
   }
 }

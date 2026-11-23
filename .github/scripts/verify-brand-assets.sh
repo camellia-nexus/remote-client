@@ -18,6 +18,7 @@ asset_status="$(
 		res/mac-tray-light-x2.png \
 		res/scalable.svg \
 		res/tray-icon.ico \
+		res/tray-icon.png \
 		res/32x32.png \
 		res/64x64.png \
 		res/128x128.png \
@@ -28,6 +29,7 @@ asset_status="$(
 		flutter/assets/icon.svg \
 		flutter/ios/Runner/Assets.xcassets/AppIcon.appiconset \
 		flutter/macos/Runner/AppIcon.icns \
+		flutter/plugins/desktop_multi_window/windows/resources/app_icon.ico \
 		flutter/web/favicon.png \
 		flutter/web/favicon.svg \
 		flutter/web/icons \

@@ -1,8 +1,12 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../../ui/camellia_design.dart';
 
 const double kDesktopTitleBarHeight = 40;
 
@@ -56,11 +60,11 @@ final class WindowManagerDesktopWindowController
   Future<void> close() => windowManager.close();
 }
 
-/// Platform-aware custom chrome for the primary desktop window.
+/// Minimalist transparent/frosted custom window chrome for desktop platforms.
 ///
 /// macOS keeps its native traffic-light controls. Windows and Linux render
-/// caption controls here while retaining native move, resize, and system-menu
-/// behavior through [windowManager].
+/// frosted caption controls here while retaining native move, resize, and
+/// system-menu behavior through [windowManager].
 class DesktopTitleBar extends StatefulWidget {
   const DesktopTitleBar({
     super.key,
@@ -68,12 +72,22 @@ class DesktopTitleBar extends StatefulWidget {
     this.controller = const WindowManagerDesktopWindowController(),
     this.showCaptionButtons,
     this.labels = const DesktopTitleBarLabels(),
+    this.showBrand = true,
+    this.transparent = false,
   });
 
   final String? appName;
   final DesktopWindowController controller;
   final bool? showCaptionButtons;
   final DesktopTitleBarLabels labels;
+
+  /// Set to `false` when embedded inside [CamelliaDesktopShell] so the brand
+  /// mark and title are not duplicated above the sidebar header.
+  final bool showBrand;
+
+  /// When `true`, renders cleanly over an ancestor [CamelliaBackdrop] with a
+  /// subtle frosted hairline rim instead of an opaque surface strip.
+  final bool transparent;
 
   @override
   State<DesktopTitleBar> createState() => _DesktopTitleBarState();
@@ -157,27 +171,32 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
     final foreground = _isFocused
         ? theme.colorScheme.onSurface
         : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.72);
     final title = widget.appName ?? bind.mainGetAppNameSync();
-    return Material(
-      color: theme.colorScheme.surface,
-      child: Container(
-        height: kDesktopTitleBarHeight,
+
+    final barContent = SizedBox(
+      height: kDesktopTitleBarHeight,
+      child: DecoratedBox(
         decoration: BoxDecoration(
+          color: widget.transparent
+              ? glass.sidebarTint.withValues(alpha: 0.42)
+              : glass.sidebarTint,
           border: Border(
-            bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+            bottom: BorderSide(color: glass.specularBottom, width: 0.8),
           ),
         ),
         child: Row(
           children: [
             if (isMacOS) const SizedBox(width: 78),
-            _WindowMenuIcon(
-              controller: widget.controller,
-              foreground: foreground,
-              appName: title,
-            ),
+            if (widget.showBrand)
+              _WindowMenuIcon(
+                controller: widget.controller,
+                foreground: foreground,
+                appName: title,
+              ),
             Expanded(
               child: GestureDetector(
                 key: const ValueKey('desktop-title-drag-region'),
@@ -185,24 +204,27 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
                 onPanStart: (_) => widget.controller.startDragging(),
                 onDoubleTap: _toggleMaximized,
                 onSecondaryTapDown: (_) => widget.controller.showSystemMenu(),
-                child: Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: foreground,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
+                child: widget.showBrand
+                    ? Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: foreground,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.expand(),
               ),
             ),
             if (_showCaptionButtons) ...[
               _CaptionButton(
                 tooltip: widget.labels.minimize,
-                icon: IconFont.min,
+                icon: Icons.remove_rounded,
+                iconSize: 16,
                 foreground: foreground,
                 onPressed: widget.controller.minimize,
               ),
@@ -210,13 +232,17 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
                 tooltip: _isMaximized
                     ? widget.labels.restore
                     : widget.labels.maximize,
-                icon: _isMaximized ? IconFont.restore : IconFont.max,
+                icon: _isMaximized
+                    ? Icons.filter_none_rounded
+                    : Icons.crop_square_rounded,
+                iconSize: _isMaximized ? 12 : 14,
                 foreground: foreground,
                 onPressed: _toggleMaximized,
               ),
               _CaptionButton(
                 tooltip: widget.labels.close,
-                icon: IconFont.close,
+                icon: Icons.close_rounded,
+                iconSize: 16,
                 foreground: foreground,
                 destructive: true,
                 onPressed: widget.controller.close,
@@ -226,6 +252,22 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
         ),
       ),
     );
+
+    if (widget.transparent) {
+      return RepaintBoundary(
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: glass.sidebarBlur * 0.75,
+              sigmaY: glass.sidebarBlur * 0.75,
+            ),
+            child: Material(type: MaterialType.transparency, child: barContent),
+          ),
+        ),
+      );
+    }
+
+    return Material(type: MaterialType.transparency, child: barContent);
   }
 }
 
@@ -268,6 +310,7 @@ class _CaptionButton extends StatefulWidget {
     required this.foreground,
     required this.onPressed,
     this.destructive = false,
+    this.iconSize = 14,
   });
 
   final String tooltip;
@@ -275,6 +318,7 @@ class _CaptionButton extends StatefulWidget {
   final Color foreground;
   final Future<void> Function() onPressed;
   final bool destructive;
+  final double iconSize;
 
   @override
   State<_CaptionButton> createState() => _CaptionButtonState();
@@ -282,39 +326,117 @@ class _CaptionButton extends StatefulWidget {
 
 class _CaptionButtonState extends State<_CaptionButton> {
   bool _hovered = false;
+  bool _pressed = false;
+  bool _focused = false;
+
+  void _trigger() {
+    HapticFeedback.selectionClick();
+    widget.onPressed();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final background = _hovered
-        ? widget.destructive
-              ? const Color(0xFFC42B1C)
-              : scheme.onSurface.withValues(alpha: 0.08)
-        : Colors.transparent;
-    final foreground = _hovered && widget.destructive
+    final glass = CamelliaGlassTokens.of(context);
+    final isDestructive = widget.destructive;
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
+
+    final Color backgroundColor;
+    if (_pressed) {
+      backgroundColor = isDestructive
+          ? CamelliaColors.coralStrong
+          : glass.hoverOverlay.withValues(alpha: 0.24);
+    } else if (_hovered) {
+      backgroundColor = isDestructive
+          ? const Color(0xFFC42B1C)
+          : glass.hoverOverlay;
+    } else {
+      backgroundColor = Colors.transparent;
+    }
+
+    final Color foregroundColor = (_hovered || _pressed) && isDestructive
         ? Colors.white
         : widget.foreground;
+
     return Semantics(
       button: true,
       label: widget.tooltip,
       child: Tooltip(
         message: widget.tooltip,
         child: MouseRegion(
-          onEnter: (_) => setState(() => _hovered = true),
-          onExit: (_) => setState(() => _hovered = false),
-          child: Material(
-            color: background,
-            child: InkWell(
-              onTap: widget.onPressed,
-              child: SizedBox(
+          onEnter: (_) {
+            if (mounted) setState(() => _hovered = true);
+          },
+          onExit: (_) {
+            if (mounted) {
+              setState(() {
+                _hovered = false;
+                _pressed = false;
+              });
+            }
+          },
+          child: FocusableActionDetector(
+            mouseCursor: SystemMouseCursors.click,
+            onShowHoverHighlight: (v) {
+              if (mounted) {
+                setState(() {
+                  _hovered = v;
+                  if (!v) _pressed = false;
+                });
+              }
+            },
+            onShowFocusHighlight: (v) {
+              if (mounted) setState(() => _focused = v);
+            },
+          actions: <Type, Action<Intent>>{
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                _trigger();
+                return null;
+              },
+            ),
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (_) => setState(() => _pressed = true),
+            onTapUp: (_) => setState(() => _pressed = false),
+            onTapCancel: () => setState(() => _pressed = false),
+            onTap: _trigger,
+            child: AnimatedScale(
+              scale: reduceMotion ? 1.0 : (_pressed ? 0.94 : 1.0),
+              duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+              curve: CamelliaMotion.springSnappy,
+              child: AnimatedContainer(
+                duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+                curve: CamelliaMotion.enter,
                 width: 46,
                 height: kDesktopTitleBarHeight,
-                child: Icon(widget.icon, size: 12, color: foreground),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: backgroundColor,
+                  borderRadius: BorderRadius.circular(
+                    CamelliaRadius.control / 2,
+                  ),
+                  boxShadow: _focused
+                      ? [
+                          BoxShadow(
+                            color: glass.focusGlow.withValues(alpha: 0.30),
+                            blurRadius: 8,
+                            spreadRadius: 0.5,
+                          ),
+                        ]
+                      : const [],
+                ),
+                child: Icon(
+                  widget.icon,
+                  size: widget.iconSize,
+                  color: foregroundColor,
+                ),
               ),
             ),
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

@@ -295,6 +295,9 @@ pub fn will_session_close_close_session(session_id: SessionID) -> bool {
 }
 
 pub fn session_close(session_id: SessionID) {
+    let window_id = session_id.as_u128();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    crate::keyboard::client::change_grab_status(crate::common::GrabState::Wait, "", window_id);
     if let Some(session) = sessions::remove_session_by_session_id(&session_id) {
         // `release_remote_keys` is not required for mobile platforms in common cases.
         // But we still call it to make the code more stable.
@@ -302,6 +305,9 @@ pub fn session_close(session_id: SessionID) {
         crate::keyboard::release_remote_keys("map");
         session.close_event_stream(session_id);
         session.close();
+    }
+    if *super::flutter::CUR_SESSION_ID.read().unwrap() == session_id {
+        *super::flutter::CUR_SESSION_ID.write().unwrap() = SessionID::default();
     }
 }
 
@@ -662,19 +668,22 @@ pub fn session_handle_flutter_raw_key_event(
 #[frb(sync)]
 pub fn session_enter_or_leave(_session_id: SessionID, _enter: bool) {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if let Some(session) = sessions::get_session_by_session_id(&_session_id) {
-        let keyboard_mode = session.get_keyboard_mode();
-        // Use the full per-window UUID (not lc.session_id which is per-connection)
-        // so that two windows viewing the same peer get distinct grab owners.
+    {
         let window_id = _session_id.as_u128();
         if _enter {
-            set_cur_session_id_(_session_id, &keyboard_mode);
-            crate::keyboard::client::change_grab_status(
-                crate::common::GrabState::Run,
-                &keyboard_mode,
-                window_id,
-            );
+            if let Some(session) = sessions::get_session_by_session_id(&_session_id) {
+                let keyboard_mode = session.get_keyboard_mode();
+                set_cur_session_id_(_session_id, &keyboard_mode);
+                crate::keyboard::client::change_grab_status(
+                    crate::common::GrabState::Run,
+                    &keyboard_mode,
+                    window_id,
+                );
+            }
         } else {
+            let keyboard_mode = sessions::get_session_by_session_id(&_session_id)
+                .map(|s| s.get_keyboard_mode())
+                .unwrap_or_default();
             crate::keyboard::client::change_grab_status(
                 crate::common::GrabState::Wait,
                 &keyboard_mode,

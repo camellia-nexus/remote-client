@@ -4,19 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:camellia_remote_app/models/file_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 
 class FileManagerPage extends StatefulWidget {
-  FileManagerPage({
-    Key? key,
+  const FileManagerPage({
+    super.key,
     required this.id,
     this.password,
     this.isSharedPassword,
     this.forceRelay,
-  }) : super(key: key);
+  });
   final String id;
   final String? password;
   final bool? isSharedPassword;
@@ -419,10 +420,19 @@ class _FileManagerPageState extends State<FileManagerPage> {
       switch (activeJob.state) {
         case JobState.inProgress:
           return BottomSheetBody(
-            leading: CircularProgressIndicator(),
+            leading: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.2,
+                value: activeJob.effectiveTotalSize > 0
+                    ? activeJob.percent.clamp(0.0, 1.0)
+                    : null,
+              ),
+            ),
             title: translate("Waiting"),
             text:
-                "${translate("Speed")}:  ${readableFileSize(activeJob.speed)}/s",
+                "${translate("Speed")}: ${readableFileSize(activeJob.speed)}/s",
             onCanceled: () {
               model.jobController.cancelJob(activeJob.id);
               jobTable.clear();
@@ -430,22 +440,45 @@ class _FileManagerPageState extends State<FileManagerPage> {
           );
         case JobState.done:
           return BottomSheetBody(
-            leading: Icon(Icons.check),
+            leading: Icon(
+              CamelliaIcons.check,
+              color: CamelliaGlassTokens.of(context).statusOnline,
+            ),
             title: "${translate("Successful")}!",
             text: activeJob.display(),
             onCanceled: () => jobTable.clear(),
           );
         case JobState.error:
           return BottomSheetBody(
-            leading: Icon(Icons.error),
+            leading: Icon(
+              Icons.error_outline_rounded,
+              color: CamelliaGlassTokens.of(context).statusAlert,
+            ),
             title: "${translate("Error")}!",
-            text: "",
+            text: activeJob.getStatus(),
             onCanceled: () => jobTable.clear(),
           );
-        case JobState.none:
-          break;
         case JobState.paused:
-          // TODO: Handle this case.
+          return BottomSheetBody(
+            leading: Icon(
+              Icons.pause_circle_outline_rounded,
+              color: CamelliaGlassTokens.of(context).statusHighLatency,
+            ),
+            title: translate("Paused"),
+            text: activeJob.jobName,
+            actions: [
+              IconButton(
+                tooltip: translate("Resume"),
+                icon: const Icon(CamelliaIcons.refresh),
+                onPressed: () => model.jobController.resumeJob(activeJob.id),
+              ),
+            ],
+            onCanceled: () {
+              model.jobController.cancelJob(activeJob.id);
+              jobTable.clear();
+            },
+          );
+        case JobState.none:
           break;
       }
       return Offstage();
@@ -480,7 +513,7 @@ class FileManagerView extends StatefulWidget {
   final FileController controller;
   final Rx<SelectMode> selectMode;
 
-  FileManagerView({required this.controller, required this.selectMode});
+  const FileManagerView({super.key, required this.controller, required this.selectMode});
 
   @override
   State<StatefulWidget> createState() => _FileManagerViewState();
@@ -543,101 +576,130 @@ class _FileManagerViewState extends State<FileManagerView> {
                         controller.selectedItems.isLocal,
                       );
                 }();
-                return Card(
-                  child: ListTile(
-                    leading: entries[index].isDrive
-                        ? Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Image(
-                              image: iconHardDrive,
-                              fit: BoxFit.scaleDown,
-                              color: Theme.of(
-                                context,
-                              ).iconTheme.color?.withValues(alpha: 0.7),
+                final entry = entries[index];
+                final iconColor = CamelliaIcons.fileTypeColor(
+                  context,
+                  entry.name,
+                  isDirectory: !entry.isFile,
+                  isDrive: entry.isDrive,
+                );
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  child: GlassSurface(
+                    layer: CamelliaGlassLayer.floating,
+                    showShadow: false,
+                    enableBlur: false,
+                    tintColor: selected
+                        ? Theme.of(
+                            context,
+                          ).colorScheme.primary.withValues(alpha: 0.14)
+                        : null,
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: ListTile(
+                        leading: Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: iconColor.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            CamelliaIcons.fileTypeIcon(
+                              entry.name,
+                              isDirectory: !entry.isFile,
+                              isDrive: entry.isDrive,
                             ),
-                          )
-                        : Icon(
-                            entries[index].isFile
-                                ? Icons.feed_outlined
-                                : Icons.folder,
-                            size: 40,
+                            size: 21,
+                            color: iconColor,
                           ),
-                    title: Text(entries[index].name),
-                    selected: selected,
-                    subtitle: entries[index].isDrive
-                        ? null
-                        : Text(
-                            "${entries[index].lastModified().toString().replaceAll(".000", "")}   $sizeStr",
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: MyTheme.darkGray,
-                            ),
-                          ),
-                    trailing: entries[index].isDrive
-                        ? null
-                        : showCheckBox
-                        ? Checkbox(
-                            value: selected,
-                            onChanged: (v) {
-                              if (v == null) return;
-                              if (v && !selected) {
-                                _selectedItems.add(entries[index]);
-                              } else if (!v && selected) {
-                                _selectedItems.remove(entries[index]);
-                              }
-                              setState(() {});
-                            },
-                          )
-                        : PopupMenuButton<String>(
-                            tooltip: "",
-                            icon: Icon(Icons.more_vert),
-                            itemBuilder: (context) {
-                              return [
-                                PopupMenuItem(
-                                  child: Text(translate("Delete")),
-                                  value: "delete",
+                        ),
+                        title: Text(
+                          entry.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        selected: selected,
+                        subtitle: entry.isDrive
+                            ? null
+                            : Text(
+                                "${entry.lastModified().toString().replaceAll(".000", "")}   $sizeStr",
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: CamelliaTypography.tabular(
+                                  Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                                      ),
                                 ),
-                                PopupMenuItem(
-                                  child: Text(translate("Multi Select")),
-                                  value: "multi_select",
-                                ),
-                                PopupMenuItem(
-                                  child: Text(translate("Properties")),
-                                  value: "properties",
-                                  enabled: false,
-                                ),
-                                if (!entries[index].isDrive &&
-                                    versionCmp(
-                                          gFFI.ffiModel.pi.version,
-                                          "1.3.0",
-                                        ) >=
-                                        0)
-                                  PopupMenuItem(
-                                    child: Text(translate("Rename")),
-                                    value: "rename",
-                                  ),
-                              ];
-                            },
-                            onSelected: (v) {
-                              if (v == "delete") {
-                                final items = SelectedItems(isLocal: isLocal);
-                                items.add(entries[index]);
-                                controller.removeAction(items);
-                              } else if (v == "multi_select") {
-                                _selectedItems.clear();
-                                widget.selectMode.toggle(isLocal);
-                                setState(() {});
-                              } else if (v == "rename") {
-                                controller.renameAction(
-                                  entries[index],
-                                  isLocal,
-                                );
-                              }
-                            },
-                          ),
-                    onTap: () {
-                      if (showCheckBox) {
-                        if (selected) {
+                              ),
+                        trailing: entry.isDrive
+                            ? null
+                            : showCheckBox
+                            ? Checkbox(
+                                value: selected,
+                                onChanged: (v) {
+                                  if (v == null) return;
+                                  if (v && !selected) {
+                                    _selectedItems.add(entry);
+                                  } else if (!v && selected) {
+                                    _selectedItems.remove(entry);
+                                  }
+                                  setState(() {});
+                                },
+                              )
+                            : PopupMenuButton<String>(
+                                tooltip: "",
+                                icon: const Icon(CamelliaIcons.more),
+                                itemBuilder: (context) {
+                                  return [
+                                    PopupMenuItem(
+                                      value: "delete",
+                                      child: Text(translate("Delete")),
+                                    ),
+                                    PopupMenuItem(
+                                      value: "multi_select",
+                                      child: Text(translate("Multi Select")),
+                                    ),
+                                    if (!entry.isDrive &&
+                                        versionCmp(
+                                              gFFI.ffiModel.pi.version,
+                                              "1.3.0",
+                                            ) >=
+                                            0)
+                                      PopupMenuItem(
+                                        value: "rename",
+                                        child: Text(translate("Rename")),
+                                      ),
+                                  ];
+                                },
+                                onSelected: (v) {
+                                  if (v == "delete") {
+                                    final items = SelectedItems(
+                                      isLocal: isLocal,
+                                    );
+                                    items.add(entry);
+                                    controller.removeAction(items);
+                                  } else if (v == "multi_select") {
+                                    _selectedItems.clear();
+                                    widget.selectMode.toggle(isLocal);
+                                    setState(() {});
+                                  } else if (v == "rename") {
+                                    controller.renameAction(entry, isLocal);
+                                  }
+                                },
+                              ),
+                        onTap: () {
+                          if (showCheckBox) {
+                            if (selected) {
                           _selectedItems.remove(entries[index]);
                         } else {
                           _selectedItems.add(entries[index]);
@@ -662,6 +724,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                             }
                             setState(() {});
                           },
+                      ),
+                    ),
                   ),
                 );
               },
@@ -684,9 +748,8 @@ class _FileManagerViewState extends State<FileManagerView> {
     });
   }
 
-  Widget headTools() => Container(
-    child: Row(
-      children: [
+  Widget headTools() => Row(
+    children: [
         Expanded(
           child: Obx(() {
             final home = controller.options.value.home;
@@ -754,11 +817,10 @@ class _FileManagerViewState extends State<FileManagerView> {
           ],
         ),
       ],
-    ),
-  );
+    );
 
   Widget listTail() => Obx(
-    () => Container(
+    () => SizedBox(
       height: 100,
       child: Column(
         children: [
@@ -799,7 +861,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           content: TextButton(
             child: Text(e.value),
             style: ButtonStyle(
-              minimumSize: MaterialStateProperty.all(Size(0, 0)),
+              minimumSize: WidgetStatePropertyAll(Size(0, 0)),
             ),
             onPressed: () => onPressed(list.sublist(0, e.key + 1)),
           ),
@@ -811,7 +873,8 @@ class _FileManagerViewState extends State<FileManagerView> {
 }
 
 class BottomSheetBody extends StatelessWidget {
-  BottomSheetBody({
+  const BottomSheetBody({
+    super.key,
     required this.leading,
     required this.title,
     required this.text,
@@ -826,59 +889,62 @@ class BottomSheetBody extends StatelessWidget {
   final List<IconButton>? actions;
 
   @override
-  BottomSheet build(BuildContext context) {
-    // ignore: no_leading_underscores_for_local_identifiers
-    final _actions = actions ?? [];
-    return BottomSheet(
-      builder: (BuildContext context) {
-        return Container(
-          height: 65,
-          alignment: Alignment.centerLeft,
-          decoration: BoxDecoration(
-            color: MyTheme.accent50,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
-          ),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 15),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    leading,
-                    SizedBox(width: 16),
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title, style: TextStyle(fontSize: 18)),
-                        Text(
-                          text,
-                          style: TextStyle(fontSize: 14),
-                        ), // TODO color
-                      ],
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final actionButtons = List<Widget>.of(actions ?? const []);
+    actionButtons.add(
+      GlassIconButton(
+        icon: CamelliaIcons.close,
+        size: 34,
+        iconSize: 17,
+        tooltip: translate('Cancel'),
+        onPressed: onCanceled,
+      ),
+    );
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.modal,
+        elevated: true,
+        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            leading,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
-                  ],
-                ),
-                Row(
-                  children: () {
-                    _actions.add(
-                      IconButton(
-                        icon: Icon(Icons.cancel_outlined),
-                        onPressed: onCanceled,
+                  ),
+                  if (text.isNotEmpty)
+                    Text(
+                      text,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: CamelliaTypography.tabular(
+                        theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                    );
-                    return _actions;
-                  }(),
-                ),
-              ],
+                    ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
-      onClosing: () {},
-      // backgroundColor: MyTheme.grayBg,
-      enableDrag: false,
+            const SizedBox(width: 8),
+            ...actionButtons,
+          ],
+        ),
+      ),
     );
   }
 }

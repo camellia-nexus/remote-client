@@ -7,8 +7,9 @@ import 'package:camellia_remote_app/common/shared_state.dart';
 import 'package:camellia_remote_app/common/widgets/toolbar.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
-import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -37,13 +38,13 @@ void _disableAndroidSoftKeyboard({bool? isKeyboardVisible}) {
 }
 
 class ViewCameraPage extends StatefulWidget {
-  ViewCameraPage({
-    Key? key,
+  const ViewCameraPage({
+    super.key,
     required this.id,
     this.password,
     this.isSharedPassword,
     this.forceRelay,
-  }) : super(key: key);
+  });
 
   final String id;
   final String? password;
@@ -189,7 +190,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       return;
     }
 
-    final newBottom = MediaQueryData.fromView(ui.window).viewInsets.bottom;
+    final newBottom =
+        MediaQueryData.fromView(ui.PlatformDispatcher.instance.views.first)
+            .viewInsets
+            .bottom;
     _timerDidChangeMetrics?.cancel();
     _timerDidChangeMetrics = Timer(Duration(milliseconds: 100), () async {
       // We need this comparation because poping up the floating action will also trigger `didChangeMetrics()`.
@@ -221,10 +225,11 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         keyboardVisibilityController.isVisible && _showEdit;
     final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
 
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         clientClose(sessionId, gFFI);
-        return false;
       },
       child: Scaffold(
         // workaround for https://github.com/rustdesk/rustdesk/issues/3131
@@ -381,15 +386,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                             ].contains(gFFI.chatModel.voiceCallStatus.value);
                             return IconButton(
                               color: Colors.white,
-                              icon: (isAndroid && isSupportVoiceCall) || isInVoice
-                                  ? SvgPicture.asset(
-                                      'assets/chat.svg',
-                                      colorFilter: ColorFilter.mode(
-                                        Colors.white,
-                                        BlendMode.srcIn,
-                                      ),
-                                    )
-                                  : Icon(Icons.message),
+                              icon: Icon(
+                                (isAndroid && isSupportVoiceCall) || isInVoice
+                                    ? CamelliaIcons.chat
+                                    : Icons.message_rounded,
+                                color: Colors.white,
+                              ),
                               onPressed: () {
                                 if ((isAndroid && isSupportVoiceCall) ||
                                     isInVoice) {
@@ -445,7 +447,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
               width: 0,
               height: 0,
               child: !_showEdit
-                  ? Container()
+                  ? const SizedBox.shrink()
                   : TextFormField(
                       textInputAction: TextInputAction.newline,
                       autocorrect: false,
@@ -522,31 +524,23 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   void showActions(String id) async {
-    final size = MediaQuery.of(context).size;
+    final size = MediaQuery.sizeOf(context);
     final x = 120.0;
     final y = size.height;
     final mobileActionMenus = _getMobileActionMenus();
     final menus = toolbarControls(context, id, gFFI);
 
     final List<PopupMenuEntry<int>> more = [
-      ...mobileActionMenus
-          .asMap()
-          .entries
-          .map(
-            (e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key),
-          )
-          .toList(),
+      ...mobileActionMenus.asMap().entries.map(
+        (e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key),
+      ),
       if (mobileActionMenus.isNotEmpty) PopupMenuDivider(),
-      ...menus
-          .asMap()
-          .entries
-          .map(
-            (e) => PopupMenuItem<int>(
-              child: e.value.getChild(),
-              value: e.key + mobileActionMenus.length,
-            ),
-          )
-          .toList(),
+      ...menus.asMap().entries.map(
+        (e) => PopupMenuItem<int>(
+          child: e.value.getChild(),
+          value: e.key + mobileActionMenus.length,
+        ),
+      ),
     ];
     () async {
       if (!mounted) return;
@@ -567,12 +561,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     }();
   }
 
-  onPressedTextChat(String id) {
+  void onPressedTextChat(String id) {
     gFFI.chatModel.changeCurrentKey(MessageKey(id, ChatModel.clientModeID));
     gFFI.chatModel.toggleChatOverlay();
   }
 
-  showChatOptions(String id) async {
+  Future<void> showChatOptions(String id) async {
     onPressVoiceCall() => bind.sessionRequestVoiceCall(sessionId: sessionId);
     onPressEndVoiceCall() => bind.sessionCloseVoiceCall(sessionId: sessionId);
 
@@ -603,28 +597,27 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     final menus = [
       makeTextMenu(
         'Text chat',
-        Icon(Icons.message, color: MyTheme.accent),
+        Icon(CamelliaIcons.chat, color: Theme.of(context).colorScheme.primary),
         () => onPressedTextChat(widget.id),
       ),
       if (isInVoice)
         makeTextMenu(
           'End voice call',
-          SvgPicture.asset(
-            'assets/call_wait.svg',
-            colorFilter: ColorFilter.mode(
-              Colors.redAccent,
-              BlendMode.srcIn,
-            ),
+          Icon(
+            CamelliaIcons.endCall,
+            color: CamelliaGlassTokens.of(context).statusAlert,
           ),
           onPressEndVoiceCall,
-          labelStyle: TextStyle(color: Colors.redAccent),
+          labelStyle: TextStyle(
+            color: CamelliaGlassTokens.of(context).statusAlert,
+          ),
         )
       else if (isAndroid && supportsVoiceCall)
         makeTextMenu(
           'Voice call',
-          SvgPicture.asset(
-            'assets/call_wait.svg',
-            colorFilter: ColorFilter.mode(MyTheme.accent, BlendMode.srcIn),
+          Icon(
+            CamelliaIcons.voiceCall,
+            color: Theme.of(context).colorScheme.primary,
           ),
           onPressVoiceCall,
         ),
@@ -637,7 +630,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         .toList();
     Future.delayed(Duration.zero, () async {
       if (!mounted) return;
-      final size = MediaQuery.of(context).size;
+      final size = MediaQuery.sizeOf(context);
       final x = 120.0;
       final y = size.height;
       var index = await showMenu(
@@ -655,6 +648,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 }
 
 class ImagePaint extends StatelessWidget {
+  const ImagePaint({super.key});
+
   @override
   Widget build(BuildContext context) {
     final m = Provider.of<ImageModel>(context);
@@ -686,15 +681,10 @@ void showOptions(
   if (pi.displays.length > 1 && pi.currentDisplay != kAllDisplayValue) {
     final cur = pi.currentDisplay;
     final children = <Widget>[];
-    final isDarkTheme = MyTheme.currentThemeMode() == ThemeMode.dark;
-    final numColorSelected = Colors.white;
-    final numColorUnselected = isDarkTheme ? Colors.grey : Colors.black87;
-    // We can't use `Theme.of(context).primaryColor` here, the color is:
-    // - light theme: 0xff2196f3 (Colors.blue)
-    // - dark theme: 0xff212121 (the canvas color?)
-    final numBgSelected = Theme.of(
-      context,
-    ).colorScheme.primary.withValues(alpha: 0.6);
+    final scheme = Theme.of(context).colorScheme;
+    final numColorSelected = scheme.onPrimary;
+    final numColorUnselected = scheme.onSurfaceVariant;
+    final numBgSelected = scheme.primary.withValues(alpha: 0.72);
     for (var i = 0; i < pi.displays.length; ++i) {
       children.add(
         InkWell(

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
@@ -9,7 +8,9 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/credential_controls.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:camellia_remote_app/utils/http_service.dart' as http;
@@ -18,6 +19,147 @@ import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
+
+class ModernDialogHeader extends StatelessWidget {
+  const ModernDialogHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon,
+    this.iconWidget,
+    this.tone = AppTone.brand,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.confirm({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.check_circle_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.success,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.warning({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.warning_amber_rounded,
+    this.iconWidget,
+    this.tone = AppTone.warning,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.error({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.error_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.danger,
+    this.onClose,
+    this.trailing,
+  });
+
+  const ModernDialogHeader.info({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon = Icons.info_outline_rounded,
+    this.iconWidget,
+    this.tone = AppTone.info,
+    this.onClose,
+    this.trailing,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final Widget? iconWidget;
+  final AppTone tone;
+  final VoidCallback? onClose;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
+    final toneColor = AppVisual.tone(context, tone);
+    final toneBg = AppVisual.toneContainer(context, tone);
+
+    final Widget badge = iconWidget ??
+        (icon != null
+            ? Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: toneBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: toneColor.withValues(alpha: 0.22),
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Icon(icon, color: toneColor, size: 22),
+                ),
+              )
+            : const SizedBox.shrink());
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (icon != null || iconWidget != null) ...[
+          badge,
+          const SizedBox(width: 14),
+        ],
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (subtitle != null && subtitle!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle!,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: tokens.muted,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (trailing != null) trailing!,
+        if (onClose != null) ...[
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: onClose,
+            tooltip: translate('Close'),
+            icon: const Icon(Icons.close_rounded, size: 18),
+            splashRadius: 18,
+            style: IconButton.styleFrom(
+              padding: const EdgeInsets.all(4),
+              minimumSize: const Size(28, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -161,12 +303,16 @@ void changeIdDialog() {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Change ID")),
+      title: ModernDialogHeader(
+        title: translate("Change ID"),
+        subtitle: translate("id_change_tip"),
+        icon: Icons.badge_outlined,
+        tone: AppTone.brand,
+        onClose: handleCancel,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(translate("id_change_tip")),
-          const SizedBox(height: 12.0),
           TextField(
             decoration: InputDecoration(
               labelText: translate('Your new ID'),
@@ -197,19 +343,16 @@ void changeIdDialog() {
                     runSpacing: 8,
                     spacing: 4,
                     children: rules.map((e) {
-                      var checked = e.validate(rxId.value);
-                      return Chip(
-                        label: Text(
-                          e.name,
-                          style: TextStyle(
-                            color: checked
-                                ? const Color(0xFF0A9471)
-                                : Color.fromARGB(255, 198, 86, 157),
-                          ),
-                        ),
-                        backgroundColor: checked
-                            ? const Color(0xFFD0F7ED)
-                            : Color.fromARGB(255, 247, 205, 232),
+                      final checked = e.validate(rxId.value);
+                      return GlassBadge(
+                        label: e.name,
+                        icon: checked
+                            ? CamelliaIcons.check
+                            : CamelliaIcons.close,
+                        tone: checked
+                            ? GlassBadgeTone.online
+                            : GlassBadgeTone.danger,
+                        compact: true,
                       );
                     }).toList(),
                   ),
@@ -247,7 +390,12 @@ void changeWhiteList({Function()? callback}) async {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("IP Whitelisting")),
+      title: ModernDialogHeader(
+        title: translate("IP Whitelisting"),
+        icon: Icons.shield_outlined,
+        tone: AppTone.brand,
+        onClose: safeClose,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -368,7 +516,12 @@ Future<String?> changeDirectAccessPort(
   try {
     await gFFI.dialogManager.show((setState, close, context) {
       return CustomAlertDialog(
-        title: Text(translate("Change Local Port")),
+        title: ModernDialogHeader(
+          title: translate("Change Local Port"),
+          icon: Icons.settings_ethernet_rounded,
+          tone: AppTone.brand,
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -434,7 +587,12 @@ Future<String?> changeAutoDisconnectTimeout(String old) async {
   try {
     await gFFI.dialogManager.show((setState, close, context) {
       return CustomAlertDialog(
-        title: Text(translate("Timeout in minutes")),
+        title: ModernDialogHeader(
+          title: translate("Timeout in minutes"),
+          icon: Icons.timer_outlined,
+          tone: AppTone.brand,
+          onClose: close,
+        ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -868,13 +1026,27 @@ class PasswordWidget extends StatefulWidget {
 class _PasswordWidgetState extends State<PasswordWidget> {
   bool _passwordVisible = false;
   final _focusNode = FocusNode();
+  final _shakeController = GlassShakeController();
   Timer? _timer;
   Timer? _timerReRequestFocus;
 
   @override
   void initState() {
     super.initState();
-    if (widget.autoFocus) {
+    if (widget.errorText != null && widget.errorText!.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _shakeController.shake();
+        final text = widget.controller.text;
+        if (text.isNotEmpty) {
+          widget.controller.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: text.length,
+          );
+        }
+        _focusNode.requestFocus();
+      });
+    } else if (widget.autoFocus) {
       _timer = Timer(
         Duration(milliseconds: 50),
         () => _focusNode.requestFocus(),
@@ -896,43 +1068,67 @@ class _PasswordWidgetState extends State<PasswordWidget> {
   }
 
   @override
+  void didUpdateWidget(covariant PasswordWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final newError = widget.errorText?.trim() ?? '';
+    final oldError = oldWidget.errorText?.trim() ?? '';
+    if (newError.isNotEmpty && newError != oldError) {
+      _shakeController.shake();
+      final text = widget.controller.text;
+      if (text.isNotEmpty) {
+        widget.controller.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: text.length,
+        );
+      }
+      _focusNode.requestFocus();
+    }
+  }
+
+  @override
   void dispose() {
     _timer?.cancel();
     _timerReRequestFocus?.cancel();
     _focusNode.unfocus();
     _focusNode.dispose();
+    _shakeController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return DialogTextField(
-      title: translate(widget.title ?? DialogTextField.kPasswordTitle),
-      hintText: translate(widget.hintText ?? 'Enter your password'),
-      controller: widget.controller,
-      prefixIcon: DialogTextField.kPasswordIcon,
-      suffixIcon: IconButton(
-        icon: Icon(
-          // Based on passwordVisible state choose the icon
-          _passwordVisible ? Icons.visibility : Icons.visibility_off,
-          color: Theme.of(context).colorScheme.primary,
+    return GlassShakeBox(
+      controller: _shakeController,
+      child: DialogTextField(
+        title: translate(widget.title ?? DialogTextField.kPasswordTitle),
+        hintText: translate(widget.hintText ?? 'Enter your password'),
+        controller: widget.controller,
+        prefixIcon: DialogTextField.kPasswordIcon,
+        suffixIcon: IconButton(
+          icon: Icon(
+            // Based on passwordVisible state choose the icon
+            _passwordVisible ? Icons.visibility : Icons.visibility_off,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          onPressed: () {
+            // Update the state i.e. toggle the state of passwordVisible variable
+            setState(() {
+              _passwordVisible = !_passwordVisible;
+            });
+          },
         ),
-        onPressed: () {
-          // Update the state i.e. toggle the state of passwordVisible variable
-          setState(() {
-            _passwordVisible = !_passwordVisible;
-          });
-        },
+        obscureText: !_passwordVisible,
+        errorText: widget.errorText,
+        focusNode: _focusNode,
+        maxLength: widget.maxLength,
+        autofocus: widget.autoFocus,
+        onChanged: widget.onChanged,
       ),
-      obscureText: !_passwordVisible,
-      errorText: widget.errorText,
-      focusNode: _focusNode,
-      maxLength: widget.maxLength,
-      autofocus: widget.autoFocus,
-      onChanged: widget.onChanged,
     );
   }
 }
+
+final Map<String, String> _lastSessionPassword = {};
 
 void wrongPasswordDialog(
   SessionID sessionId,
@@ -941,38 +1137,29 @@ void wrongPasswordDialog(
   title,
   text,
 ) {
-  dialogManager.dismissAll();
-  dialogManager.show((setState, close, context) {
-    cancel() {
-      close();
-      closeConnection();
-    }
-
-    submit() {
-      enterPasswordDialog(sessionId, dialogManager);
-    }
-
-    return CustomAlertDialog(
-      title: null,
-      content: msgboxContent(type, title, text),
-      onSubmit: submit,
-      onCancel: cancel,
-      actions: [
-        dialogButton('Cancel', onPressed: cancel, isOutline: true),
-        dialogButton('Retry', onPressed: submit),
-      ],
-    );
-  });
+  final errText = (text?.toString().trim().isNotEmpty ?? false)
+      ? translate(text.toString())
+      : translate('Wrong Password');
+  final previousPassword = _lastSessionPassword[sessionId.toString()] ?? '';
+  enterPasswordDialog(
+    sessionId,
+    dialogManager,
+    initialError: errText,
+    initialPassword: previousPassword,
+  );
 }
 
 void enterPasswordDialog(
   SessionID sessionId,
-  OverlayDialogManager dialogManager,
-) async {
+  OverlayDialogManager dialogManager, {
+  String? initialError,
+  String? initialPassword,
+}) async {
   await _connectDialog(
     sessionId,
     dialogManager,
-    passwordController: TextEditingController(),
+    passwordController: TextEditingController(text: initialPassword ?? ''),
+    initialPasswordError: initialError,
   );
 }
 
@@ -1017,9 +1204,10 @@ _connectDialog(
   TextEditingController? passwordController,
   String? osAccountDescTip,
   bool canRememberAccount = true,
+  String? initialPasswordError,
 }) async {
   final errUsername = ''.obs;
-  final errPassword = ''.obs;
+  final errPassword = (initialPasswordError ?? '').obs;
   var submitting = false;
   var rememberPassword = false;
   if (passwordController != null) {
@@ -1066,6 +1254,9 @@ _connectDialog(
           errPassword.value = translate('Password Required');
           setState(() {});
           return;
+        }
+        if (password.isNotEmpty) {
+          _lastSessionPassword[sessionId.toString()] = password;
         }
         setState(() => submitting = true);
         if (rememberAccount) {
@@ -1195,50 +1386,12 @@ _connectDialog(
         );
       }
 
-      final scheme = Theme.of(context).colorScheme;
-      final titleWidget = Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [scheme.primary, scheme.tertiary],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: const Icon(
-              Icons.lock_rounded,
-              color: Colors.white,
-              size: 21,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  translate('Password Required'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  translate('Authenticate to continue the secure session'),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+      final titleWidget = ModernDialogHeader(
+        title: translate('Password Required'),
+        subtitle: translate('Authenticate to continue the secure session'),
+        icon: Icons.lock_rounded,
+        tone: AppTone.brand,
+        onClose: cancel,
       );
       final contentWidget = ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 400),
@@ -1705,19 +1858,10 @@ void showRestartRemoteDevice(
 ) async {
   final res = await dialogManager.show<bool>(
     (setState, close, context) => CustomAlertDialog(
-      title: Row(
-        children: [
-          Icon(
-            Icons.warning_rounded,
-            color: AppVisual.tone(context, AppTone.danger),
-            size: 28,
-          ),
-          Flexible(
-            child: Text(
-              translate("Restart remote device"),
-            ).paddingOnly(left: 10),
-          ),
-        ],
+      title: ModernDialogHeader.warning(
+        title: translate("Restart remote device"),
+        tone: AppTone.danger,
+        onClose: () => close(false),
       ),
       content: Text(
         "${translate('Are you sure you want to restart')} \n${pi.username}@${pi.hostname}($id) ?",
@@ -2447,32 +2591,23 @@ void deleteConfirmDialog(
     }
 
     return CustomAlertDialog(
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.delete_rounded,
-            color: AppVisual.tone(context, AppTone.danger),
-          ),
-          Expanded(
-            child: Text(
-              title,
-              overflow: TextOverflow.ellipsis,
-            ).paddingOnly(left: 10),
-          ),
-        ],
+      title: ModernDialogHeader.error(
+        title: title,
+        subtitle: translate('This action cannot be undone.'),
+        onClose: close,
       ),
       actions: [
         dialogButton(
           "Cancel",
-          icon: Icon(Icons.close_rounded),
+          icon: const Icon(CamelliaIcons.close),
           onPressed: close,
           isOutline: true,
         ),
         dialogButton(
           "OK",
-          icon: Icon(Icons.done_rounded),
+          icon: const Icon(CamelliaIcons.trash),
           onPressed: isInProgress ? null : submit,
+          isDestructive: true,
         ),
       ],
       onSubmit: submit,
@@ -2515,7 +2650,12 @@ void editAbTagDialog(
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Edit Tag")),
+      title: ModernDialogHeader(
+        title: translate("Edit Tag"),
+        icon: Icons.label_outline_rounded,
+        tone: AppTone.brand,
+        onClose: close,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2594,7 +2734,12 @@ void editAbPeerNoteDialog(String id) {
     }
 
     return CustomAlertDialog(
-      title: Text(translate("Edit note")),
+      title: ModernDialogHeader(
+        title: translate("Edit note"),
+        icon: Icons.edit_note_rounded,
+        tone: AppTone.brand,
+        onClose: close,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2665,46 +2810,41 @@ void renameDialog({
     }
 
     return CustomAlertDialog(
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.edit_rounded, color: MyTheme.accent),
-          Text(translate('Rename')).paddingOnly(left: 10),
-        ],
+      title: ModernDialogHeader(
+        icon: CamelliaIcons.edit,
+        title: translate('Rename'),
+        onClose: cancel,
       ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            child: Form(
-              key: formKey,
-              child: TextFormField(
-                controller: controller,
-                autofocus: true,
-                decoration: InputDecoration(labelText: translate('Name')),
-                validator: validator,
-              ).workaroundFreezeLinuxMint(),
-            ),
-          ),
-          // NOT use Offstage to wrap LinearProgressIndicator
-          Obx(
-            () => isInProgress.value
-                ? const LinearProgressIndicator()
-                : Offstage(),
+          Form(
+            key: formKey,
+            child: TextFormField(
+              controller: controller,
+              autofocus: true,
+              decoration: InputDecoration(labelText: translate('Name')),
+              validator: validator,
+            ).workaroundFreezeLinuxMint(),
           ),
         ],
       ),
       actions: [
         dialogButton(
           "Cancel",
-          icon: Icon(Icons.close_rounded),
+          icon: const Icon(CamelliaIcons.close),
           onPressed: cancel,
           isOutline: true,
         ),
-        dialogButton(
-          "OK",
-          icon: Icon(Icons.done_rounded),
-          onPressed: isInProgress.value ? null : submit,
+        Obx(
+          () => GlassButton(
+            variant: GlassButtonVariant.primary,
+            minHeight: 38,
+            loading: isInProgress.value,
+            icon: const Icon(CamelliaIcons.check, size: 16),
+            onPressed: isInProgress.value ? null : submit,
+            child: Text(translate("OK")),
+          ),
         ),
       ],
       onSubmit: submit,
@@ -2756,7 +2896,12 @@ void changeBot({Function()? callback}) async {
     ).workaroundFreezeLinuxMint();
 
     return CustomAlertDialog(
-      title: Text(translate("Telegram bot")),
+      title: ModernDialogHeader(
+        title: translate("Telegram bot"),
+        icon: Icons.send_rounded,
+        tone: AppTone.brand,
+        onClose: safeClose,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2804,7 +2949,9 @@ void change2fa({Function()? callback}) async {
         callback?.call();
         close();
       } else {
-        errorText = translate('wrong-2fa-code');
+        setState(() {
+          errorText = translate('wrong-2fa-code');
+        });
       }
     }
 
@@ -2815,14 +2962,17 @@ void change2fa({Function()? callback}) async {
       title: translate('Verification code'),
       readyCallback: () {
         onVerify();
-        setState(() {});
       },
     );
 
     getOnSubmit() => codeField.isReady ? onVerify : null;
 
     return CustomAlertDialog(
-      title: Text(translate("enable-2fa-title")),
+      title: ModernDialogHeader(
+        icon: Icons.verified_user_outlined,
+        title: translate("enable-2fa-title"),
+        onClose: close,
+      ),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2859,8 +3009,9 @@ void change2fa({Function()? callback}) async {
 
 void enter2FaDialog(
   SessionID sessionId,
-  OverlayDialogManager dialogManager,
-) async {
+  OverlayDialogManager dialogManager, {
+  String? errorText,
+}) async {
   final controller = TextEditingController();
   final RxBool submitReady = false.obs;
   final RxBool trustThisDevice = false.obs;
@@ -2868,12 +3019,14 @@ void enter2FaDialog(
   dialogManager.dismissAll();
   dialogManager.show((setState, close, context) {
     cancel() {
+      controller.dispose();
       close();
       closeConnection();
     }
 
     submit() {
       gFFI.send2FA(sessionId, controller.text.trim(), trustThisDevice.value);
+      controller.dispose();
       close();
       dialogManager.showLoading(
         translate('Logging in...'),
@@ -2886,6 +3039,7 @@ void enter2FaDialog(
     codeField = Dialog2FaField(
       controller: controller,
       title: translate('Verification code'),
+      errorText: errorText,
       onChanged: () => submitReady.value = codeField.isReady,
     );
 
@@ -2994,7 +3148,7 @@ void addPeersToAbDialog(List<Peer> peers) async {
       showToast(translate('Successful'));
       return true;
     } else {
-      BotToast.showText(text: errMsg, contentColor: Colors.red);
+      showToast(errMsg);
       return false;
     }
   }
@@ -3023,10 +3177,7 @@ void addPeersToAbDialog(List<Peer> peers) async {
   gFFI.dialogManager.show((setState, close, context) {
     submit() async {
       if (controller.text != gFFI.abModel.translatedName(currentName.value)) {
-        BotToast.showText(
-          text: 'illegal address book name: ${controller.text}',
-          contentColor: Colors.red,
-        );
+        showToast('illegal address book name: ${controller.text}');
         return;
       }
       isInProgress.value = true;
@@ -3041,12 +3192,10 @@ void addPeersToAbDialog(List<Peer> peers) async {
     }
 
     return CustomAlertDialog(
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(IconFont.addressBook, color: MyTheme.accent),
-          Text(translate('Add to address book')).paddingOnly(left: 10),
-        ],
+      title: ModernDialogHeader(
+        icon: CamelliaIcons.addressBook,
+        title: translate('Add to address book'),
+        onClose: cancel,
       ),
       content: Obx(
         () => Column(
@@ -3133,16 +3282,12 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
     }
 
     return CustomAlertDialog(
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.key, color: MyTheme.accent),
-          Text(
-            translate(
-              peer.password.isEmpty ? 'Set shared password' : 'Change Password',
-            ),
-          ).paddingOnly(left: 10),
-        ],
+      title: ModernDialogHeader(
+        icon: Icons.key_rounded,
+        title: translate(
+          peer.password.isEmpty ? 'Set shared password' : 'Change Password',
+        ),
+        onClose: cancel,
       ),
       content: Obx(
         () => Column(
@@ -3154,8 +3299,10 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
               decoration: InputDecoration(
                 suffixIcon: IconButton(
                   icon: Icon(
-                    passwordVisible ? Icons.visibility : Icons.visibility_off,
-                    color: MyTheme.lightTheme.primaryColor,
+                    passwordVisible
+                        ? CamelliaIcons.eye
+                        : CamelliaIcons.eyeOff,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                   onPressed: () {
                     setState(() {
@@ -3168,15 +3315,20 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
             if (!gFFI.abModel.current.isPersonal())
               Row(
                 children: [
-                  Icon(Icons.info, color: Colors.amber).marginOnly(right: 4),
-                  Text(
-                    translate('share_warning_tip'),
-                    style: TextStyle(fontSize: 12),
+                  Icon(
+                    Icons.info_outline_rounded,
+                    size: 16,
+                    color: CamelliaGlassTokens.of(context).statusHighLatency,
+                  ).marginOnly(right: 6),
+                  Expanded(
+                    child: Text(
+                      translate('share_warning_tip'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 ],
               ).marginSymmetric(vertical: 10),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            isInProgress.value ? const LinearProgressIndicator() : Offstage(),
+            if (isInProgress.value) const LinearProgressIndicator(),
           ],
         ),
       ),
@@ -3586,13 +3738,16 @@ class _TrustedDevicesTableViewState extends State<_TrustedDevicesTableView> {
 
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      child: Obx(() {
-        final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
-        return DataTable(
-          columns: [
-            DataColumn(
-              label: Checkbox(
+    final theme = Theme.of(context);
+    return Obx(() {
+      final selectedHexSet = widget.selectedDevices.map(hwidToHex).toSet();
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Checkbox(
                 value: selectAll.value,
                 onChanged: (value) {
                   if (value == true) {
@@ -3605,44 +3760,88 @@ class _TrustedDevicesTableViewState extends State<_TrustedDevicesTableView> {
                   }
                 },
               ),
-            ),
-            DataColumn(label: Text(translate('Platform'))),
-            DataColumn(label: Text(translate('ID'))),
-            DataColumn(label: Text(translate('Username'))),
-            DataColumn(label: Text(translate('Days remaining'))),
-          ],
-          rows: widget.devices.map((device) {
-            final isChecked = selectedHexSet.contains(device.hwidHex);
-            return DataRow(
-              cells: [
-                DataCell(
-                  Checkbox(
-                    value: isChecked,
-                    onChanged: (value) {
-                      if (value == null) return;
-                      if (value) {
-                        if (!widget.selectedDevices.any(
-                          (h) => hwidEquals(h, device.hwid),
-                        )) {
-                          widget.selectedDevices.add(device.hwid);
-                        }
-                      } else {
-                        widget.selectedDevices.removeWhere(
-                          (h) => hwidEquals(h, device.hwid),
-                        );
-                      }
-                    },
-                  ),
+              Text(
+                translate('Select all'),
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
-                DataCell(Text(device.platform)),
-                DataCell(Text(device.id)),
-                DataCell(Text(device.name)),
-                DataCell(Text(device.daysRemaining())),
-              ],
-            );
-          }).toList(),
-        );
-      }),
-    );
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final device in widget.devices)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: GlassSurface(
+                layer: CamelliaGlassLayer.floating,
+                showShadow: false,
+                enableBlur: false,
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Checkbox(
+                      value: selectedHexSet.contains(device.hwidHex),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        if (value) {
+                          if (!widget.selectedDevices.any(
+                            (h) => hwidEquals(h, device.hwid),
+                          )) {
+                            widget.selectedDevices.add(device.hwid);
+                          }
+                        } else {
+                          widget.selectedDevices.removeWhere(
+                            (h) => hwidEquals(h, device.hwid),
+                          );
+                        }
+                      },
+                    ),
+                    CamelliaIcons.platformBadge(device.platform, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            device.name.isNotEmpty
+                                ? device.name
+                                : device.platform,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            device.id,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: CamelliaTypography.tabular(
+                              theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GlassBadge(
+                      label: device.daysRemaining(),
+                      tone: GlassBadgeTone.neutral,
+                      tabularNums: true,
+                      compact: true,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      );
+    });
   }
 }
