@@ -1151,23 +1151,22 @@ class CamelliaBackdrop extends StatelessWidget {
       ),
       child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
     );
-    if (glass.isMidnight) {
-      return RepaintBoundary(
-        child: ColoredBox(
-          color: CamelliaColors.midnightCanvas,
+    return RepaintBoundary(
+      child: ColoredBox(
+        color: glass.isMidnight
+            ? CamelliaColors.midnightCanvas
+            : theme.scaffoldBackgroundColor,
+        child: CustomPaint(
+          painter: glass.isMidnight
+              ? null
+              : _MinimalistPatternPainter(
+                  baseColor: theme.scaffoldBackgroundColor,
+                  dark: dark,
+                  style: glass.themeStyle,
+                  isMidnight: false,
+                ),
           child: content,
         ),
-      );
-    }
-    return RepaintBoundary(
-      child: CustomPaint(
-        painter: _MinimalistPatternPainter(
-          baseColor: theme.scaffoldBackgroundColor,
-          dark: dark,
-          style: glass.themeStyle,
-          isMidnight: glass.isMidnight,
-        ),
-        child: content,
       ),
     );
   }

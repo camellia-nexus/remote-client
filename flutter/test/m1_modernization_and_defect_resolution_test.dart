@@ -56,6 +56,73 @@ void main() {
       );
       expect(colored.color, CamelliaColors.midnightCanvas);
     });
+
+    testWidgets('CamelliaBackdrop preserves child state across light, dark, and midnight theme transitions', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: MyTheme.lightTheme,
+          home: const Scaffold(
+            body: CamelliaBackdrop(
+              child: _StatefulBackdropProbe(),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Counter: 0'), findsOneWidget);
+
+      // Increment counter in Light Theme
+      await tester.tap(find.text('Increment'));
+      await tester.pump();
+      expect(find.text('Counter: 1'), findsOneWidget);
+
+      // Switch to Dark Theme
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: MyTheme.darkTheme,
+          home: const Scaffold(
+            body: CamelliaBackdrop(
+              child: _StatefulBackdropProbe(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Counter: 1'), findsOneWidget);
+
+      // Switch to OLED Midnight Theme — invariant hierarchy preserves subtree state
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: MyTheme.midnightTheme,
+          home: const Scaffold(
+            body: CamelliaBackdrop(
+              child: _StatefulBackdropProbe(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Counter: 1'), findsOneWidget);
+
+      // Increment counter in Midnight Theme
+      await tester.tap(find.text('Increment'));
+      await tester.pump();
+      expect(find.text('Counter: 2'), findsOneWidget);
+
+      // Switch back to Light Theme — state remains preserved
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: MyTheme.lightTheme,
+          home: const Scaffold(
+            body: CamelliaBackdrop(
+              child: _StatefulBackdropProbe(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Counter: 2'), findsOneWidget);
+    });
   });
 
   group('Milestone 1: R2 Connection State Reset & Dead Window Pruning', () {
@@ -162,3 +229,32 @@ void main() {
     });
   });
 }
+
+class _StatefulBackdropProbe extends StatefulWidget {
+  const _StatefulBackdropProbe();
+
+  @override
+  State<_StatefulBackdropProbe> createState() => _StatefulBackdropProbeState();
+}
+
+class _StatefulBackdropProbeState extends State<_StatefulBackdropProbe> {
+  int count = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text('Counter: $count'),
+        ElevatedButton(
+          onPressed: () {
+            setState(() {
+              count++;
+            });
+          },
+          child: const Text('Increment'),
+        ),
+      ],
+    );
+  }
+}
+
