@@ -31,7 +31,6 @@ jobs:
   metadata:
     name: Validate component version
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
     outputs:
       version: ${{ steps.release.outputs.version }}
       app_version: ${{ steps.release.outputs.app_version }}
@@ -63,7 +62,6 @@ jobs:
   automation:
     name: Workflow and build automation
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +98,6 @@ jobs:
     name: Generate Flutter Rust bridge
     needs: [metadata]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,6 +110,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: bridge-generator-ubuntu-24.04
 
       - name: Install Flutter
         uses: ./.github/actions/setup-flutter
@@ -170,7 +172,6 @@ jobs:
   windows_rust:
     name: Windows Rust smoke check (${{ matrix.target }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -219,7 +220,6 @@ jobs:
     name: Windows native runner verification
     needs: [metadata, generate_bridge]
     runs-on: windows-2022
-    timeout-minutes: 90
     env:
       VCPKG_BINARY_SOURCES: clear
     steps:
@@ -371,7 +371,6 @@ jobs:
     name: Apple native smoke checks
     needs: [metadata, generate_bridge]
     runs-on: macos-15
-    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -469,7 +468,6 @@ jobs:
     name: Rust, Flutter, and Web quality
     needs: [metadata, generate_bridge]
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -556,7 +554,6 @@ jobs:
     name: VP9 performance contract smoke
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -690,7 +687,6 @@ jobs:
       - quality
       - performance-smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
     steps:
       - name: Enforce required results
         shell: bash

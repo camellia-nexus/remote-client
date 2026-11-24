@@ -33,7 +33,6 @@ jobs:
   metadata:
     name: Validate component version
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
     outputs:
       version: ${{ steps.release.outputs.version }}
       app_version: ${{ steps.release.outputs.app_version }}
@@ -61,7 +60,6 @@ jobs:
     name: Generate Flutter Rust bridge
     needs: [metadata]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,6 +72,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: bridge-codegen-ubuntu-24.04
 
       - name: Install Flutter
         uses: ./.github/actions/setup-flutter
@@ -124,7 +127,6 @@ jobs:
     name: Build Linux client packages
     needs: [metadata, generate_bridge]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -219,7 +221,6 @@ jobs:
     name: Build Windows client packages
     needs: [metadata, generate_bridge]
     runs-on: windows-2022
-    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -371,7 +372,6 @@ jobs:
     name: Build macOS universal packages
     needs: [metadata, generate_bridge]
     runs-on: macos-15
-    timeout-minutes: 90
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
@@ -487,7 +487,6 @@ jobs:
     name: Build Web client packages
     needs: [metadata]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -535,7 +534,6 @@ jobs:
     name: Build Android client packages
     needs: [metadata, generate_bridge]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
     steps:
       - name: Reclaim disk space
         shell: bash
@@ -686,7 +684,6 @@ jobs:
     name: Publish GitHub Release
     needs: [metadata, build_linux, build_windows, build_macos, build_android, build_web]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     permissions:
       contents: write
     steps:
