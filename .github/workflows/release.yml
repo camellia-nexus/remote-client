@@ -650,10 +650,23 @@ jobs:
           flutter_sdk_dir="$(dirname "$(dirname "$(which flutter)")")"
           gradle_settings="$flutter_sdk_dir/packages/flutter_tools/gradle/settings.gradle.kts"
           if [[ -f "$gradle_settings" ]] && ! grep -q "pluginManagement" "$gradle_settings"; then
-            printf 'pluginManagement {\n    repositories {\n        mavenCentral()\n        google()\n        gradlePluginPortal()\n    }\n}\n%s' "$(cat "$gradle_settings")" > "$gradle_settings"
+            printf 'pluginManagement {\n    repositories {\n        gradlePluginPortal()\n        mavenCentral()\n        google()\n    }\n}\n%s' "$(cat "$gradle_settings")" > "$gradle_settings"
           fi
-          (cd flutter && flutter build apk --release --target-platform android-arm64)
-          (cd flutter && flutter build appbundle --release --target-platform android-arm64)
+          build_with_retry() {
+            local max_attempts=3
+            local attempt=1
+            until "$@"; do
+              if (( attempt == max_attempts )); then
+                echo "Build failed after ${max_attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "Build failed (attempt ${attempt}/${max_attempts}). Retrying in 10s..." >&2
+              sleep 10
+              ((attempt++))
+            done
+          }
+          (cd flutter && build_with_retry flutter build apk --release --target-platform android-arm64)
+          (cd flutter && build_with_retry flutter build appbundle --release --target-platform android-arm64)
           mkdir -p artifacts
           mapfile -t apk_candidates < <(find flutter/build/app/outputs/flutter-apk -maxdepth 1 -type f -name '*release*.apk')
           mapfile -t aab_candidates < <(find flutter/build/app/outputs/bundle/release -maxdepth 1 -type f -name '*.aab')
