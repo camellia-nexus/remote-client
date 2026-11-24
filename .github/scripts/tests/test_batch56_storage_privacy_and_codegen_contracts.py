@@ -6,7 +6,6 @@
 
 import json
 import os
-import re
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path

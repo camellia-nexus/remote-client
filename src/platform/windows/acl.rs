@@ -190,14 +190,17 @@ pub(crate) fn has_allow_ace_with_mask(
     }
     for index in 0..info.AceCount {
         let mut ace_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-        if unsafe { GetAce(dacl, index, &mut ace_ptr) }.is_err() || ace_ptr.is_null() {
+        if unsafe { GetAce(dacl, index, &mut ace_ptr) }.is_err() {
             continue;
         }
-        let header = unsafe { &*(ace_ptr as *const ACE_HEADER) };
+        let Some(ace_non_null) = std::ptr::NonNull::new(ace_ptr) else {
+            continue;
+        };
+        let header = unsafe { ace_non_null.cast::<ACE_HEADER>().as_ref() };
         if header.AceType != ACCESS_ALLOWED_ACE_TYPE_U8 {
             continue;
         }
-        let allowed = unsafe { &*(ace_ptr as *const ACCESS_ALLOWED_ACE) };
+        let allowed = unsafe { ace_non_null.cast::<ACCESS_ALLOWED_ACE>().as_ref() };
         let ace_sid = PSID((&allowed.SidStart as *const u32) as *mut std::ffi::c_void);
         if unsafe { WinEqualSid(PSID(sid_ptr), ace_sid) }.is_ok() && (allowed.Mask & mask) == mask {
             return true;

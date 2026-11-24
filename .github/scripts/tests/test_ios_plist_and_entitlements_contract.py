@@ -11,7 +11,6 @@ import os
 import plistlib
 import re
 import unittest
-import xml.etree.ElementTree as ET
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 INFO_PLIST_PATH = os.path.join(REPO_ROOT, "flutter/ios/Runner/Info.plist")

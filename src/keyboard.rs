@@ -380,12 +380,7 @@ pub mod client {
                 // current grab owner. This prevents a late PointerExit from
                 // session A from releasing session B's freshly acquired grab.
                 if session_id != 0 && gs.owner != Some(session_id) {
-                    log::debug!(
-                        "[grab] Wait(0x{:x}): ignored, owner={}",
-                        session_id,
-                        gs.owner
-                            .map_or("none".to_string(), |id| format!("0x{:x}", id)),
-                    );
+                    log::debug!("[grab] Wait: ignored, owner mismatch");
                     return;
                 }
 
@@ -402,8 +397,9 @@ pub mod client {
                         if elapsed < GRAB_DEBOUNCE_MS {
                             if !gs.deferred_pending {
                                 log::debug!(
-                                    "[grab] Wait(0x{:x}): debounced ({}ms < {}ms), scheduling deferred release",
-                                    session_id, elapsed, GRAB_DEBOUNCE_MS,
+                                    "[grab] Wait: debounced ({}ms < {}ms), scheduling deferred release",
+                                    elapsed,
+                                    GRAB_DEBOUNCE_MS,
                                 );
                                 gs.deferred_pending = true;
                                 let remaining = (GRAB_DEBOUNCE_MS - elapsed) as u64 + 50;
@@ -418,10 +414,7 @@ pub mod client {
                                         {
                                             let to_release = take_remote_keys();
                                             gs.deferred_pending = false;
-                                            log::debug!(
-                                                "[grab] Wait(0x{:x}): deferred release",
-                                                session_id
-                                            );
+                                            log::debug!("[grab] Wait: deferred release");
                                             KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
                                             gs.owner = None;
                                             gs.last_grab = None;
@@ -432,8 +425,7 @@ pub mod client {
                                             Some(to_release)
                                         } else {
                                             log::debug!(
-                                                "[grab] Wait(0x{:x}): deferred release cancelled (grab refreshed)",
-                                                session_id,
+                                                "[grab] Wait: deferred release cancelled (grab refreshed)"
                                             );
                                             None
                                         }
@@ -445,8 +437,7 @@ pub mod client {
                                 });
                             } else {
                                 log::debug!(
-                                    "[grab] Wait(0x{:x}): debounced, deferred release already pending",
-                                    session_id,
+                                    "[grab] Wait: debounced, deferred release already pending"
                                 );
                             }
                             return;

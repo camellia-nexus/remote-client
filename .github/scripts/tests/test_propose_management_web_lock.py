@@ -155,7 +155,7 @@ class ProposeManagementWebLockTests(unittest.TestCase):
                 }
             if endpoint == "repos/example/service/pulls/7/files?per_page=100":
                 return [{"filename": "web-client.lock", "status": "modified"}]
-            self.fail(f"unexpected GitHub API call: {method} {endpoint}")
+            raise AssertionError(f"unexpected GitHub API call: {method} {endpoint}")
 
         args = SimpleNamespace(
             repository_map=json.dumps(

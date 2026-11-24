@@ -132,8 +132,10 @@ def aggregate(args: argparse.Namespace) -> None:
     lines = [
         "# Native signing status",
         "",
-        "Checksums and GitHub/Sigstore attestations apply in every mode. "
-        "Native publisher trust is reported separately below.",
+        (
+            "Checksums and GitHub/Sigstore attestations apply in every mode. "
+            "Native publisher trust is reported separately below."
+        ),
         "",
         "| Platform | Architecture | Native mode | Distribution trust | Delivery |",
         "| --- | --- | --- | --- | --- |",
@@ -148,8 +150,10 @@ def aggregate(args: argparse.Namespace) -> None:
         lines.extend(
             [
                 "",
-                "> Artifacts marked `re-signing-input` are not installable public releases. "
-                "Apply the target platform's signing/provisioning process before distribution.",
+                (
+                    "> Artifacts marked `re-signing-input` are not installable public releases. "
+                    "Apply the target platform's signing/provisioning process before distribution."
+                ),
             ]
         )
     Path(args.report).write_text("\n".join(lines) + "\n", encoding="utf-8")

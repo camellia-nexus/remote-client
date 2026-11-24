@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest import mock
+import unittest.mock
 
 
 SCRIPT_PATH = Path(__file__).parents[1] / "audit_cargo_dependencies.py"
@@ -132,12 +132,12 @@ class CargoAuditPolicyTests(unittest.TestCase):
                 source = Path(directory) / "policy.json"
                 source.write_text(json.dumps(policy(expires_on=expiry)), encoding="utf-8")
                 with (
-                    mock.patch(
+                    unittest.mock.patch(
                         "sys.argv",
                         [str(SCRIPT_PATH), "--policy", str(source), "--policy-only"],
                     ),
-                    mock.patch.object(AUDITOR, "date", wraps=date) as clock,
-                    mock.patch.object(AUDITOR.subprocess, "run") as cargo,
+                    unittest.mock.patch.object(AUDITOR, "date", wraps=date) as clock,
+                    unittest.mock.patch.object(AUDITOR.subprocess, "run") as cargo,
                     contextlib.redirect_stdout(io.StringIO()),
                     contextlib.redirect_stderr(io.StringIO()),
                 ):
@@ -149,11 +149,11 @@ class CargoAuditPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "missing.json"
             with (
-                mock.patch(
+                unittest.mock.patch(
                     "sys.argv",
                     [str(SCRIPT_PATH), "--policy", str(source), "--policy-only"],
                 ),
-                mock.patch.object(AUDITOR.subprocess, "run") as cargo,
+                unittest.mock.patch.object(AUDITOR.subprocess, "run") as cargo,
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 self.assertEqual(AUDITOR.main(), 2)

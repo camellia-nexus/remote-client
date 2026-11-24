@@ -139,7 +139,7 @@ fn map_xsession_start_error_to_code(kind: XSessionStartErrorKind) -> ErrorCode {
 
 /// Start or inspect the headless desktop and return only a stable error code.
 /// `None` means the desktop is ready (or no headless session is required).
-pub fn try_start_desktop(_username: &str, _passsword: &str) -> Option<ErrorCode> {
+pub fn try_start_desktop(_username: &str, _password: Option<&str>) -> Option<ErrorCode> {
     debug_assert!(crate::is_server());
     if _username.is_empty() {
         let username = get_username();
@@ -163,7 +163,7 @@ pub fn try_start_desktop(_username: &str, _passsword: &str) -> Option<ErrorCode>
             return Some(code);
         }
 
-        match try_start_x_session(_username, _passsword) {
+        match try_start_x_session(_username, _password.unwrap_or_default()) {
             Ok((username, x11_ready)) => {
                 if x11_ready {
                     if _username != username {

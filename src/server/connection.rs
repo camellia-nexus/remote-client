@@ -8321,10 +8321,11 @@ impl LinuxHeadlessHandle {
     pub fn try_start_desktop(&mut self, os_login: Option<&OSLogin>) -> Option<ErrorCode> {
         if self.is_headless_allowed {
             match os_login {
-                Some(os_login) => {
-                    linux_desktop_manager::try_start_desktop(&os_login.username, &os_login.password)
-                }
-                None => linux_desktop_manager::try_start_desktop("", ""),
+                Some(os_login) => linux_desktop_manager::try_start_desktop(
+                    &os_login.username,
+                    Some(&os_login.password),
+                ),
+                None => linux_desktop_manager::try_start_desktop("", None),
             }
         } else {
             None

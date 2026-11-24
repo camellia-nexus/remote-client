@@ -427,13 +427,10 @@ class TestBatch59MsiInstallContracts(unittest.TestCase):
                     port_created = True
 
                 # Simulate driver failure
-                driver_success = False
-                if not driver_success:
-                    if port_created:
-                        self.ports.discard("Camellia Printer")
-                    self.msi_return_code = 1603
-                    return False
-                return True
+                if port_created:
+                    self.ports.discard("Camellia Printer")
+                self.msi_return_code = 1603
+                return False
 
         driver_fail = MockDriverFailInstaller(inf_exists=True)
         res = driver_fail.install_printer_custom_action("C:\\Program Files\\Camellia Remote")

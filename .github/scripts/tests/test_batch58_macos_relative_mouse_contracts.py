@@ -22,7 +22,6 @@ Verifies:
 3. Behavioral state machine simulation verifying concurrent and edge-case transitions.
 """
 
-import re
 import unittest
 from pathlib import Path
 

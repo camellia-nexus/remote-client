@@ -4,8 +4,6 @@ Windows Native Runner Robustness & Win32 IPC Lifecycle
 (PLATFORM-008, PLATFORM-009, CRASH-002, IPC-001).
 """
 
-import os
-import re
 import unittest
 from pathlib import Path
 

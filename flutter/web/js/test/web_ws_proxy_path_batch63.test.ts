@@ -13,7 +13,21 @@ function createTestRuntime(envOverrides: Record<string, string> = {}): WebRuntim
   const storageMap = new Map<string, string>();
   (globalThis as any).self = globalThis;
   (globalThis as any).window = {
-    __CAMELLIA_REMOTE_WEB__: {},
+    __CAMELLIA_REMOTE_WEB__: {
+      appName: 'Camellia',
+      version: '1.0.0',
+      buildDate: '2026-11-11',
+      apiServer: 'https://api.example.com',
+      isPublicServer: false,
+      rendezvousServers: [],
+      relayServers: [],
+      env: {
+        DEFAULT_ID_PORT: '21116',
+        ...envOverrides
+      },
+      profile: { id: '999888777', name: 'Test User' },
+      langs: []
+    },
     localStorage: {
       getItem(k: string) {
         return storageMap.has(k) ? storageMap.get(k)! : null;
@@ -51,21 +65,7 @@ function createTestRuntime(envOverrides: Record<string, string> = {}): WebRuntim
     // noop
   }
 
-  const runtime = new WebRuntime({
-    appName: 'Camellia',
-    version: '1.0.0',
-    buildDate: '2026-11-11',
-    apiServer: 'https://api.example.com',
-    isPublicServer: false,
-    rendezvousServers: [],
-    relayServers: [],
-    env: {
-      DEFAULT_ID_PORT: '21116',
-      ...envOverrides
-    },
-    profile: { id: '999888777', name: 'Test User' },
-    langs: []
-  });
+  const runtime = new WebRuntime();
 
   return runtime;
 }

@@ -10,7 +10,6 @@ Validates BUILD-011, BUILD-012, and BUILD-013:
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 import unittest
 

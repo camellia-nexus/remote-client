@@ -33,7 +33,6 @@ Verifies:
 
 import re
 import threading
-import time
 import unittest
 from pathlib import Path
 

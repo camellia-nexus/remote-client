@@ -105,7 +105,7 @@ class TestBatch84AppleSecurityAndCompliance(unittest.TestCase):
         plist_decl = data.get("apple_info_plist_declaration", {})
         self.assertEqual(plist_decl.get("key"), "ITSAppUsesNonExemptEncryption")
         self.assertIs(plist_decl.get("value"), False)
-        self.assertTrue(len(plist_decl.get("rationale", "")) > 10)
+        self.assertGreater(len(plist_decl.get("rationale", "")), 10)
 
         classification = data.get("export_compliance_classification", {})
         self.assertEqual(classification.get("us_eccn"), "5D992.c")
@@ -116,7 +116,7 @@ class TestBatch84AppleSecurityAndCompliance(unittest.TestCase):
         )
 
         inventory = data.get("cryptographic_inventory", [])
-        self.assertTrue(len(inventory) >= 3, "Inventory must contain at least 3 crypto components")
+        self.assertGreaterEqual(len(inventory), 3, "Inventory must contain at least 3 crypto components")
 
         crates = {item.get("crate") for item in inventory}
         self.assertIn("crypto_box", crates)

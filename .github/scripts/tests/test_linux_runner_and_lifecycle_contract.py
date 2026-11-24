@@ -5,7 +5,6 @@ Contract verification suite for Linux Runner, Provenance, and Native Lifecycle H
 """
 
 import os
-import re
 import unittest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

@@ -1,11 +1,11 @@
 import argparse
 import importlib.util
 import io
-import tempfile
-import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest import mock
+import tempfile
+import unittest
+import unittest.mock
 
 MODULE_PATH = Path(__file__).resolve().parents[3] / "res" / "msi" / "preprocess.py"
 SPEC = importlib.util.spec_from_file_location("msi_preprocess", MODULE_PATH)
@@ -28,7 +28,7 @@ class MsiPreprocessTests(unittest.TestCase):
             def render(lines: list[str], start: int) -> None:
                 lines.insert(start + 1, "generated\n")
 
-            with mock.patch.object(preprocess, "PACKAGE_DIR", package):
+            with unittest.mock.patch.object(preprocess, "PACKAGE_DIR", package):
                 for _ in range(2):
                     preprocess.gen_content_between_tags(
                         "Package/fixture.wxs", "<!-- start -->", "<!-- end -->", render
@@ -102,7 +102,7 @@ class MsiPreprocessTests(unittest.TestCase):
                 '<Wix><Fragment><Upgrade Id="$(var.UpgradeCode)" /></Fragment></Wix>\n',
                 encoding="utf-8",
             )
-            with mock.patch.object(preprocess, "PACKAGE_DIR", package):
+            with unittest.mock.patch.object(preprocess, "PACKAGE_DIR", package):
                 with self.assertRaisesRegex(ValueError, "Upgrades.wxs.*UpgradeCode"):
                     preprocess.validate_shared_preprocessor_contract()
                 fragment.write_text(
