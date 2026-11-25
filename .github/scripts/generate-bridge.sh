@@ -28,9 +28,17 @@ if command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
   installed_version="$(flutter_rust_bridge_codegen --version | awk '{print $NF}')"
 fi
 
-if [[ "${installed_version}" != "${frb_codegen_version}" ]]; then
+cargo_home_dir="${CARGO_HOME:-$HOME/.cargo}"
+crate_cached="false"
+if compgen -G "${cargo_home_dir}/registry/cache/*/flutter_rust_bridge_codegen-${frb_codegen_version}.crate" >/dev/null; then
+  crate_cached="true"
+fi
+
+# A binary restored from a partial Cargo cache cannot be provenance-verified
+# without its source crate, so reinstall whenever the crate archive is absent.
+if [[ "${installed_version}" != "${frb_codegen_version}" || "${crate_cached}" != "true" ]]; then
   echo "Installing flutter_rust_bridge_codegen ${frb_codegen_version} with --locked..."
-  cargo install flutter_rust_bridge_codegen --version "${frb_codegen_version}" --locked
+  cargo install flutter_rust_bridge_codegen --version "${frb_codegen_version}" --locked --force
 fi
 
 # Verify crate and Cargo.lock cryptographic provenance
