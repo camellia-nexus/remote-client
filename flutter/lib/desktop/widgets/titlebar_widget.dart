@@ -171,6 +171,7 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final foreground = _isFocused
         ? theme.colorScheme.onSurface
@@ -185,7 +186,12 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
               ? glass.sidebarTint.withValues(alpha: 0.42)
               : glass.sidebarTint,
           border: Border(
-            bottom: BorderSide(color: glass.specularBottom, width: 0.8),
+            bottom: BorderSide(
+              color: tokens.border.withValues(
+                alpha: widget.transparent ? 0.68 : 0.85,
+              ),
+              width: 0.85,
+            ),
           ),
         ),
         child: Row(
@@ -214,6 +220,7 @@ class _DesktopTitleBarState extends State<DesktopTitleBar> with WindowListener {
                           style: theme.textTheme.labelMedium?.copyWith(
                             color: foreground,
                             fontWeight: FontWeight.w600,
+                            letterSpacing: -0.1,
                           ),
                         ),
                       )
@@ -416,7 +423,9 @@ class _CaptionButtonState extends State<_CaptionButton> {
                   borderRadius: BorderRadius.circular(
                     CamelliaRadius.control / 2,
                   ),
-                  boxShadow: _focused
+                  boxShadow: (_focused &&
+                          FocusManager.instance.highlightMode ==
+                              FocusHighlightMode.traditional)
                       ? [
                           BoxShadow(
                             color: glass.focusGlow.withValues(alpha: 0.30),

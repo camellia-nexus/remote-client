@@ -8,6 +8,7 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/file_manager_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
@@ -27,17 +28,19 @@ class FileManagerTabPage extends StatefulWidget {
 class _FileManagerTabPageState extends State<FileManagerTabPage> {
   DesktopTabController get tabController => Get.find<DesktopTabController>();
 
-  static const IconData selectedIcon = Icons.file_copy_sharp;
-  static const IconData unselectedIcon = Icons.file_copy_outlined;
+  static const IconData selectedIcon = CamelliaIcons.transfer;
+  static const IconData unselectedIcon = CamelliaIcons.transfer;
 
   _FileManagerTabPageState(Map<String, dynamic> params) {
     Get.put(DesktopTabController(tabType: DesktopTabType.fileTransfer));
     tabController.onSelected = (id) {
-      WindowController.fromWindowId(windowId())
-          .setTitle(getWindowNameWithId(id));
+      WindowController.fromWindowId(
+        windowId(),
+      ).setTitle(getWindowNameWithId(id));
     };
     tabController.onRemoved = (_, id) => onRemoveId(id);
-    tabController.add(TabInfo(
+    tabController.add(
+      TabInfo(
         key: params['id'],
         label: params['id'],
         selectedIcon: selectedIcon,
@@ -59,7 +62,9 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
           tabController: tabController,
           forceRelay: params['forceRelay'],
           connToken: params['connToken'],
-        )));
+        ),
+      ),
+    );
     // CRED-006: Redact transient credentials immediately after consumption
     params['password'] = null;
     params['connToken'] = null;
@@ -71,13 +76,14 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
 
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       debugPrint(
-          "[FileTransfer] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId to ${windowId()}");
-      // for simplify, just replace connectionId
+        "[FileTransfer] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId to ${windowId()}",
+      );
       if (call.method == kWindowEventNewFileTransfer) {
         final args = jsonDecode(call.arguments);
         final id = args['id'];
         windowOnTop(windowId());
-        tabController.add(TabInfo(
+        tabController.add(
+          TabInfo(
             key: id,
             label: id,
             selectedIcon: selectedIcon,
@@ -99,9 +105,17 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
               tabController: tabController,
               forceRelay: args['forceRelay'],
               connToken: args['connToken'],
-            )));
+            ),
+          ),
+        );
         args['password'] = null;
         args['connToken'] = null;
+      } else if (call.method == kWindowEventActiveSession) {
+        final jumpOk = tabController.jumpToByKey(call.arguments);
+        if (jumpOk) {
+          windowOnTop(windowId());
+        }
+        return jumpOk;
       } else if (call.method == "onDestroy") {
         tabController.clear();
       } else if (call.method == kWindowActionRebuild) {
@@ -115,24 +129,30 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
 
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
     final child = Scaffold(
-        backgroundColor: Theme.of(context).cardColor,
-        body: DesktopTab(
-          controller: tabController,
-          onWindowCloseButton: handleWindowCloseButton,
-          tail: const AddButton(),
-          selectedBorderColor: MyTheme.accent,
-          labelGetter: DesktopTab.tablabelGetter,
-        ));
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      body: DesktopTab(
+        controller: tabController,
+        onWindowCloseButton: handleWindowCloseButton,
+        tail: const AddButton(),
+        selectedBorderColor: Theme.of(context).colorScheme.primary,
+        labelGetter: DesktopTab.tablabelGetter,
+      ),
+    );
     final tabWidget = isLinux
         ? buildVirtualWindowFrame(context, child)
         : workaroundWindowBorder(
             context,
             Container(
               decoration: BoxDecoration(
-                  border: Border.all(color: MyTheme.color(context).border!)),
+                border: Border.all(color: tokens.border, width: 0.85),
+              ),
               child: child,
-            ));
+            ),
+          );
     return isMacOS
         ? tabWidget
         : SubWindowDragToResizeArea(
@@ -143,9 +163,19 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
           );
   }
 
-  void onRemoveId(String id) {
+  void onRemoveId(String id) async {
     if (tabController.state.value.tabs.isEmpty) {
-      WindowController.fromWindowId(windowId()).close();
+      final wId = windowId();
+      try {
+        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+          "id": wId,
+        });
+      } catch (_) {}
+      final wc = WindowController.fromWindowId(wId);
+      try {
+        await wc.setPreventClose(false);
+      } catch (_) {}
+      await wc.close();
     }
   }
 
@@ -162,22 +192,25 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
       )) {
         return false;
       }
+      tabController.clear();
+      return true;
     }
     if (connLength <= 0) {
       tabController.clear();
       return true;
-    } else {
-      final bool res;
-      if (!option2bool(kOptionEnableConfirmClosingTabs,
-          bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs))) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog();
-      }
-      if (res) {
-        tabController.clear();
-      }
-      return res;
     }
+    final bool res;
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      res = true;
+    } else {
+      res = await closeConfirmDialog(isSessionWindow: true);
+    }
+    if (res) {
+      tabController.clear();
+    }
+    return res;
   }
 }

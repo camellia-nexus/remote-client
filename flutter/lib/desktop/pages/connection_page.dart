@@ -116,6 +116,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
 
     return Obx(() {
@@ -140,10 +141,14 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
         child: PopupMenuButton<String>(
           tooltip: translate('Status'),
           padding: EdgeInsets.zero,
-          splashRadius: 0,
           borderRadius: BorderRadius.circular(CamelliaRadius.pill),
           position: PopupMenuPosition.under,
           offset: const Offset(0, 6),
+          color: tokens.surfaceElevated,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            side: BorderSide(color: tokens.border, width: 0.85),
+          ),
           onSelected: (action) async {
             switch (action) {
               case 'start':
@@ -159,6 +164,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
             if (stopped)
               PopupMenuItem<String>(
                 value: 'start',
+                height: 38,
                 child: Row(
                   children: [
                     Icon(
@@ -177,6 +183,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
             if (canConfigureServer)
               PopupMenuItem<String>(
                 value: 'server',
+                height: 38,
                 child: Row(
                   children: [
                     Icon(
@@ -194,6 +201,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
               ),
             PopupMenuItem<String>(
               value: 'refresh',
+              height: 38,
               child: Row(
                 children: [
                   Icon(
@@ -508,9 +516,14 @@ class _ConnectionPageState extends State<ConnectionPage>
                   children: [
                     SizedBox(
                       width: 390,
-                      child: SingleChildScrollView(
-                        child: _buildQuickConnectHero(context),
-                      ),
+                      child: constraints.maxHeight >= 580
+                          ? Align(
+                              alignment: Alignment.topCenter,
+                              child: _buildQuickConnectHero(context),
+                            )
+                          : SingleChildScrollView(
+                              child: _buildQuickConnectHero(context),
+                            ),
                     ),
                     const SizedBox(width: 20),
                     Expanded(child: devices),
@@ -683,6 +696,7 @@ class _ConnectionPageState extends State<ConnectionPage>
     ThemeData theme,
     Color modeAccent,
   ) {
+    final tokens = AppVisual.tokens(context);
     final description = switch (_connectionMode) {
       _ConnectionMode.desktop => translate('Control Remote Desktop'),
       _ConnectionMode.viewOnly => translate('View Mode'),
@@ -693,14 +707,43 @@ class _ConnectionPageState extends State<ConnectionPage>
     };
     return Row(
       children: [
-        Icon(Icons.info_outline_rounded, size: 14, color: modeAccent),
-        const SizedBox(width: 6),
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: modeAccent,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 8),
         Expanded(
           child: Text(
             description,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: tokens.surfaceContainer.withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: tokens.border, width: 0.85),
+          ),
+          child: Text(
+            '↵',
+            style: CamelliaTypography.tabular(
+              theme.textTheme.labelSmall?.copyWith(
+                fontSize: 11,
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ),
       ],

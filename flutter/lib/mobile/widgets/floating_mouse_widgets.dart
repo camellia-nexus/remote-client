@@ -1,12 +1,11 @@
-// These floating mouse widgets are used to simulate a physical mouse
-// when "mobile" -> "desktop" in mouse mode.
-// This file does not contain whole mouse widgets, it only contains
-// parts that help to control, such as wheel scroll and wheel button.
+// These floating mouse widgets simulate physical mouse buttons, scroll wheel,
+// and precision joystick when connecting from mobile to desktop in mouse mode.
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import 'package:camellia_remote_app/common.dart';
@@ -14,21 +13,16 @@ import 'package:camellia_remote_app/common/widgets/remote_input.dart';
 import 'package:camellia_remote_app/models/input_model.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 
-// Used for the wheel button and wheel scroll widgets
-const double _kSpaceToHorizontalEdge = 25;
-const double _wheelWidth = 50;
-const double _wheelHeight = 162;
-// Used for the left/right button widgets
-const double _kSpaceToVerticalEdge = 15;
-const double _kSpaceBetweenLeftRightButtons = 40;
-const double _kLeftRightButtonWidth = 55;
+const double _kSpaceToHorizontalEdge = 20;
+const double _wheelWidth = 46;
+const double _wheelHeight = 152;
+const double _kSpaceToVerticalEdge = 16;
+const double _kSpaceBetweenLeftRightButtons = 36;
+const double _kLeftRightButtonWidth = 56;
 const double _kLeftRightButtonHeight = 40;
-const double _kBorderWidth = 1;
-final Color _kDefaultBorderColor = Colors.white.withValues(alpha: 0.7);
-final Color _kDefaultColor = Colors.black.withValues(alpha: 0.4);
-final Color _kTapDownColor = Colors.blue.withValues(alpha: 0.7);
-final Color _kWidgetHighlightColor = Colors.white.withValues(alpha: 0.9);
+const double _kBorderWidth = 0.85;
 const int _kInputTimerIntervalMillis = 100;
 
 class FloatingMouseWidgets extends StatefulWidget {
@@ -105,8 +99,11 @@ class _FloatingMouseWidgetsState extends State<FloatingMouseWidgets> {
 class FloatingWheel extends StatefulWidget {
   final InputModel inputModel;
   final CursorModel cursorModel;
-  const FloatingWheel(
-      {super.key, required this.inputModel, required this.cursorModel});
+  const FloatingWheel({
+    super.key,
+    required this.inputModel,
+    required this.cursorModel,
+  });
 
   @override
   State<FloatingWheel> createState() => _FloatingWheelState();
@@ -154,8 +151,12 @@ class _FloatingWheelState extends State<FloatingWheel> {
     if (_lastBlockedRect != null) {
       _cursorModel.removeBlockedRect(_lastBlockedRect!);
     }
-    final newRect =
-        Rect.fromLTWH(_position.dx, _position.dy, _wheelWidth, _wheelHeight);
+    final newRect = Rect.fromLTWH(
+      _position.dx,
+      _position.dy,
+      _wheelWidth,
+      _wheelHeight,
+    );
     _cursorModel.addBlockedRect(newRect);
     _lastBlockedRect = newRect;
   }
@@ -180,29 +181,40 @@ class _FloatingWheelState extends State<FloatingWheel> {
     _previousOrientation = currentOrientation;
   }
 
-  Widget _buildUpDownButton(
-      void Function(PointerDownEvent) onPointerDown,
-      void Function(PointerUpEvent) onPointerUp,
-      void Function(PointerCancelEvent) onPointerCancel,
-      bool Function() flagGetter,
-      BorderRadiusGeometry borderRadius,
-      IconData iconData) {
+  Widget _buildUpDownButton({
+    required void Function(PointerDownEvent) onPointerDown,
+    required void Function(PointerUpEvent) onPointerUp,
+    required void Function(PointerCancelEvent) onPointerCancel,
+    required bool pressed,
+    required BorderRadiusGeometry borderRadius,
+    required IconData iconData,
+    required Color baseFill,
+    required Color activeFill,
+    required Color borderColor,
+    required Color accentColor,
+  }) {
     return Listener(
       onPointerDown: onPointerDown,
       onPointerUp: onPointerUp,
       onPointerCancel: onPointerCancel,
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
         width: _wheelWidth,
-        height: 55,
+        height: 51,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: _kDefaultColor,
+          color: pressed ? activeFill : baseFill,
           border: Border.all(
-              color: flagGetter() ? _kTapDownColor : _kDefaultBorderColor,
-              width: 1),
+            color: pressed ? accentColor : borderColor,
+            width: _kBorderWidth,
+          ),
           borderRadius: borderRadius,
         ),
-        child: Icon(iconData, color: _kDefaultBorderColor, size: 32),
+        child: Icon(
+          iconData,
+          color: Colors.white.withValues(alpha: pressed ? 1.0 : 0.86),
+          size: 26,
+        ),
       ),
     );
   }
@@ -210,7 +222,7 @@ class _FloatingWheelState extends State<FloatingWheel> {
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
-      return Positioned(child: Offstage());
+      return const Positioned(child: Offstage());
     }
     return Positioned(
       left: _position.dx,
@@ -220,120 +232,139 @@ class _FloatingWheelState extends State<FloatingWheel> {
   }
 
   Widget _buildWidget(BuildContext context) {
-    return SizedBox(
-      width: _wheelWidth,
-      height: _wheelHeight,
-      child: Column(
-        children: [
-          _buildUpDownButton(
-            (event) {
-              setState(() {
-                _isUpDown = true;
-              });
-              _startScrollTimer(1);
-            },
-            (event) {
-              setState(() {
-                _isUpDown = false;
-              });
-              _stopScrollTimer();
-            },
-            (event) {
-              setState(() {
-                _isUpDown = false;
-              });
-              _stopScrollTimer();
-            },
-            () => _isUpDown,
-            BorderRadius.vertical(top: Radius.circular(_wheelWidth * 0.5)),
-            Icons.keyboard_arrow_up,
+    final theme = Theme.of(context);
+    final accent = theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final baseFill = CamelliaColors.darkSurface.withValues(alpha: 0.66);
+    final activeFill = accent.withValues(alpha: 0.56);
+    final borderColor = Colors.white.withValues(alpha: 0.28);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(_wheelWidth * 0.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
-          Listener(
-            onPointerDown: (event) {
-              setState(() {
-                _isMidDown = true;
-              });
-              _inputModel.tapDown(MouseButtons.wheel);
-            },
-            onPointerUp: (event) {
-              setState(() {
-                _isMidDown = false;
-              });
-              _inputModel.tapUp(MouseButtons.wheel);
-            },
-            onPointerCancel: (event) {
-              setState(() {
-                _isMidDown = false;
-              });
-              _inputModel.tapUp(MouseButtons.wheel);
-            },
-            child: Container(
-              width: _wheelWidth,
-              height: 52,
-              decoration: BoxDecoration(
-                color: _kDefaultColor,
-                border: Border.symmetric(
-                    vertical: BorderSide(
-                        color:
-                            _isMidDown ? _kTapDownColor : _kDefaultBorderColor,
-                        width: _kBorderWidth)),
+        ],
+      ),
+      child: SizedBox(
+        width: _wheelWidth,
+        height: _wheelHeight,
+        child: Column(
+          children: [
+            _buildUpDownButton(
+              onPointerDown: (_) {
+                setState(() => _isUpDown = true);
+                _startScrollTimer(1);
+              },
+              onPointerUp: (_) {
+                setState(() => _isUpDown = false);
+                _stopScrollTimer();
+              },
+              onPointerCancel: (_) {
+                setState(() => _isUpDown = false);
+                _stopScrollTimer();
+              },
+              pressed: _isUpDown,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(_wheelWidth * 0.5),
               ),
-              child: Center(
-                child: SizedBox(
-                  width: _wheelWidth - 10,
-                  height: _wheelWidth - 10,
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 18,
-                          height: 2,
-                          color: _kDefaultBorderColor,
-                        ),
-                        SizedBox(height: 6),
-                        Container(
-                          width: 24,
-                          height: 2,
-                          color: _kDefaultBorderColor,
-                        ),
-                        SizedBox(height: 6),
-                        Container(
-                          width: 18,
-                          height: 2,
-                          color: _kDefaultBorderColor,
-                        ),
-                      ],
+              iconData: Icons.keyboard_arrow_up_rounded,
+              baseFill: baseFill,
+              activeFill: activeFill,
+              borderColor: borderColor,
+              accentColor: accent,
+            ),
+            Listener(
+              onPointerDown: (_) {
+                setState(() => _isMidDown = true);
+                _inputModel.tapDown(MouseButtons.wheel);
+              },
+              onPointerUp: (_) {
+                setState(() => _isMidDown = false);
+                _inputModel.tapUp(MouseButtons.wheel);
+              },
+              onPointerCancel: (_) {
+                setState(() => _isMidDown = false);
+                _inputModel.tapUp(MouseButtons.wheel);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: _wheelWidth,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: _isMidDown ? activeFill : baseFill,
+                  border: Border.symmetric(
+                    vertical: BorderSide(
+                      color: _isMidDown ? accent : borderColor,
+                      width: _kBorderWidth,
                     ),
+                  ),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 14,
+                        height: 2,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Container(
+                        width: 20,
+                        height: 2,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.90),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Container(
+                        width: 14,
+                        height: 2,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
-          ),
-          _buildUpDownButton(
-            (event) {
-              setState(() {
-                _isDownDown = true;
-              });
-              _startScrollTimer(-1);
-            },
-            (event) {
-              setState(() {
-                _isDownDown = false;
-              });
-              _stopScrollTimer();
-            },
-            (event) {
-              setState(() {
-                _isDownDown = false;
-              });
-              _stopScrollTimer();
-            },
-            () => _isDownDown,
-            BorderRadius.vertical(bottom: Radius.circular(_wheelWidth * 0.5)),
-            Icons.keyboard_arrow_down,
-          ),
-        ],
+            _buildUpDownButton(
+              onPointerDown: (_) {
+                setState(() => _isDownDown = true);
+                _startScrollTimer(-1);
+              },
+              onPointerUp: (_) {
+                setState(() => _isDownDown = false);
+                _stopScrollTimer();
+              },
+              onPointerCancel: (_) {
+                setState(() => _isDownDown = false);
+                _stopScrollTimer();
+              },
+              pressed: _isDownDown,
+              borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(_wheelWidth * 0.5),
+              ),
+              iconData: Icons.keyboard_arrow_down_rounded,
+              baseFill: baseFill,
+              activeFill: activeFill,
+              borderColor: borderColor,
+              accentColor: accent,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -342,9 +373,11 @@ class _FloatingWheelState extends State<FloatingWheel> {
     _scrollTimer?.cancel();
     _inputModel.scroll(direction);
     _scrollTimer = Timer.periodic(
-        Duration(milliseconds: _kInputTimerIntervalMillis), (timer) {
-      _inputModel.scroll(direction);
-    });
+      const Duration(milliseconds: _kInputTimerIntervalMillis),
+      (timer) {
+        _inputModel.scroll(direction);
+      },
+    );
   }
 
   void _stopScrollTimer() {
@@ -357,11 +390,12 @@ class FloatingLeftRightButton extends StatefulWidget {
   final bool isLeft;
   final InputModel inputModel;
   final CursorModel cursorModel;
-  const FloatingLeftRightButton(
-      {super.key,
-      required this.isLeft,
-      required this.inputModel,
-      required this.cursorModel});
+  const FloatingLeftRightButton({
+    super.key,
+    required this.isLeft,
+    required this.inputModel,
+    required this.cursorModel,
+  });
 
   @override
   State<FloatingLeftRightButton> createState() =>
@@ -377,7 +411,6 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   Orientation? _previousOrientation;
   Offset _preSavedPos = Offset.zero;
 
-  // Gesture ambiguity resolution
   Timer? _tapDownTimer;
   final Duration _pressTimeout = const Duration(milliseconds: 200);
   bool _isDragging = false;
@@ -448,12 +481,11 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   void _trySavePosition() {
     if (_previousOrientation == null) return;
     if (((_position - _preSavedPos)).distanceSquared < 0.1) return;
-    final pos = jsonEncode({
-      'x': _position.dx,
-      'y': _position.dy,
-    });
+    final pos = jsonEncode({'x': _position.dx, 'y': _position.dy});
     bind.setLocalFlutterOption(
-        k: _getPositionKey(_previousOrientation!), v: pos);
+      k: _getPositionKey(_previousOrientation!),
+      v: pos,
+    );
     _preSavedPos = _position;
   }
 
@@ -462,8 +494,10 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     final pos = _loadPositionFromString(ps);
     if (pos == null) {
       final size = MediaQuery.sizeOf(context);
-      _position = Offset(_getOffsetX(size.width),
-          size.height - _kSpaceToVerticalEdge - _kLeftRightButtonHeight);
+      _position = Offset(
+        _getOffsetX(size.width),
+        size.height - _kSpaceToVerticalEdge - _kLeftRightButtonHeight,
+      );
     } else {
       _position = pos;
       _preSavedPos = pos;
@@ -484,8 +518,12 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     if (_lastBlockedRect != null) {
       _cursorModel.removeBlockedRect(_lastBlockedRect!);
     }
-    final newRect = Rect.fromLTWH(_position.dx, _position.dy,
-        _kLeftRightButtonWidth, _kLeftRightButtonHeight);
+    final newRect = Rect.fromLTWH(
+      _position.dx,
+      _position.dy,
+      _kLeftRightButtonWidth,
+      _kLeftRightButtonHeight,
+    );
     _cursorModel.addBlockedRect(newRect);
     _lastBlockedRect = newRect;
   }
@@ -496,8 +534,10 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     Offset newPosition = _position + delta;
     double minX = _kSpaceToHorizontalEdge;
     double minY = _kSpaceToVerticalEdge;
-    double maxX = size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge;
-    double maxY = size.height - _kLeftRightButtonHeight - _kSpaceToVerticalEdge;
+    double maxX =
+        size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge;
+    double maxY =
+        size.height - _kLeftRightButtonHeight - _kSpaceToVerticalEdge;
     newPosition = Offset(
       newPosition.dx.clamp(minX, maxX),
       newPosition.dy.clamp(minY, maxY),
@@ -516,56 +556,28 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
 
   void _onBodyPointerMoveUpdate(PointerMoveEvent event) {
     _cursorModel.blockEvents = true;
-    // If move, it's a drag, not a tap.
     _isDragging = true;
-    // Cancel the timer to prevent it from being recognized as a tap/hold.
     _tapDownTimer?.cancel();
     _tapDownTimer = null;
     _onMoveUpdateDelta(event.delta);
   }
 
-  Widget _buildButtonIcon() {
-    final double w = _kLeftRightButtonWidth * 0.45;
-    final double h = _kLeftRightButtonHeight * 0.75;
-    final double borderRadius = w * 0.5;
-    final double quarterCircleRadius = borderRadius * 0.9;
-    return Stack(
-      children: [
-        Container(
-          width: w,
-          height: h,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(_kLeftRightButtonWidth * 0.225),
-            color: Colors.white,
-          ),
-        ),
-        Positioned(
-          left: _isLeft ? quarterCircleRadius * 0.25 : null,
-          right: _isLeft ? null : quarterCircleRadius * 0.25,
-          top: quarterCircleRadius * 0.25,
-          child: CustomPaint(
-            size: Size(quarterCircleRadius * 2, quarterCircleRadius * 2),
-            painter: _QuarterCirclePainter(
-              color: _kDefaultColor,
-              isLeft: _isLeft,
-              radius: quarterCircleRadius,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
-      return Positioned(child: Offstage());
+      return const Positioned(child: Offstage());
     }
+    final theme = Theme.of(context);
+    final accent = theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final baseFill = CamelliaColors.darkSurface.withValues(alpha: 0.66);
+    final activeFill = accent.withValues(alpha: 0.56);
+    final borderColor = Colors.white.withValues(alpha: 0.28);
+
     return Positioned(
       left: _position.dx,
       top: _position.dy,
-      // We can't use the GestureDetector here, because `onTapDown` may be
-      // triggered sometimes when dragging.
       child: Listener(
         onPointerMove: _onBodyPointerMoveUpdate,
         onPointerDown: (event) async {
@@ -573,14 +585,14 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
           setState(() {
             _isDown = true;
           });
-          // Start a timer. If it fires, it's a hold.
           _tapDownTimer?.cancel();
           _tapDownTimer = Timer(_pressTimeout, () {
             isSpecialHoldDragActive = true;
             () async {
               await _cursorModel.syncCursorPosition();
-              await _inputModel
-                  .tapDown(_isLeft ? MouseButtons.left : MouseButtons.right);
+              await _inputModel.tapDown(
+                _isLeft ? MouseButtons.left : MouseButtons.right,
+              );
             }();
             _tapDownTimer = null;
           });
@@ -590,24 +602,23 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
           setState(() {
             _isDown = false;
           });
-          // If timer is active, it's a quick tap.
           if (_tapDownTimer != null) {
             _tapDownTimer!.cancel();
             _tapDownTimer = null;
-            // Fire tap down and up quickly.
             _inputModel
                 .tapDown(_isLeft ? MouseButtons.left : MouseButtons.right)
                 .then(
-                    (_) => Future.delayed(const Duration(milliseconds: 50), () {
-                          _inputModel.tapUp(
-                              _isLeft ? MouseButtons.left : MouseButtons.right);
-                        }));
+                  (_) => Future.delayed(const Duration(milliseconds: 50), () {
+                    _inputModel.tapUp(
+                      _isLeft ? MouseButtons.left : MouseButtons.right,
+                    );
+                  }),
+                );
           } else {
-            // If it's not a quick tap, it could be a hold or drag.
-            // If it was a hold, isSpecialHoldDragActive is true.
             if (isSpecialHoldDragActive) {
-              _inputModel
-                  .tapUp(_isLeft ? MouseButtons.left : MouseButtons.right);
+              _inputModel.tapUp(
+                _isLeft ? MouseButtons.left : MouseButtons.right,
+              );
             }
           }
 
@@ -631,55 +642,107 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
             _trySavePosition();
           }
         },
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
           width: _kLeftRightButtonWidth,
           height: _kLeftRightButtonHeight,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: _kDefaultColor,
+            color: _isDown ? activeFill : baseFill,
             border: Border.all(
-                color: _isDown ? _kTapDownColor : _kDefaultBorderColor,
-                width: _kBorderWidth),
+              color: _isDown ? accent : borderColor,
+              width: _kBorderWidth,
+            ),
             borderRadius: _isLeft
-                ? BorderRadius.horizontal(
-                    left: Radius.circular(_kLeftRightButtonHeight * 0.5))
-                : BorderRadius.horizontal(
-                    right: Radius.circular(_kLeftRightButtonHeight * 0.5)),
+                ? const BorderRadius.horizontal(
+                    left: Radius.circular(_kLeftRightButtonHeight * 0.5),
+                    right: Radius.circular(10),
+                  )
+                : const BorderRadius.horizontal(
+                    left: Radius.circular(10),
+                    right: Radius.circular(_kLeftRightButtonHeight * 0.5),
+                  ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.24),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
-          child: _buildButtonIcon(),
+          child: CustomPaint(
+            size: const Size(20, 24),
+            painter: _MouseButtonIconPainter(
+              isLeft: _isLeft,
+              strokeColor: Colors.white.withValues(alpha: 0.86),
+              activeColor: _isDown ? Colors.white : accent,
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-class _QuarterCirclePainter extends CustomPainter {
-  final Color color;
+class _MouseButtonIconPainter extends CustomPainter {
+  const _MouseButtonIconPainter({
+    required this.isLeft,
+    required this.strokeColor,
+    required this.activeColor,
+  });
+
   final bool isLeft;
-  final double radius;
-  _QuarterCirclePainter(
-      {required this.color, required this.isLeft, required this.radius});
+  final Color strokeColor;
+  final Color activeColor;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
+    final rect = Offset.zero & size;
+    final body = RRect.fromRectAndRadius(
+      rect.deflate(1.2),
+      Radius.circular(size.width * 0.44),
+    );
+    final stroke = Paint()
+      ..color = strokeColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    final activeFill = Paint()
+      ..color = activeColor.withValues(alpha: 0.88)
       ..style = PaintingStyle.fill;
-    final rect = Rect.fromLTWH(0, 0, radius * 2, radius * 2);
-    if (isLeft) {
-      canvas.drawArc(rect, -pi, pi / 2, true, paint);
-    } else {
-      canvas.drawArc(rect, -pi / 2, pi / 2, true, paint);
-    }
+
+    canvas.save();
+    canvas.clipRRect(body);
+    final halfRect = isLeft
+        ? Rect.fromLTWH(0, 0, size.width * 0.5, size.height * 0.48)
+        : Rect.fromLTWH(
+            size.width * 0.5,
+            0,
+            size.width * 0.5,
+            size.height * 0.48,
+          );
+    canvas.drawRect(halfRect, activeFill);
+    canvas.restore();
+
+    canvas.drawRRect(body, stroke);
+    canvas.drawLine(
+      Offset(size.width * 0.5, 1.4),
+      Offset(size.width * 0.5, size.height * 0.48),
+      stroke,
+    );
+    canvas.drawLine(
+      Offset(1.4, size.height * 0.48),
+      Offset(size.width - 1.4, size.height * 0.48),
+      stroke,
+    );
   }
 
   @override
-  bool shouldRepaint(CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _MouseButtonIconPainter oldDelegate) =>
+      oldDelegate.isLeft != isLeft ||
+      oldDelegate.strokeColor != strokeColor ||
+      oldDelegate.activeColor != activeColor;
 }
 
-// Virtual joystick can send either absolute movement (via updatePan)
-// or relative movement (via sendMobileRelativeMouseMove) depending on the
-// InputModel.relativeMouseMode setting.
 class VirtualJoystick extends StatefulWidget {
   final CursorModel cursorModel;
   final InputModel inputModel;
@@ -698,23 +761,18 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
   Offset _position = Offset.zero;
   bool _isInitialized = false;
   Offset _offset = Offset.zero;
-  final double _joystickRadius = 50.0;
-  final double _thumbRadius = 20.0;
+  final double _joystickRadius = 48.0;
+  final double _thumbRadius = 18.0;
   final double _moveStep = 3.0;
   final double _speed = 1.0;
 
-  /// Scale factor for relative mouse movement sensitivity.
-  /// Higher values result in faster cursor movement on the remote machine.
   static const double _kRelativeMouseScale = 3.0;
 
-  // One-shot timer to detect a drag gesture
   Timer? _dragStartTimer;
-  // Periodic timer for continuous movement
   Timer? _continuousMoveTimer;
   Size? _lastScreenSize;
   bool _isPressed = false;
 
-  /// Check if relative mouse mode is enabled.
   bool get _useRelativeMouse => widget.inputModel.relativeMouseMode.value;
 
   @override
@@ -749,7 +807,7 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
     setState(() {
       _position = Offset(
         _kSpaceToHorizontalEdge + _joystickRadius,
-        size.height * 0.5 + _joystickRadius * 1.5,
+        size.height * 0.5 + _joystickRadius * 1.4,
       );
       _isInitialized = true;
     });
@@ -762,14 +820,13 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
     );
   }
 
-  /// Send movement delta to remote machine.
-  /// Uses relative mouse mode if enabled, otherwise uses absolute updatePan.
   void _sendMovement(Offset delta) {
     if (_useRelativeMouse) {
       widget.inputModel.sendMobileRelativeMouseMove(
-          delta.dx * _kRelativeMouseScale, delta.dy * _kRelativeMouseScale);
+        delta.dx * _kRelativeMouseScale,
+        delta.dy * _kRelativeMouseScale,
+      );
     } else {
-      // In absolute mode, use cursorModel.updatePan which tracks position.
       widget.cursorModel.updatePan(delta, Offset.zero, false);
     }
   }
@@ -784,8 +841,13 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) {
-      return Positioned(child: Offstage());
+      return const Positioned(child: Offstage());
     }
+    final theme = Theme.of(context);
+    final accent = theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+
     return Positioned(
       left: _position.dx - _joystickRadius,
       top: _position.dy - _joystickRadius,
@@ -797,24 +859,24 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
           widget.cursorModel.blockEvents = true;
           _updateOffset(details.localPosition);
 
-          // 1. Send a single, small pan event immediately for responsiveness.
-          //    The movement is small for a gentle start.
           final initialDelta = _offsetToPanDelta(_offset);
           if (initialDelta.distance > 0) {
             _sendMovement(initialDelta);
           }
 
-          // 2. Start a one-shot timer to check if the user is holding for a drag.
           _dragStartTimer?.cancel();
           _dragStartTimer = Timer(const Duration(milliseconds: 120), () {
-            // 3. If the timer fires, it's a drag. Start the continuous movement timer.
             _continuousMoveTimer?.cancel();
-            _continuousMoveTimer =
-                periodic_immediate(const Duration(milliseconds: 20), () async {
-              if (_offset != Offset.zero) {
-                _sendMovement(_offsetToPanDelta(_offset) * _moveStep * _speed);
-              }
-            });
+            _continuousMoveTimer = periodic_immediate(
+              const Duration(milliseconds: 20),
+              () async {
+                if (_offset != Offset.zero) {
+                  _sendMovement(
+                    _offsetToPanDelta(_offset) * _moveStep * _speed,
+                  );
+                }
+              },
+            );
           });
         },
         onPanUpdate: (details) {
@@ -826,16 +888,17 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
             _isPressed = false;
           });
           widget.cursorModel.blockEvents = false;
-
-          // 4. Critical step: On pan end, cancel all timers.
-          //    If it was a flick, this cancels the drag detection before it fires.
-          //    If it was a drag, this stops the continuous movement.
           _stopSendEventTimer();
         },
         child: CustomPaint(
           size: Size(_joystickRadius * 2, _joystickRadius * 2),
           painter: _JoystickPainter(
-              _offset, _joystickRadius, _thumbRadius, _isPressed),
+            offset: _offset,
+            joystickRadius: _joystickRadius,
+            thumbRadius: _thumbRadius,
+            isPressed: _isPressed,
+            accentColor: accent,
+          ),
         ),
       ),
     );
@@ -860,46 +923,68 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
 }
 
 class _JoystickPainter extends CustomPainter {
-  final Offset _offset;
-  final double _joystickRadius;
-  final double _thumbRadius;
-  final bool _isPressed;
+  const _JoystickPainter({
+    required this.offset,
+    required this.joystickRadius,
+    required this.thumbRadius,
+    required this.isPressed,
+    required this.accentColor,
+  });
 
-  _JoystickPainter(
-      this._offset, this._joystickRadius, this._thumbRadius, this._isPressed);
+  final Offset offset;
+  final double joystickRadius;
+  final double thumbRadius;
+  final bool isPressed;
+  final Color accentColor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final joystickColor = _kDefaultColor;
-    final borderColor = _isPressed ? _kTapDownColor : _kDefaultBorderColor;
-    final thumbColor = _kWidgetHighlightColor;
-
-    final joystickPaint = Paint()
-      ..color = joystickColor
+    final basePaint = Paint()
+      ..color = CamelliaColors.darkSurface.withValues(alpha: 0.62)
       ..style = PaintingStyle.fill;
-
-    final borderPaint = Paint()
-      ..color = borderColor
+    final ringPaint = Paint()
+      ..color = isPressed
+          ? accentColor.withValues(alpha: 0.85)
+          : Colors.white.withValues(alpha: 0.28)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
+      ..strokeWidth = 0.9;
+    final innerGuidePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.12)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
 
-    final thumbPaint = Paint()
-      ..color = thumbColor
+    canvas.drawCircle(center, joystickRadius, basePaint);
+    canvas.drawCircle(center, joystickRadius, ringPaint);
+    canvas.drawCircle(center, joystickRadius * 0.52, innerGuidePaint);
+
+    // Subtle cardinal ticks
+    for (var i = 0; i < 4; i++) {
+      final angle = i * (pi / 2);
+      final p1 = center + Offset(cos(angle), sin(angle)) * (joystickRadius - 7);
+      final p2 = center + Offset(cos(angle), sin(angle)) * (joystickRadius - 2);
+      canvas.drawLine(p1, p2, innerGuidePaint);
+    }
+
+    final thumbCenter = center + offset;
+    final thumbFill = Paint()
+      ..color = isPressed
+          ? accentColor.withValues(alpha: 0.92)
+          : Colors.white.withValues(alpha: 0.88)
       ..style = PaintingStyle.fill;
+    final thumbBorder = Paint()
+      ..color = Colors.white.withValues(alpha: 0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1;
 
-    // Draw joystick base and border
-    canvas.drawCircle(center, _joystickRadius, joystickPaint);
-    canvas.drawCircle(center, _joystickRadius, borderPaint);
-
-    // Draw thumb
-    final thumbCenter = center + _offset;
-    canvas.drawCircle(thumbCenter, _thumbRadius, thumbPaint);
+    canvas.drawCircle(thumbCenter, thumbRadius, thumbFill);
+    canvas.drawCircle(thumbCenter, thumbRadius, thumbBorder);
   }
 
   @override
   bool shouldRepaint(covariant _JoystickPainter oldDelegate) {
-    return oldDelegate._offset != _offset ||
-        oldDelegate._isPressed != _isPressed;
+    return oldDelegate.offset != offset ||
+        oldDelegate.isPressed != isPressed ||
+        oldDelegate.accentColor != accentColor;
   }
 }

@@ -142,6 +142,8 @@ Future<StartupResult> initEnv(String appType) async {
   // for convenience, use global FFI on mobile platform
   // focus on multi-ffi on desktop first
   await initGlobalFFI();
+  // Hydrate persisted theme mode and aesthetic preset synchronously before UI mounts.
+  MyTheme.hydrateFromStorage();
   // await Firebase.initializeApp();
   _registerEventHandler();
   // Update the system theme.
@@ -385,7 +387,6 @@ hideCmWindow({bool isStartup = false}) async {
 
 void _runApp(String title, Widget home, ThemeMode themeMode) {
   final botToastBuilder = BotToastInit();
-  MyTheme.getThemePreference();
   runApp(
     RefreshWrapper(
       builder: (context) => ListenableBuilder(
@@ -410,11 +411,10 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
             navigatorKey: globalKey,
             debugShowCheckedModeBanner: false,
             title: title,
-            theme: MyTheme.lightTheme,
-            darkTheme: pref == CamelliaThemePreference.midnight
-                ? MyTheme.midnightTheme
-                : MyTheme.darkTheme,
+            theme: activeTheme,
+            darkTheme: activeTheme,
             themeMode: resolvedMode,
+            scrollBehavior: const CamelliaScrollBehavior(),
             home: home,
             localizationsDelegates: const [
               GlobalMaterialLocalizations.delegate,
@@ -427,12 +427,14 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
               BotToastNavigatorObserver(),
             ],
             builder: (context, child) {
-              child = _keepScaleBuilder(context, child);
-              child = botToastBuilder(context, child);
+              final scaledChild = _keepScaleBuilder(context, child);
               return AnimatedTheme(
                 data: activeTheme,
                 duration: Duration.zero,
-                child: child,
+                child: Builder(
+                  builder: (themedContext) =>
+                      botToastBuilder(themedContext, scaledChild),
+                ),
               );
             },
           );
@@ -457,25 +459,25 @@ class StartupErrorFallbackApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        backgroundColor: const Color(0xFF0F172A),
+        backgroundColor: const Color(0xFF0A0B0E),
         body: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
+            constraints: const BoxConstraints(maxWidth: 460),
             child: Container(
               margin: const EdgeInsets.all(24),
               padding: const EdgeInsets.all(28),
               decoration: BoxDecoration(
-                color: const Color(0xFF1E293B).withValues(alpha: 0.92),
-                borderRadius: BorderRadius.circular(16),
+                color: const Color(0xFF12141A),
+                borderRadius: BorderRadius.circular(18),
                 border: Border.all(
                   color: Colors.white.withValues(alpha: 0.12),
-                  width: 1,
+                  width: 0.85,
                 ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x66000000),
-                    blurRadius: 24,
-                    offset: Offset(0, 8),
+                    blurRadius: 32,
+                    offset: Offset(0, 12),
                   ),
                 ],
               ),
@@ -486,19 +488,23 @@ class StartupErrorFallbackApp extends StatelessWidget {
                     width: 52,
                     height: 52,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.16),
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.14),
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.28),
+                        width: 0.85,
+                      ),
                     ),
                     child: const Icon(
                       Icons.error_outline_rounded,
                       color: Color(0xFFEF4444),
-                      size: 28,
+                      size: 26,
                     ),
                   ),
                   const SizedBox(height: 16),
-                  const Text(
-                    'Camellia Remote Startup Error',
-                    style: TextStyle(
+                  Text(
+                    translate('Startup Error'),
+                    style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
@@ -506,7 +512,7 @@ class StartupErrorFallbackApp extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Stage: $stage',
+                    '${translate('Stage')}: $stage',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
@@ -519,7 +525,11 @@ class StartupErrorFallbackApp extends StatelessWidget {
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        width: 0.85,
+                      ),
                     ),
                     child: Text(
                       error,
@@ -579,6 +589,8 @@ WindowOptions getHiddenTitleBarWindowOptions({
 }
 
 class App extends StatefulWidget {
+  const App({super.key});
+
   @override
   State<App> createState() => _AppState();
 }
@@ -594,13 +606,10 @@ class _AppState extends State<App> with WidgetsBindingObserver {
       final systemIsDark =
           WidgetsBinding.instance.platformDispatcher.platformBrightness ==
           Brightness.dark;
-      final ThemeMode to;
-      if (systemIsDark) {
-        to = ThemeMode.dark;
-      } else {
-        to = ThemeMode.light;
+      final ThemeMode to = systemIsDark ? ThemeMode.dark : ThemeMode.light;
+      if (mounted) {
+        setState(() {});
       }
-      Get.changeThemeMode(to);
       // Synchronize the window theme of the system.
       updateSystemWindowTheme();
       if (desktopType == DesktopType.main) {
@@ -675,11 +684,10 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                 navigatorKey: globalKey,
                 debugShowCheckedModeBanner: false,
                 title: buildMainAppTitle(bind.mainGetAppNameSync()),
-                theme: MyTheme.lightTheme,
-                darkTheme: pref == CamelliaThemePreference.midnight
-                    ? MyTheme.midnightTheme
-                    : MyTheme.darkTheme,
+                theme: activeTheme,
+                darkTheme: activeTheme,
                 themeMode: resolvedMode,
+                scrollBehavior: const CamelliaScrollBehavior(),
                 home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
                 localizationsDelegates: const [
                   GlobalMaterialLocalizations.delegate,
@@ -692,28 +700,40 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                   BotToastNavigatorObserver(),
                 ],
                 builder: isAndroid
-                    ? (context, child) =>
-                          AccessibilityListener(child: child ?? Container())
+                    ? (context, child) => AnimatedTheme(
+                        data: activeTheme,
+                        duration: Duration.zero,
+                        child: Builder(
+                          builder: (themedContext) => AccessibilityListener(
+                            child: botToastBuilder(
+                              themedContext,
+                              child ?? const SizedBox.shrink(),
+                            ),
+                          ),
+                        ),
+                      )
                     : (context, child) {
-                        child = _keepScaleBuilder(context, child);
-                        child = botToastBuilder(context, child);
+                        Widget current = _keepScaleBuilder(context, child);
                         if ((isDesktop && desktopType == DesktopType.main) ||
                             isWebDesktop) {
-                          child = keyListenerBuilder(context, child);
+                          current = keyListenerBuilder(context, current);
                         }
                         if (isWeb) {
-                          child = FocusTraversalGroup(
+                          current = FocusTraversalGroup(
                             policy: WidgetOrderTraversalPolicy(),
-                            child: child,
+                            child: current,
                           );
                         }
                         final framedChild = isLinux
-                            ? buildVirtualWindowFrame(context, child)
-                            : workaroundWindowBorder(context, child);
+                            ? buildVirtualWindowFrame(context, current)
+                            : workaroundWindowBorder(context, current);
                         return AnimatedTheme(
                           data: activeTheme,
                           duration: Duration.zero,
-                          child: framedChild,
+                          child: Builder(
+                            builder: (themedContext) =>
+                                botToastBuilder(themedContext, framedChild),
+                          ),
                         );
                       },
               );
@@ -726,10 +746,10 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 }
 
 Widget _keepScaleBuilder(BuildContext context, Widget? child) {
-  return child ?? Container();
+  return child ?? const SizedBox.shrink();
 }
 
-_registerEventHandler() {
+void _registerEventHandler() {
   if (isDesktop && desktopType != DesktopType.main) {
     platformFFI.registerEventHandler('theme', 'theme', (evt) async {
       String? dark = evt['dark'];
@@ -750,7 +770,8 @@ _registerEventHandler() {
   // Register native handlers.
   if (isDesktop) {
     HardwareKeyboard.instance.addHandler((KeyEvent event) {
-      if (event.logicalKey == LogicalKeyboardKey.shiftLeft) {
+      if (event.logicalKey == LogicalKeyboardKey.shiftLeft ||
+          event.logicalKey == LogicalKeyboardKey.shiftRight) {
         if (event is KeyDownEvent) {
           gFFI.peerTabModel.setShiftDown(true);
         } else if (event is KeyUpEvent) {

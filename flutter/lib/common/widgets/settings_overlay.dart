@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import '../../ui/camellia_design.dart';
@@ -6,7 +7,7 @@ import 'adaptive_layout.dart';
 
 /// Opens settings without introducing another root navigation destination.
 /// Compact layouts use a frosted bottom sheet; larger layouts stay in the
-/// current workspace inside a Liquid Glass modal surface.
+/// current workspace inside a Precision Studio modal surface.
 Future<T?> showSettingsOverlay<T>({
   required BuildContext context,
   required String title,
@@ -20,38 +21,40 @@ Future<T?> showSettingsOverlay<T>({
       context: context,
       title: title,
       builder: (sheetContext) => SizedBox(
-        height: MediaQuery.sizeOf(sheetContext).height * 0.78,
+        height: MediaQuery.sizeOf(sheetContext).height * 0.80,
         child: builder(sheetContext),
       ),
     );
   }
 
-  final medium = width < AppLayout.expandedBreakpoint;
+  final slideOver = width < 920;
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: true,
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-    barrierColor: Colors.black.withValues(alpha: 0.42),
-    transitionDuration: AppMotion.duration(context, AppMotion.modal),
+    barrierColor: Colors.black.withValues(alpha: 0.44),
+    transitionDuration: CamelliaMotion.resolve(context, CamelliaMotion.modal),
     pageBuilder: (dialogContext, _, _) {
       final size = MediaQuery.sizeOf(dialogContext);
       final theme = Theme.of(dialogContext);
       final glass = CamelliaGlassTokens.of(dialogContext);
-      final accent = theme.brightness == Brightness.dark
+      final isDark = theme.brightness == Brightness.dark;
+      final accent = isDark
           ? theme.colorScheme.secondary
           : theme.colorScheme.primary;
-      final radius = BorderRadius.circular(medium ? 20 : 24);
+      final radius = BorderRadius.circular(slideOver ? 18 : 22);
 
       final surface = GlassSurface(
         layer: CamelliaGlassLayer.modal,
         elevated: true,
         borderRadius: radius,
+        strokeWidth: 0.85,
         child: Material(
           type: MaterialType.transparency,
           child: Column(
             children: [
               SizedBox(
-                height: 60,
+                height: 58,
                 child: Padding(
                   padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 12, 0),
                   child: Row(
@@ -60,13 +63,20 @@ Future<T?> showSettingsOverlay<T>({
                         width: 34,
                         height: 34,
                         decoration: BoxDecoration(
-                          color: accent.withValues(alpha: 0.14),
+                          color: accent.withValues(alpha: isDark ? 0.16 : 0.10),
                           borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: accent.withValues(alpha: 0.24),
+                            width: 0.85,
+                          ),
                         ),
-                        child: Icon(
-                          CamelliaIcons.settings,
-                          size: 19,
-                          color: accent,
+                        child: Center(
+                          child: CamelliaVectorIcon(
+                            CamelliaGlyph.settings,
+                            size: 18,
+                            color: accent,
+                            duotone: true,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -75,7 +85,9 @@ Future<T?> showSettingsOverlay<T>({
                           title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleLarge,
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                       if (actions.isNotEmpty) ...[
@@ -107,14 +119,14 @@ Future<T?> showSettingsOverlay<T>({
         ),
       );
 
-      if (medium) {
+      if (slideOver) {
         return SafeArea(
           child: Align(
             alignment: AlignmentDirectional.centerEnd,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: SizedBox(
-                width: (size.width * 0.90).clamp(520.0, 820.0),
+                width: (size.width * 0.92).clamp(520.0, 840.0),
                 height: size.height,
                 child: surface,
               ),
@@ -123,13 +135,13 @@ Future<T?> showSettingsOverlay<T>({
         );
       }
       return SafeArea(
-        minimum: const EdgeInsets.all(28),
+        minimum: const EdgeInsets.all(24),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(
-              maxWidth: 1040,
-              maxHeight: 760,
-              minWidth: 720,
+              maxWidth: 1080,
+              maxHeight: 780,
+              minWidth: 740,
               minHeight: 540,
             ),
             child: surface,
@@ -147,7 +159,7 @@ Future<T?> showSettingsOverlay<T>({
         opacity: curved,
         child: SlideTransition(
           position: Tween<Offset>(
-            begin: medium ? const Offset(0.04, 0) : const Offset(0, 0.025),
+            begin: slideOver ? const Offset(0.035, 0) : const Offset(0, 0.02),
             end: Offset.zero,
           ).animate(curved),
           child: child,

@@ -8,8 +8,6 @@ import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
-import '../../consts.dart';
-import '../../desktop/widgets/tabbar_widget.dart';
 import '../../models/chat_model.dart';
 import '../../models/model.dart';
 import 'chat_page.dart';
@@ -42,7 +40,7 @@ class DraggableChatWindow extends StatelessWidget {
             builder: (context) {
               return Column(
                 children: [
-                  _buildMobileAppBar(context),
+                  _buildChatHeader(context, isMobileHeader: true),
                   Expanded(child: ChatPage(chatModel: chatModel)),
                 ],
               );
@@ -56,111 +54,100 @@ class DraggableChatWindow extends StatelessWidget {
             height: height,
             chatModel: chatModel,
             builder: (context, onPanUpdate) {
-              final child = Scaffold(
-                resizeToAvoidBottomInset: false,
-                appBar: CustomAppBar(
-                  onPanUpdate: onPanUpdate,
-                  appBar: (isDesktop || isWebDesktop)
-                      ? _buildDesktopAppBar(context)
-                      : _buildMobileAppBar(context),
+              return GlassSurface(
+                layer: CamelliaGlassLayer.modal,
+                elevated: true,
+                strokeWidth: 0.85,
+                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                padding: EdgeInsets.zero,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                  child: Scaffold(
+                    backgroundColor: Colors.transparent,
+                    resizeToAvoidBottomInset: false,
+                    body: Column(
+                      children: [
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onPanUpdate: onPanUpdate,
+                          child: _buildChatHeader(
+                            context,
+                            isMobileHeader: !(isDesktop || isWebDesktop),
+                          ),
+                        ),
+                        Expanded(child: ChatPage(chatModel: chatModel)),
+                      ],
+                    ),
+                  ),
                 ),
-                body: ChatPage(chatModel: chatModel),
-              );
-              return Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: MyTheme.border),
-                ),
-                child: child,
               );
             },
           );
   }
 
-  Widget _buildMobileAppBar(BuildContext context) {
+  Widget _buildChatHeader(
+    BuildContext context, {
+    required bool isMobileHeader,
+  }) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
+    final accent = theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
     return Container(
-      color: Theme.of(context).colorScheme.primary,
-      height: 50,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            child: Text(
-              translate("Chat"),
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-              ),
-            ),
-          ),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              IconButton(
-                onPressed: () {
-                  chatModel.hideChatWindowOverlay();
-                },
-                icon: const Icon(
-                  Icons.keyboard_arrow_down,
-                  color: Colors.white,
-                ),
-              ),
-              IconButton(
-                onPressed: () {
-                  chatModel.hideChatWindowOverlay();
-                  chatModel.hideChatIconOverlay();
-                },
-                icon: const Icon(Icons.close, color: Colors.white),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDesktopAppBar(BuildContext context) {
-    return Container(
+      height: 42,
+      padding: const EdgeInsets.fromLTRB(14, 0, 6, 0),
       decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(
-            color: Theme.of(context).hintColor.withValues(alpha: 0.4),
-          ),
+          bottom: BorderSide(color: tokens.border, width: 0.85),
         ),
       ),
-      height: 38,
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+          Expanded(
             child: Obx(
-              () => Opacity(
-                opacity: chatModel.isWindowFocus.value ? 1.0 : 0.4,
+              () => AnimatedOpacity(
+                duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+                opacity: chatModel.isWindowFocus.value ? 1.0 : 0.65,
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.chat_bubble_outline,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.primary,
+                    Icon(CamelliaIcons.chat, size: 17, color: accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        translate("Chat"),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    SizedBox(width: 6),
-                    Text(translate("Chat")),
                   ],
                 ),
               ),
             ),
           ),
-          Padding(
-            padding: EdgeInsets.all(2),
-            child: ActionIcon(
-              message: 'Close',
-              icon: IconFont.close,
-              onTap: chatModel.hideChatWindowOverlay,
-              isClose: true,
-              boxSize: 32,
+          if (isMobileHeader)
+            GlassIconButton(
+              icon: Icons.keyboard_arrow_down_rounded,
+              size: 30,
+              iconSize: 18,
+              tooltip: translate('Minimize'),
+              onPressed: chatModel.hideChatWindowOverlay,
             ),
+          GlassIconButton(
+            icon: CamelliaIcons.close,
+            size: 30,
+            iconSize: 16,
+            tooltip: translate('Close'),
+            onPressed: () {
+              chatModel.hideChatWindowOverlay();
+              if (isMobileHeader) {
+                chatModel.hideChatIconOverlay();
+              }
+            },
           ),
         ],
       ),
@@ -211,6 +198,11 @@ class DraggableMobileActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
+    final btnSize = (32 * scale).clamp(28.0, 48.0);
+    final icoSize = (18 * scale).clamp(15.0, 26.0);
     return Draggable(
       position: position,
       width: scale * width,
@@ -218,49 +210,49 @@ class DraggableMobileActions extends StatelessWidget {
       builder: (_, onPanUpdate) {
         return GestureDetector(
           onPanUpdate: onPanUpdate,
-          child: Card(
-            color: Colors.transparent,
-            shadowColor: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: MyTheme.accent.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.all(Radius.circular(15 * scale)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  IconButton(
-                    color: Colors.white,
-                    onPressed: onBackPressed,
-                    icon: const Icon(Icons.arrow_back),
-                    iconSize: 24 * scale,
-                  ),
-                  IconButton(
-                    color: Colors.white,
-                    onPressed: onHomePressed,
-                    icon: const Icon(Icons.home),
-                    iconSize: 24 * scale,
-                  ),
-                  IconButton(
-                    color: Colors.white,
-                    onPressed: onRecentPressed,
-                    icon: const Icon(Icons.more_horiz),
-                    iconSize: 24 * scale,
-                  ),
-                  const VerticalDivider(
-                    width: 0,
-                    thickness: 2,
-                    indent: 10,
-                    endIndent: 10,
-                  ),
-                  IconButton(
-                    color: Colors.white,
-                    onPressed: onHidePressed,
-                    icon: const Icon(Icons.keyboard_arrow_down),
-                    iconSize: 24 * scale,
-                  ),
-                ],
-              ),
+          child: GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            elevated: true,
+            strokeWidth: 0.85,
+            borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+            padding: EdgeInsets.symmetric(horizontal: 6 * scale),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                GlassIconButton(
+                  icon: CamelliaIcons.arrowBack,
+                  size: btnSize,
+                  iconSize: icoSize,
+                  tooltip: translate('Back'),
+                  onPressed: onBackPressed,
+                ),
+                GlassIconButton(
+                  icon: CamelliaIcons.home,
+                  size: btnSize,
+                  iconSize: icoSize,
+                  tooltip: translate('Home'),
+                  onPressed: onHomePressed,
+                ),
+                GlassIconButton(
+                  icon: CamelliaIcons.more,
+                  size: btnSize,
+                  iconSize: icoSize,
+                  tooltip: translate('More'),
+                  onPressed: onRecentPressed,
+                ),
+                Container(
+                  width: 1,
+                  height: (20 * scale).clamp(14.0, 26.0),
+                  color: tokens.border,
+                ),
+                GlassIconButton(
+                  icon: Icons.keyboard_arrow_down_rounded,
+                  size: btnSize,
+                  iconSize: icoSize,
+                  tooltip: translate('Hide'),
+                  onPressed: onHidePressed,
+                ),
+              ],
             ),
           ),
         );
@@ -314,7 +306,7 @@ class DraggableKeyPosition {
     if (x + w > size.width) {
       x = size.width - w;
     }
-    final tabBarHeight = isDesktop ? kDesktopRemoteTabBarHeight : 0;
+    final tabBarHeight = isDesktop ? 40.0 : 0.0;
     if (y + h > (size.height - tabBarHeight)) {
       y = size.height - tabBarHeight - h;
     }
@@ -570,14 +562,22 @@ class IOSDraggableState extends State<IOSDraggable> {
               });
               _chatModel?.setChatWindowPosition(position.pos);
             },
-            child: Material(
-              child: Container(
-                width: _width,
-                height: _height,
-                decoration: BoxDecoration(
-                  border: Border.all(color: MyTheme.border),
+            child: SizedBox(
+              width: _width,
+              height: _height,
+              child: GlassSurface(
+                layer: CamelliaGlassLayer.modal,
+                elevated: true,
+                strokeWidth: 0.85,
+                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                padding: EdgeInsets.zero,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: widget.builder(context),
+                  ),
                 ),
-                child: widget.builder(context),
               ),
             ),
           ),

@@ -1,8 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:flutter/material.dart';
+
+import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
+// ignore: deprecated_member_use
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
@@ -16,7 +22,7 @@ void showServerSettings(
     final rawOptions = await bind.mainGetOptions();
     final decoded = jsonDecode(rawOptions);
     if (decoded is! Map<String, dynamic>) {
-      throw FormatException("Server options is not a valid JSON map");
+      throw const FormatException('Server options is not a valid JSON map');
     }
     showServerSettingsWithValue(
       ServerConfig.fromOptions(decoded),
@@ -24,23 +30,34 @@ void showServerSettings(
       setState,
     );
   } catch (e) {
-    debugPrint("Failed to load server config: $e");
+    debugPrint('Failed to load server config: $e');
     dialogManager.show((setStateDialog, close, context) {
       return CustomAlertDialog(
-        title: Text(translate('ID/Relay Server')),
-        content: Text(
-          '${translate("Failed to load server configuration")}: $e',
+        title: ModernDialogHeader.error(
+          title: translate('ID/Relay Server'),
+          subtitle: translate('Failed to load server configuration'),
+          onClose: close,
         ),
+        content: SelectableText(formatUserFriendlyError(e.toString())),
         actions: [
-          dialogButton("Cancel", onPressed: close, isOutline: true),
-          dialogButton(
-            "Retry",
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: close,
+            child: Text(translate('Cancel')),
+          ),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            minHeight: 38,
+            icon: const Icon(CamelliaIcons.refresh, size: 16),
             onPressed: () {
               close();
               showServerSettings(dialogManager, setState);
             },
+            child: Text(translate('Retry')),
           ),
         ],
+        onCancel: close,
       );
     });
   }
@@ -58,9 +75,9 @@ void showServerSettingsWithValue(
   final apiCtrl = TextEditingController(text: serverConfig.apiServer);
   final keyCtrl = TextEditingController(text: serverConfig.key);
 
-  RxString idServerMsg = ''.obs;
-  RxString relayServerMsg = ''.obs;
-  RxString apiServerMsg = ''.obs;
+  final RxString idServerMsg = ''.obs;
+  final RxString relayServerMsg = ''.obs;
+  final RxString apiServerMsg = ''.obs;
 
   final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
   final errMsgs = [idServerMsg, relayServerMsg, apiServerMsg];
@@ -72,12 +89,22 @@ void showServerSettingsWithValue(
         close();
       }
 
+      void clearAll() {
+        for (final c in controllers) {
+          c.clear();
+        }
+        for (final m in errMsgs) {
+          m.value = '';
+        }
+        setState(() {});
+      }
+
       Future<bool> submit() async {
         if (isInProgress || isClosed) return false;
         setState(() {
           isInProgress = true;
         });
-        bool ret = await setServerConfig(
+        final ret = await setServerConfig(
           null,
           errMsgs,
           ServerConfig(
@@ -107,113 +134,111 @@ void showServerSettingsWithValue(
         }
       }
 
-      Widget buildField(
-        String label,
-        TextEditingController controller,
-        String errorMsg, {
-        String? Function(String?)? validator,
-        bool autofocus = false,
-      }) {
-        if (isDesktop || isWeb) {
-          return Row(
-            children: [
-              SizedBox(width: 120, child: Text(label)),
-              SizedBox(width: 8),
-              Expanded(
-                child: serverSettingsTextFormField(
-                  label: label,
-                  controller: controller,
-                  errorMsg: errorMsg,
-                  contentPadding: EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 12,
-                  ),
-                  showLabelText: false,
-                  validator: validator,
-                  autofocus: autofocus,
-                ).workaroundFreezeLinuxMint(),
-              ),
-            ],
-          );
-        }
-
-        return serverSettingsTextFormField(
-          label: label,
-          controller: controller,
-          errorMsg: errorMsg,
-          validator: validator,
-        ).workaroundFreezeLinuxMint();
-      }
-
       return CustomAlertDialog(
-        title: Row(
-          children: [
-            Expanded(child: Text(translate('ID/Relay Server'))),
-            ...ServerConfigImportExportWidgets(controllers, errMsgs),
-          ],
+        title: ModernDialogHeader(
+          icon: Icons.dns_rounded,
+          title: translate('ID/Relay Server'),
+          subtitle: translate(
+            'Configure custom rendezvous, relay, and API endpoints',
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: ServerConfigImportExportWidgets(controllers, errMsgs),
+          ),
+          onClose: onCancel,
         ),
         content: ConstrainedBox(
           constraints: BoxConstraints(
             minWidth: math.max(
               0.0,
-              math.min(MediaQuery.sizeOf(context).width - 32, 500.0),
+              math.min(MediaQuery.sizeOf(context).width - 48, 480.0),
             ),
+            maxWidth: 500.0,
           ),
           child: Form(
             child: Obx(
               () => Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  buildField(
-                    translate('ID Server'),
-                    idCtrl,
-                    idServerMsg.value,
-                    autofocus: true,
-                  ),
-                  SizedBox(height: 8),
-                  if (!isIOS && !isWeb) ...[
-                    buildField(
-                      translate('Relay Server'),
-                      relayCtrl,
-                      relayServerMsg.value,
+                  if (isInProgress) ...[
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                      child: const LinearProgressIndicator(minHeight: 2.5),
                     ),
-                    SizedBox(height: 8),
+                    const SizedBox(height: 12),
                   ],
-                  buildField(
-                    translate('API Server'),
-                    apiCtrl,
-                    apiServerMsg.value,
+                  serverSettingsTextFormField(
+                    label: translate('ID Server'),
+                    hintText: 'id.example.com:21116',
+                    prefixIcon: Icons.hub_outlined,
+                    controller: idCtrl,
+                    errorMsg: idServerMsg.value,
+                    autofocus: true,
+                    onSubmitted: (_) => onOk(),
+                  ).workaroundFreezeLinuxMint(),
+                  const SizedBox(height: 12),
+                  if (!isIOS && !isWeb) ...[
+                    serverSettingsTextFormField(
+                      label: translate('Relay Server'),
+                      hintText: 'relay.example.com:21117',
+                      prefixIcon: Icons.swap_horiz_rounded,
+                      controller: relayCtrl,
+                      errorMsg: relayServerMsg.value,
+                      onSubmitted: (_) => onOk(),
+                    ).workaroundFreezeLinuxMint(),
+                    const SizedBox(height: 12),
+                  ],
+                  serverSettingsTextFormField(
+                    label: translate('API Server'),
+                    hintText: 'https://api.example.com',
+                    prefixIcon: Icons.cloud_outlined,
+                    controller: apiCtrl,
+                    errorMsg: apiServerMsg.value,
                     validator: (v) {
                       if (v != null && v.isNotEmpty) {
                         if (!(v.startsWith('http://') ||
-                            v.startsWith("https://"))) {
-                          return translate("invalid_http");
+                            v.startsWith('https://'))) {
+                          return translate('invalid_http');
                         }
                       }
                       return null;
                     },
-                  ),
-                  SizedBox(height: 8),
-                  buildField('Key', keyCtrl, ''),
-                  if (isInProgress)
-                    Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: LinearProgressIndicator(),
-                    ),
+                    onSubmitted: (_) => onOk(),
+                  ).workaroundFreezeLinuxMint(),
+                  const SizedBox(height: 12),
+                  serverSettingsTextFormField(
+                    label: translate('Key'),
+                    hintText: translate('Public key'),
+                    prefixIcon: Icons.vpn_key_outlined,
+                    controller: keyCtrl,
+                    errorMsg: '',
+                    onSubmitted: (_) => onOk(),
+                  ).workaroundFreezeLinuxMint(),
                 ],
               ),
             ),
           ),
         ),
         actions: [
-          dialogButton(
-            'Cancel',
-            onPressed: onCancel,
-            isOutline: true,
+          GlassButton(
+            variant: GlassButtonVariant.ghost,
+            minHeight: 38,
+            onPressed: isInProgress ? null : clearAll,
+            child: Text(translate('Clear')),
           ),
-          dialogButton(
-            'OK',
-            onPressed: onOk,
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: onCancel,
+            child: Text(translate('Cancel')),
+          ),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            minHeight: 38,
+            loading: isInProgress,
+            onPressed: isInProgress ? null : onOk,
+            child: Text(translate('OK')),
           ),
         ],
         onSubmit: onOk,
@@ -228,31 +253,291 @@ void showServerSettingsWithValue(
   }
 }
 
-TextFormField serverSettingsTextFormField({
+/// Precision frosted technical text field preserving literal host/key input
+/// (no autocorrect, smart quotes, smart dashes, capitalization, or spellcheck).
+Widget serverSettingsTextFormField({
   required String label,
   required TextEditingController controller,
   required String errorMsg,
+  String? hintText,
+  IconData? prefixIcon,
   String? Function(String?)? validator,
   bool autofocus = false,
   bool showLabelText = true,
   EdgeInsetsGeometry? contentPadding,
+  ValueChanged<String>? onSubmitted,
 }) {
-  return TextFormField(
+  return _ServerLiteralGlassField(
+    label: label,
     controller: controller,
-    decoration: InputDecoration(
-      labelText: showLabelText ? label : null,
-      errorText: errorMsg.isEmpty ? null : errorMsg,
-      contentPadding: contentPadding,
-    ),
+    errorMsg: errorMsg,
+    hintText: hintText,
+    prefixIcon: prefixIcon,
     validator: validator,
     autofocus: autofocus,
-    keyboardType: TextInputType.visiblePassword,
-    textCapitalization: TextCapitalization.none,
-    autocorrect: false,
-    enableSuggestions: false,
-    smartDashesType: SmartDashesType.disabled,
-    smartQuotesType: SmartQuotesType.disabled,
-    enableIMEPersonalizedLearning: false,
-    spellCheckConfiguration: const SpellCheckConfiguration.disabled(),
+    showLabelText: showLabelText,
+    contentPadding: contentPadding,
+    onSubmitted: onSubmitted,
   );
+}
+
+class _ServerLiteralGlassField extends StatefulWidget {
+  const _ServerLiteralGlassField({
+    required this.label,
+    required this.controller,
+    required this.errorMsg,
+    this.hintText,
+    this.prefixIcon,
+    this.validator,
+    this.autofocus = false,
+    this.showLabelText = true,
+    this.contentPadding,
+    this.onSubmitted,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final String errorMsg;
+  final String? hintText;
+  final IconData? prefixIcon;
+  final String? Function(String?)? validator;
+  final bool autofocus;
+  final bool showLabelText;
+  final EdgeInsetsGeometry? contentPadding;
+  final ValueChanged<String>? onSubmitted;
+
+  @override
+  State<_ServerLiteralGlassField> createState() =>
+      _ServerLiteralGlassFieldState();
+}
+
+class _ServerLiteralGlassFieldState extends State<_ServerLiteralGlassField> {
+  final FocusNode _focusNode = FocusNode();
+  bool _hovered = false;
+  bool _focused = false;
+  bool _hasText = false;
+  String? _validationMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _hasText = widget.controller.text.isNotEmpty;
+    widget.controller.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ServerLiteralGlassField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onTextChanged);
+      widget.controller.addListener(_onTextChanged);
+      _hasText = widget.controller.text.isNotEmpty;
+    }
+  }
+
+  void _onTextChanged() {
+    final nextHasText = widget.controller.text.isNotEmpty;
+    final nextVal = widget.validator?.call(widget.controller.text);
+    if ((nextHasText != _hasText || nextVal != _validationMsg) && mounted) {
+      setState(() {
+        _hasText = nextHasText;
+        _validationMsg = nextVal;
+      });
+    }
+  }
+
+  void _onFocusChanged() {
+    if (_focusNode.hasFocus != _focused && mounted) {
+      setState(() => _focused = _focusNode.hasFocus);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTextChanged);
+    _focusNode.removeListener(_onFocusChanged);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final resolvedError = widget.errorMsg.isNotEmpty
+        ? widget.errorMsg
+        : (_validationMsg ?? '');
+    final hasError = resolvedError.isNotEmpty;
+    final radius = BorderRadius.circular(CamelliaRadius.control);
+
+    final baseBg = _hovered
+        ? Color.alphaBlend(glass.hoverOverlay, glass.floatingTint)
+        : glass.floatingTint;
+    final borderTop = hasError
+        ? glass.statusAlert
+        : _focused
+        ? accent.withValues(alpha: 0.85)
+        : glass.specularTop;
+    final borderBottom = hasError
+        ? glass.statusAlert.withValues(alpha: 0.78)
+        : _focused
+        ? accent.withValues(alpha: 0.55)
+        : glass.specularBottom;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (widget.showLabelText && widget.label.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 6),
+            child: Text(
+              widget.label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: hasError
+                    ? glass.statusAlert
+                    : _focused
+                    ? accent
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        MouseRegion(
+          onEnter: (_) {
+            if (mounted) setState(() => _hovered = true);
+          },
+          onExit: (_) {
+            if (mounted) setState(() => _hovered = false);
+          },
+          child: AnimatedContainer(
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+            curve: CamelliaMotion.standard,
+            constraints: const BoxConstraints(minHeight: 44),
+            decoration: BoxDecoration(
+              color: baseBg,
+              borderRadius: radius,
+              boxShadow: [
+                if (_focused)
+                  BoxShadow(
+                    color: (hasError ? glass.statusAlert : glass.focusGlow)
+                        .withValues(alpha: dark ? 0.32 : 0.22),
+                    blurRadius: 8,
+                    spreadRadius: 0.5,
+                  ),
+              ],
+            ),
+            child: CustomPaint(
+              foregroundPainter: SpecularEdgePainter(
+                borderRadius: radius,
+                topColor: borderTop,
+                bottomColor: borderBottom,
+                strokeWidth: (_focused || hasError) ? 1.2 : 0.85,
+              ),
+              child: Padding(
+                padding:
+                    widget.contentPadding ??
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                child: Row(
+                  children: [
+                    if (widget.prefixIcon != null) ...[
+                      Icon(
+                        widget.prefixIcon,
+                        size: 18,
+                        color: hasError
+                            ? glass.statusAlert
+                            : _focused
+                            ? accent
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Expanded(
+                      child: TextField(
+                        controller: widget.controller,
+                        focusNode: _focusNode,
+                        autofocus: widget.autofocus,
+                        keyboardType: TextInputType.visiblePassword,
+                        textCapitalization: TextCapitalization.none,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        smartDashesType: SmartDashesType.disabled,
+                        smartQuotesType: SmartQuotesType.disabled,
+                        enableIMEPersonalizedLearning: false,
+                        spellCheckConfiguration:
+                            const SpellCheckConfiguration.disabled(),
+                        onSubmitted: widget.onSubmitted,
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                          ),
+                        ),
+                        cursorColor: accent,
+                        decoration: InputDecoration(
+                          hintText: widget.hintText,
+                          hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant
+                                .withValues(alpha: 0.72),
+                          ),
+                          isDense: true,
+                          filled: false,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_hasText)
+                      Tooltip(
+                        message: translate('Clear'),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(
+                            CamelliaRadius.pill,
+                          ),
+                          onTap: () {
+                            widget.controller.clear();
+                            HapticFeedback.selectionClick();
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Icon(
+                              CamelliaIcons.close,
+                              size: 16,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (hasError) ...[
+          const SizedBox(height: 5),
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Text(
+              resolvedError,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: glass.statusAlert,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/adaptive_layout.dart';
@@ -48,7 +49,10 @@ class ServerAccessMenuButton extends StatelessWidget {
     } else if (value == "setPermanentPassword") {
       setPasswordDialog();
     } else if (value == "setTemporaryPasswordLength") {
-      setTemporaryPasswordLengthDialog(gFFI.dialogManager);
+      setTemporaryPasswordLengthDialog(
+        gFFI.dialogManager,
+        sheetContext: context,
+      );
     } else if (value == "allowNumericOneTimePassword") {
       gFFI.serverModel.switchAllowNumericOneTimePassword();
       gFFI.serverModel.updatePasswordModel();
@@ -110,7 +114,7 @@ class ServerAccessMenuButton extends StatelessWidget {
           return ListTile(
             dense: true,
             enabled: enabled,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14),
             leading: icon == null
                 ? null
                 : Icon(
@@ -147,6 +151,7 @@ class ServerAccessMenuButton extends StatelessWidget {
         }
 
         return SingleChildScrollView(
+          padding: const EdgeInsets.only(bottom: 12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -171,7 +176,7 @@ class ServerAccessMenuButton extends StatelessWidget {
               sheetItem(
                 label: 'Accept sessions via click',
                 value: 'AcceptSessionsViaClick',
-                icon: Icons.touch_app_outlined,
+                icon: CamelliaIcons.touch,
                 checked: approveMode == 'click',
                 enabled: !isApproveModeFixed,
               ),
@@ -235,8 +240,8 @@ class ServerAccessMenuButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GlassIconButton(
       icon: CamelliaIcons.more,
-      size: 38,
-      iconSize: 19,
+      size: 36,
+      iconSize: 18,
       tooltip: translate('Access Control'),
       onPressed: () => _openAccessSheet(context),
     );
@@ -248,8 +253,10 @@ class _ServerPageState extends State<ServerPage> {
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       controller: gFFI.serverModel.controller,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
       child: const AdaptiveContent(
         maxWidth: 760,
+        padding: EdgeInsets.zero,
         child: ServerWorkspaceSection(),
       ),
     );
@@ -293,15 +300,9 @@ class _ServerWorkspaceSectionState extends State<ServerWorkspaceSection> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               buildPresetPasswordWarningMobile(),
-              AppStateTransition(
-                stateKey: serverModel.isStart,
-                child: serverModel.isStart
-                    ? ServerInfo()
-                    : ServiceNotRunningNotification(),
-              ),
+              const ServerInfo(),
               const ConnectionManager(),
               const PermissionChecker(),
-              const SizedBox(height: 16),
             ],
           );
         },
@@ -328,14 +329,13 @@ class ServiceNotRunningNotification extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-
     final warning = AppVisual.tone(context, AppTone.warning);
-    return PaddingCard(
+    return GlassCard(
       title: translate("Service is not running"),
-      titleIcon: Icon(Icons.warning_amber_rounded, color: warning),
-      tone: AppTone.warning,
+      leading: Icon(Icons.warning_amber_rounded, color: warning, size: 20),
+      margin: const EdgeInsets.only(bottom: 12),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             translate("android_start_service_tip"),
@@ -343,9 +343,10 @@ class ServiceNotRunningNotification extends StatelessWidget {
               color: AppVisual.subduedText(context),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           GlassButton(
             variant: GlassButtonVariant.primary,
+            expand: true,
             icon: const Icon(Icons.play_arrow_rounded),
             onPressed: serverModel.toggleService,
             child: Text(translate("Start service")),
@@ -356,6 +357,8 @@ class ServiceNotRunningNotification extends StatelessWidget {
   }
 }
 
+/// Studio Service Status Hero uniting Local ID, One-time Password, connection
+/// telemetry, and Start/Stop service action inside a single clear card.
 class ServerInfo extends StatefulWidget {
   const ServerInfo({super.key});
 
@@ -369,6 +372,7 @@ class _ServerInfoState extends State<ServerInfo> {
   double _refreshTurns = 0.0;
 
   void _copyToClipboard(String value) {
+    if (value.isEmpty) return;
     HapticFeedback.lightImpact();
     Clipboard.setData(ClipboardData(text: value));
     showToast(translate('Copied'));
@@ -377,26 +381,45 @@ class _ServerInfoState extends State<ServerInfo> {
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
+    final isRunning = serverModel.isStart;
+    final hideStopService =
+        isAndroid &&
+        bind.mainGetBuildinOption(key: kOptionHideStopService) == 'Y';
 
-    Widget connectionState() {
+    Widget statusBadge() {
+      if (!isRunning) {
+        return GlassBadge(
+          label: translate("Service is not running"),
+          tone: GlassBadgeTone.warning,
+          showDot: true,
+          compact: true,
+        );
+      }
       if (serverModel.connectStatus == -1) {
         return TelemetryPill(
           label: translate('not_ready_status'),
           statusColor: glass.statusAlert,
           icon: Icons.error_outline_rounded,
+          compact: true,
         );
       } else if (serverModel.connectStatus == 0) {
         return TelemetryPill(
           label: translate('connecting_status'),
           statusColor: glass.statusConnecting,
           icon: Icons.sync_rounded,
+          compact: true,
         );
       } else {
         return TelemetryPill(
           label: translate('Ready'),
           statusColor: glass.statusOnline,
           icon: Icons.verified_user_rounded,
+          compact: true,
         );
       }
     }
@@ -406,108 +429,142 @@ class _ServerInfoState extends State<ServerInfo> {
         serverModel.verificationMethod != kUsePermanentPassword;
     final idText = model.serverId.value.text;
     final passText = model.serverPasswd.value.text;
-    final maskedPass = passText.isEmpty ? '-' : '•' * passText.length;
+    final maskedPass = passText.isEmpty ? '—' : '•' * passText.length;
 
-    return PaddingCard(
+    return GlassCard(
       title: translate('Your Device'),
-      titleIcon: Icon(
-        Icons.devices_rounded,
-        color: Theme.of(context).colorScheme.primary,
+      subtitle: isRunning
+          ? translate('Share screen')
+          : translate('android_start_service_tip'),
+      leading: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: (isRunning ? glass.statusOnline : glass.statusHighLatency)
+              .withValues(alpha: dark ? 0.18 : 0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(
+          Icons.mobile_screen_share_rounded,
+          size: 18,
+          color: isRunning ? glass.statusOnline : glass.statusHighLatency,
+        ),
       ),
+      trailing: idText.trim().isNotEmpty
+          ? GlassIconButton(
+              icon: Icons.share_rounded,
+              tooltip: translate('Copy to clipboard'),
+              size: 34,
+              iconSize: 16,
+              onPressed: () {
+                final combined = showOneTime && passText.trim().isNotEmpty
+                    ? '${translate('ID')}: ${idText.trim()}\n${translate('Password')}: ${passText.trim()}'
+                    : idText.trim();
+                _copyToClipboard(combined);
+              },
+            )
+          : null,
+      margin: const EdgeInsets.only(top: 4, bottom: 12),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: connectionState(),
-                ),
-              ),
-              if (idText.trim().isNotEmpty)
-                GlassIconButton(
-                  icon: Icons.share_rounded,
-                  tooltip: translate('Copy to clipboard'),
-                  size: 36,
-                  iconSize: 18,
-                  onPressed: () {
-                    final combined = showOneTime && passText.trim().isNotEmpty
-                        ? '${translate('ID')}: ${idText.trim()}\n${translate('Password')}: ${passText.trim()}'
-                        : idText.trim();
-                    _copyToClipboard(combined);
-                  },
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
+          Align(alignment: Alignment.centerLeft, child: statusBadge()),
+          const SizedBox(height: 12),
           _CredentialRow(
             icon: Icons.fingerprint_rounded,
             label: translate('ID'),
-            value: idText,
+            value: idText.isEmpty ? '—' : idText,
+            tokens: tokens,
             actions: [
-              GlassIconButton(
-                tooltip: translate('Copy to clipboard'),
-                icon: Icons.copy_rounded,
-                size: 36,
-                iconSize: 18,
-                onPressed: () => _copyToClipboard(idText.trim()),
-              ),
+              if (idText.trim().isNotEmpty)
+                GlassIconButton(
+                  tooltip: translate('Copy to clipboard'),
+                  icon: CamelliaIcons.copy,
+                  size: 34,
+                  iconSize: 16,
+                  onPressed: () => _copyToClipboard(idText.trim()),
+                ),
             ],
           ),
-          const SizedBox(height: 10),
-          _CredentialRow(
-            icon: Icons.key_rounded,
-            label: translate('One-time Password'),
-            value: showOneTime
-                ? (_passwordVisible ? passText : maskedPass)
-                : '-',
-            tone: AppTone.warning,
-            actions: showOneTime
-                ? [
-                    GlassIconButton(
-                      tooltip: _passwordVisible
-                          ? translate('Hide')
-                          : translate('Show'),
-                      icon: _passwordVisible
-                          ? Icons.visibility_off_rounded
-                          : Icons.visibility_rounded,
-                      size: 36,
-                      iconSize: 18,
-                      onPressed: () {
-                        setState(() => _passwordVisible = !_passwordVisible);
-                      },
-                    ),
-                    const SizedBox(width: 6),
-                    AnimatedRotation(
-                      turns: _refreshTurns,
-                      duration: CamelliaMotion.resolve(
-                        context,
-                        const Duration(milliseconds: 420),
-                      ),
-                      curve: CamelliaMotion.springBouncy,
-                      child: GlassIconButton(
-                        tooltip: translate('Refresh'),
-                        icon: Icons.refresh_rounded,
-                        size: 36,
-                        iconSize: 18,
+          if (isRunning) ...[
+            const SizedBox(height: 10),
+            _CredentialRow(
+              icon: Icons.key_rounded,
+              label: translate('One-time Password'),
+              value: showOneTime
+                  ? (_passwordVisible ? passText : maskedPass)
+                  : '—',
+              tokens: tokens,
+              tone: AppTone.warning,
+              actions: showOneTime
+                  ? [
+                      GlassIconButton(
+                        tooltip: _passwordVisible
+                            ? translate('Hide')
+                            : translate('Show'),
+                        icon: _passwordVisible
+                            ? CamelliaIcons.eyeOff
+                            : CamelliaIcons.eye,
+                        size: 34,
+                        iconSize: 16,
                         onPressed: () {
-                          setState(() => _refreshTurns += 1.0);
-                          bind.mainUpdateTemporaryPassword();
+                          setState(
+                            () => _passwordVisible = !_passwordVisible,
+                          );
                         },
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    GlassIconButton(
-                      tooltip: translate('Copy to clipboard'),
-                      icon: Icons.copy_rounded,
-                      size: 36,
-                      iconSize: 18,
-                      onPressed: () => _copyToClipboard(passText.trim()),
-                    ),
-                  ]
-                : const [],
-          ),
+                      const SizedBox(width: 6),
+                      AnimatedRotation(
+                        turns: _refreshTurns,
+                        duration: CamelliaMotion.resolve(
+                          context,
+                          const Duration(milliseconds: 360),
+                        ),
+                        curve: CamelliaMotion.springSnappy,
+                        child: GlassIconButton(
+                          tooltip: translate('Refresh'),
+                          icon: CamelliaIcons.refresh,
+                          size: 34,
+                          iconSize: 16,
+                          onPressed: () {
+                            setState(() => _refreshTurns += 1.0);
+                            bind.mainUpdateTemporaryPassword();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      GlassIconButton(
+                        tooltip: translate('Copy to clipboard'),
+                        icon: CamelliaIcons.copy,
+                        size: 34,
+                        iconSize: 16,
+                        onPressed: () => _copyToClipboard(passText.trim()),
+                      ),
+                    ]
+                  : const [],
+            ),
+          ],
+          if (!isRunning || !hideStopService) ...[
+            const SizedBox(height: 14),
+            GlassButton(
+              variant: isRunning
+                  ? GlassButtonVariant.danger
+                  : GlassButtonVariant.primary,
+              expand: true,
+              minHeight: 44,
+              icon: Icon(
+                isRunning ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                size: 19,
+              ),
+              onPressed: serverModel.toggleService,
+              child: Text(
+                isRunning
+                    ? translate("Stop service")
+                    : translate("Start service"),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -520,6 +577,7 @@ class _CredentialRow extends StatelessWidget {
     required this.label,
     required this.value,
     required this.actions,
+    required this.tokens,
     this.tone = AppTone.info,
   });
 
@@ -527,48 +585,66 @@ class _CredentialRow extends StatelessWidget {
   final String label;
   final String value;
   final List<Widget> actions;
+  final AppDesignTokens tokens;
   final AppTone tone;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
     final color = AppVisual.tone(context, tone);
-    return GlassSurface(
-      layer: CamelliaGlassLayer.floating,
-      showShadow: false,
-      enableBlur: false,
-      tintColor: AppVisual.toneContainer(context, tone),
-      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 36,
-            height: 36,
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: Theme.of(context).textTheme.labelMedium),
-                const SizedBox(height: 2),
-                SelectableText(
-                  value,
-                  maxLines: 1,
-                  style: CamelliaTypography.tabular(
-                    Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.4,
-                      color: color,
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: tokens.surfaceContainer.withValues(alpha: dark ? 0.65 : 0.80),
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        border: Border.all(
+          color: tokens.border.withValues(alpha: 0.85),
+          width: 0.85,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: dark ? 0.18 : 0.11),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, color: color, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: tokens.muted,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  SelectableText(
+                    value,
+                    maxLines: 1,
+                    style: CamelliaTypography.tabular(
+                      theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.4,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          if (actions.isNotEmpty) ...actions,
-        ],
+            if (actions.isNotEmpty) ...actions,
+          ],
+        ),
       ),
     );
   }
@@ -585,6 +661,11 @@ class _PermissionCheckerState extends State<PermissionChecker> {
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
     final hasAudioPermission = androidVersion >= 30;
     final hideStopService =
         isAndroid &&
@@ -597,26 +678,23 @@ class _PermissionCheckerState extends State<PermissionChecker> {
         isAndroid &&
         serverModel.clients.any((c) => !c.disconnected) &&
         !allowPermChangeInAcceptWindow;
-    return PaddingCard(
+
+    return GlassCard(
       title: translate("Permissions"),
-      titleIcon: Icon(
-        Icons.admin_panel_settings_outlined,
-        color: AppVisual.tone(context, AppTone.secondary),
+      leading: Container(
+        width: 34,
+        height: 34,
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: dark ? 0.18 : 0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(CamelliaIcons.shield, size: 18, color: accent),
       ),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (serverModel.mediaOk && !hideStopService)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: GlassButton(
-                variant: GlassButtonVariant.danger,
-                expand: true,
-                icon: const Icon(Icons.stop_rounded, size: 18),
-                onPressed: serverModel.toggleService,
-                child: Text(translate("Stop service")),
-              ),
-            ),
           if (!hideStopService || !serverModel.mediaOk)
             PermissionRow(
               translate("Screen Capture"),
@@ -653,11 +731,11 @@ class _PermissionCheckerState extends State<PermissionChecker> {
                         Icons.info_outline_rounded,
                         size: 18,
                         color: CamelliaGlassTokens.of(context).statusEncrypted,
-                      ).marginOnly(right: 12),
+                      ).marginOnly(right: 10),
                       Expanded(
                         child: Text(
                           translate("android_version_audio_tip"),
-                          style: Theme.of(context).textTheme.bodySmall,
+                          style: theme.textTheme.bodySmall,
                         ),
                       ),
                     ],
@@ -695,56 +773,68 @@ class PermissionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final statusColor = isOk ? glass.statusOnline : glass.statusHighLatency;
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: GlassSurface(
-        layer: CamelliaGlassLayer.floating,
-        showShadow: false,
-        enableBlur: false,
-        borderRadius: BorderRadius.circular(CamelliaRadius.control),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(9),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: tokens.surfaceContainer.withValues(alpha: dark ? 0.65 : 0.80),
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          border: Border.all(
+            color: tokens.border.withValues(alpha: 0.85),
+            width: 0.85,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, size: 17, color: statusColor),
               ),
-              child: Icon(icon, size: 17, color: statusColor),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  GlassBadge(
-                    label: isOk ? translate('Ready') : translate('Required'),
-                    tone: isOk ? GlassBadgeTone.online : GlassBadgeTone.warning,
-                    showDot: true,
-                    compact: true,
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    GlassBadge(
+                      label: isOk ? translate('Ready') : translate('Required'),
+                      tone: isOk
+                          ? GlassBadgeTone.online
+                          : GlassBadgeTone.warning,
+                      showDot: true,
+                      compact: true,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Switch.adaptive(
-              value: isOk,
-              onChanged: enabled ? (_) => onPressed() : null,
-            ),
-          ],
+              Switch.adaptive(
+                value: isOk,
+                onChanged: enabled ? (_) => onPressed() : null,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -757,40 +847,51 @@ class ConnectionManager extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
+    if (serverModel.clients.isEmpty) return const SizedBox.shrink();
+
+    final glass = CamelliaGlassTokens.of(context);
     return Column(
       children: serverModel.clients
           .map(
-            (client) => PaddingCard(
+            (client) => GlassCard(
               title: translate(
                 client.isFileTransfer ? "Transfer file" : "Share screen",
               ),
-              titleIcon: Icon(
-                client.isFileTransfer
-                    ? CamelliaIcons.transfer
-                    : CamelliaIcons.display,
+              leading: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: glass.statusOnline.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  client.isFileTransfer
+                      ? CamelliaIcons.transfer
+                      : CamelliaIcons.display,
+                  size: 18,
+                  color: glass.statusOnline,
+                ),
               ),
+              trailing: (!client.isFileTransfer && client.authorized)
+                  ? GlassIconButton(
+                      icon: CamelliaIcons.chat,
+                      size: 36,
+                      iconSize: 18,
+                      tooltip: translate('Chat'),
+                      onPressed: () {
+                        gFFI.chatModel.changeCurrentKey(
+                          MessageKey(client.peerId, client.id),
+                        );
+                        HomePage.homeKey.currentState?.selectChatPage();
+                      },
+                    )
+                  : null,
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: ClientInfo(client)),
-                      if (!client.isFileTransfer && client.authorized)
-                        GlassIconButton(
-                          icon: CamelliaIcons.chat,
-                          size: 38,
-                          iconSize: 19,
-                          tooltip: translate('Chat'),
-                          onPressed: () {
-                            gFFI.chatModel.changeCurrentKey(
-                              MessageKey(client.peerId, client.id),
-                            );
-                            HomePage.homeKey.currentState?.selectChatPage();
-                          },
-                        ),
-                    ],
-                  ),
+                  ClientInfo(client),
                   if (!client.authorized)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
@@ -947,44 +1048,12 @@ class PaddingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final children = [child];
-    if (title != null) {
-      children.insert(
-        0,
-        Padding(
-          padding: const EdgeInsets.fromLTRB(0, 5, 0, 8),
-          child: Row(
-            children: [
-              titleIcon?.marginOnly(right: 10) ?? const SizedBox.shrink(),
-              Expanded(
-                child: Text(
-                  title!,
-                  style: Theme.of(context).textTheme.titleLarge?.merge(
-                    TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-    final glass = CamelliaGlassTokens.of(context);
-    return SizedBox(
-      width: double.maxFinite,
-      child: GlassSurface(
-        layer: CamelliaGlassLayer.floating,
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
-        elevated: tone != null,
-        tintColor: tone == null
-            ? null
-            : Color.alphaBlend(
-                AppVisual.tone(context, tone!).withValues(alpha: 0.06),
-                glass.floatingTint,
-              ),
-        child: Column(children: children),
-      ),
+    return GlassCard(
+      title: title,
+      leading: titleIcon,
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      child: child,
     );
   }
 }
@@ -997,33 +1066,31 @@ class ClientInfo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
+      child: Row(
         children: [
-          Row(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: _buildAvatar(context),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      client.name,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      client.peerId,
-                      style: CamelliaTypography.tabular(
-                        Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: _buildAvatar(context),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  client.name,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 2),
+                Text(
+                  client.peerId,
+                  style: CamelliaTypography.tabular(
+                    Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1090,9 +1157,7 @@ void androidChannelInit() {
           }
         case "stop_service":
           {
-            debugPrint(
-              "stop_service by kotlin, isStart:${gFFI.serverModel.isStart}",
-            );
+            debugPrint("stop_service by kotlin");
             gFFI.serverModel.stopService();
             break;
           }

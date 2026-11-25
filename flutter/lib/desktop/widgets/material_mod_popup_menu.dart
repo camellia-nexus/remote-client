@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
+import 'package:camellia_remote_app/common.dart' show AppVisual;
 import 'package:camellia_remote_app/desktop/widgets/menu_button.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
@@ -649,10 +652,15 @@ class _PopupMenuState<T> extends State<_PopupMenu<T>> {
       ),
     );
 
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
     final glassMenu = GlassSurface(
       layer: CamelliaGlassLayer.modal,
       borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-      tintColor: route.color,
+      tintColor: route.color ?? glass.modalTint,
+      borderTopColor: glass.specularTop,
+      borderBottomColor: tokens.border,
+      strokeWidth: 0.85,
       elevated: true,
       child: Material(
         type: MaterialType.transparency,
@@ -729,40 +737,40 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
     // size: The size of the overlay.
     // childSize: The size of the menu, when fully open, as determined by
     // getConstraintsForChild.
+    final double safeAnchorX = position.left.clamp(0.0, size.width);
+    final double safeAnchorY = position.top.clamp(0.0, size.height);
+    final double buttonHeight = math.max(
+      0.0,
+      size.height - position.top - position.bottom,
+    );
 
-    final double buttonHeight = size.height - position.top - position.bottom;
     // Find the ideal vertical position.
-    double y = position.top;
+    double y = safeAnchorY;
     if (selectedItemIndex != null) {
       double selectedItemOffset = _kMenuVerticalPadding;
       for (int index = 0; index < selectedItemIndex!; index += 1) {
-        selectedItemOffset += itemSizes[index]!.height;
+        selectedItemOffset += itemSizes[index]?.height ?? 0.0;
       }
-      selectedItemOffset += itemSizes[selectedItemIndex!]!.height / 2;
+      selectedItemOffset += (itemSizes[selectedItemIndex!]?.height ?? 0.0) / 2;
       y = y + buttonHeight / 2.0 - selectedItemOffset;
     }
 
     // Find the ideal horizontal position.
     double x;
-    // if (position.left > position.right) {
-    //   // Menu button is closer to the right edge, so grow to the left, aligned to the right edge.
-    //   x = size.width - position.right - childSize.width;
-    // } else if (position.left < position.right) {
-    //   // Menu button is closer to the left edge, so grow to the right, aligned to the left edge.
-    //   x = position.left;
-    // } else {
-    // Menu button is equidistant from both edges, so grow in reading direction.
     switch (textDirection) {
       case TextDirection.rtl:
-        x = size.width - position.right - childSize.width;
+        final safeRight = position.right.clamp(0.0, size.width);
+        x = size.width - safeRight - childSize.width;
         break;
       case TextDirection.ltr:
-        x = position.left;
+        x = safeAnchorX;
         break;
     }
-    //}
     final Offset wantedPosition = Offset(x, y);
-    final Offset originCenter = position.toRect(Offset.zero & size).center;
+    final Offset originCenter = Offset(
+      safeAnchorX,
+      safeAnchorY + buttonHeight / 2.0,
+    );
     final Iterable<Rect> subScreens =
         DisplayFeatureSubScreen.subScreensInBounds(
           Offset.zero & size,
@@ -784,27 +792,22 @@ class _PopupMenuRouteLayout extends SingleChildLayoutDelegate {
   }
 
   Offset _fitInsideScreen(Rect screen, Size childSize, Offset wantedPosition) {
-    double x = wantedPosition.dx;
-    double y = wantedPosition.dy;
-    // Avoid going outside an area defined as the rectangle 8.0 pixels from the
-    // edge of the screen in every direction.
-    if (x < screen.left + _kMenuScreenPadding + padding.left) {
-      x = screen.left + _kMenuScreenPadding + padding.left;
-    } else if (x + childSize.width >
-        screen.right - _kMenuScreenPadding - padding.right) {
-      x = screen.right - childSize.width - _kMenuScreenPadding - padding.right;
-    }
-    if (y < screen.top + _kMenuScreenPadding + padding.top) {
-      y = _kMenuScreenPadding + padding.top;
-    } else if (y + childSize.height >
-        screen.bottom - _kMenuScreenPadding - padding.bottom) {
-      y =
-          screen.bottom -
-          childSize.height -
-          _kMenuScreenPadding -
-          padding.bottom;
-    }
+    // Enforce >= 8px viewport edge clamping on both horizontal & vertical axes
+    // so right-clicking near right/bottom window edges never clips off-screen.
+    final double edgeMargin = math.max(8.0, _kMenuScreenPadding);
+    final double minX = screen.left + edgeMargin + padding.left;
+    final double maxX = math.max(
+      minX,
+      screen.right - childSize.width - edgeMargin - padding.right,
+    );
+    final double minY = screen.top + edgeMargin + padding.top;
+    final double maxY = math.max(
+      minY,
+      screen.bottom - childSize.height - edgeMargin - padding.bottom,
+    );
 
+    final double x = wantedPosition.dx.clamp(minX, maxX);
+    final double y = wantedPosition.dy.clamp(minY, maxY);
     return Offset(x, y);
   }
 
@@ -1000,9 +1003,15 @@ class _StandalonePopupMenuState<T> extends State<PopupMenu<T>> {
       ),
     );
 
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
     return GlassSurface(
       layer: CamelliaGlassLayer.modal,
       borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+      tintColor: glass.modalTint,
+      borderTopColor: glass.specularTop,
+      borderBottomColor: tokens.border,
+      strokeWidth: 0.85,
       elevated: true,
       child: Material(
         type: MaterialType.transparency,

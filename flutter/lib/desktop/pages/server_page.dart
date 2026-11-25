@@ -285,12 +285,72 @@ class ConnectionManagerState extends State<ConnectionManager>
     if (selected < 0 || selected >= gFFI.serverModel.clients.length) {
       return const Offstage();
     }
-    final clientType = gFFI.serverModel.clients[selected].type_();
-    if (clientType == ClientType.file) {
-      return const _FileTransferLogPage();
-    } else {
-      return ChatPage(type: ChatPageType.desktopCM);
-    }
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
+    final theme = Theme.of(context);
+    final client = gFFI.serverModel.clients[selected];
+    final isFile = client.type_() == ClientType.file;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          right: BorderSide(color: tokens.border, width: 0.85),
+        ),
+      ),
+      child: Column(
+        children: [
+          Container(
+            height: 36,
+            padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: tokens.border, width: 0.85),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isFile ? CamelliaIcons.transfer : CamelliaIcons.chat,
+                  size: 15,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    isFile ? translate('Transfer Queue') : translate('Chat'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                GlassIconButton(
+                  icon: CamelliaIcons.close,
+                  size: 26,
+                  iconSize: 14,
+                  tooltip: translate('Close'),
+                  onPressed: () {
+                    if (isFile) {
+                      gFFI.chatModel.toggleCMFilePage();
+                    } else {
+                      gFFI.chatModel.toggleCMChatPage(
+                        MessageKey(client.peerId, client.id),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: isFile
+                ? const _FileTransferLogPage()
+                : ChatPage(type: ChatPageType.desktopCM),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildKeyEventBlock(Widget child) {
@@ -336,9 +396,9 @@ class ConnectionManagerState extends State<ConnectionManager>
   }
 
   Future<bool> handleWindowCloseButton() async {
-    var tabController = gFFI.serverModel.tabController;
+    final tabController = gFFI.serverModel.tabController;
     final connLength = tabController.length;
-    if (connLength <= 0) {
+    if (connLength <= 1) {
       windowManager.close();
       return true;
     } else {
@@ -349,7 +409,7 @@ class ConnectionManagerState extends State<ConnectionManager>
       )) {
         res = true;
       } else {
-        res = await closeConfirmDialog();
+        res = await closeConfirmDialog(isSessionWindow: true);
       }
       if (res) {
         windowManager.close();
@@ -978,7 +1038,7 @@ class _CmControlPanel extends StatelessWidget {
 
   Future<void> _showAudioDeviceMenu(
     BuildContext context,
-    TapDownDetails details,
+    Offset globalPosition,
   ) async {
     final devicesInfo = await AudioInput.getDevicesInfo(true, true);
     final List<String> devices = devicesInfo['devices'] as List<String>;
@@ -996,41 +1056,24 @@ class _CmControlPanel extends StatelessWidget {
 
     if (!context.mounted) return;
     final String currentDevice = devicesInfo['current'] as String;
-    final x = details.globalPosition.dx;
-    final y = details.globalPosition.dy;
-    final position = RelativeRect.fromLTRB(x, y, x, y);
-    await showMenu<String>(
+    await showFrostedContextMenu(
       context: context,
-      position: position,
-      items: devices
-          .map(
-            (d) => PopupMenuItem<String>(
-              value: d,
-              height: 36,
-              onTap: () => AudioInput.setDevice(d, true, true),
-              child: Row(
-                children: [
-                  if (d == currentDevice)
-                    Icon(
-                      CamelliaIcons.check,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.primary,
-                    )
-                  else
-                    const SizedBox(width: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      d,
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          )
-          .toList(),
+      globalPosition: globalPosition,
+      minWidth: 220,
+      maxWidth: 320,
+      itemsBuilder: (closeMenu) => [
+        for (final d in devices)
+          FrostedMenuItem(
+            label: d,
+            icon: d == currentDevice
+                ? CamelliaIcons.check
+                : CamelliaIcons.voiceCall,
+            onTap: () {
+              closeMenu();
+              AudioInput.setDevice(d, true, true);
+            },
+          ),
+      ],
     );
   }
 
@@ -1041,6 +1084,7 @@ class _CmControlPanel extends StatelessWidget {
         canElevate &&
         model.showElevation &&
         client.type_() == ClientType.remote;
+    Offset audioBtnGlobalPos = Offset.zero;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1050,11 +1094,8 @@ class _CmControlPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: GestureDetector(
-                  onTapDown: (details) => checkClickTime(
-                    client.id,
-                    () => _showAudioDeviceMenu(context, details),
-                  ),
+                child: Listener(
+                  onPointerDown: (e) => audioBtnGlobalPos = e.position,
                   child: GlassButton(
                     variant: GlassButtonVariant.secondary,
                     minHeight: 40,
@@ -1064,7 +1105,10 @@ class _CmControlPanel extends StatelessWidget {
                       vertical: 8,
                     ),
                     icon: const Icon(CamelliaIcons.voiceCall, size: 16),
-                    onPressed: () {},
+                    onPressed: () => checkClickTime(
+                      client.id,
+                      () => _showAudioDeviceMenu(context, audioBtnGlobalPos),
+                    ),
                     child: Text(
                       translate("Audio input"),
                       maxLines: 1,
@@ -1251,7 +1295,9 @@ class _CmControlPanel extends StatelessWidget {
                   icon: const Icon(CamelliaIcons.check, size: 17),
                   onPressed: () => checkClickTime(client.id, () {
                     handleAccept(context);
-                    windowManager.minimize();
+                    if (model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
+                      windowManager.minimize();
+                    }
                   }),
                   child: Text(
                     translate('Accept'),
@@ -1274,7 +1320,9 @@ class _CmControlPanel extends StatelessWidget {
                     icon: const Icon(CamelliaIcons.eye, size: 17),
                     onPressed: () => checkClickTime(client.id, () {
                       handleAcceptViewOnly(context);
-                      windowManager.minimize();
+                      if (model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
+                        windowManager.minimize();
+                      }
                     }),
                     child: Text(
                       translate('View Only'),

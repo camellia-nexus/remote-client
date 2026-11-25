@@ -741,30 +741,44 @@ class MyTheme {
     );
   }
 
+  static bool _themeHydrated = false;
+
+  /// Synchronously hydrates saved theme mode and theme style on cold start
+  /// before the first frame renders, preventing startup flashes or requiring
+  /// a visit to Settings before user preferences take effect.
+  static void hydrateFromStorage() {
+    try {
+      final savedPref = bind.mainGetLocalOption(key: kCommConfKeyTheme);
+      if (savedPref.trim().isNotEmpty) {
+        themeNotifier.value = themePreferenceFromString(savedPref);
+      }
+    } catch (_) {}
+    try {
+      final savedStyle = bind.mainGetLocalOption(key: 'theme_style');
+      if (savedStyle.trim().isNotEmpty) {
+        themeStyleNotifier.value = CamelliaThemeStyle.fromString(savedStyle);
+      }
+    } catch (_) {}
+    _themeHydrated = true;
+  }
+
   static final ValueNotifier<CamelliaThemeStyle> themeStyleNotifier =
       ValueNotifier<CamelliaThemeStyle>(CamelliaThemeStyle.auroraFrost);
 
   static CamelliaThemeStyle getThemeStyle() {
+    if (!_themeHydrated) {
+      hydrateFromStorage();
+    }
     return themeStyleNotifier.value;
   }
 
   static Future<void> changeThemeStyle(CamelliaThemeStyle style) async {
-    themeStyleNotifier.value = style;
-    final pref = themeNotifier.value;
-    final mode = switch (pref) {
-      CamelliaThemePreference.light => ThemeMode.light,
-      CamelliaThemePreference.dark ||
-      CamelliaThemePreference.midnight => ThemeMode.dark,
-      CamelliaThemePreference.system => MyTheme.currentThemeMode(),
-    };
-    final resolvedTheme = mode == ThemeMode.light
-        ? lightTheme
-        : (pref == CamelliaThemePreference.midnight ? midnightTheme : darkTheme);
-    Get.changeTheme(resolvedTheme);
-    Get.changeThemeMode(mode);
-    updateSystemWindowTheme();
-
+    _themeHydrated = true;
     unawaited(bind.mainSetLocalOption(key: 'theme_style', value: style.name));
+    themeStyleNotifier.value = style;
+    await updateSystemWindowTheme();
+
+    final pref = themeNotifier.value;
     final persisted = switch (pref) {
       CamelliaThemePreference.light => 'light',
       CamelliaThemePreference.dark => 'dark',
@@ -824,20 +838,26 @@ class MyTheme {
   static final ValueNotifier<CamelliaThemePreference> themeNotifier =
       ValueNotifier<CamelliaThemePreference>(CamelliaThemePreference.system);
 
-  static ThemeData get activeDarkTheme =>
-      getThemePreference() == CamelliaThemePreference.midnight
-      ? midnightTheme
-      : darkTheme;
+  static ThemeData get activeDarkTheme {
+    if (!_themeHydrated) {
+      hydrateFromStorage();
+    }
+    return themeNotifier.value == CamelliaThemePreference.midnight
+        ? midnightTheme
+        : darkTheme;
+  }
 
   static CamelliaThemePreference getThemePreference() {
     try {
-      final pref = themePreferenceFromString(
-        bind.mainGetLocalOption(key: kCommConfKeyTheme),
-      );
-      if (themeNotifier.value != pref) {
+      final raw = bind.mainGetLocalOption(key: kCommConfKeyTheme);
+      if (raw.trim().isEmpty && _themeHydrated) {
+        return themeNotifier.value;
+      }
+      final pref = themePreferenceFromString(raw);
+      if (!_themeHydrated && themeNotifier.value != pref) {
         themeNotifier.value = pref;
       }
-      return pref;
+      return _themeHydrated ? themeNotifier.value : pref;
     } catch (_) {
       return themeNotifier.value;
     }
@@ -845,9 +865,16 @@ class MyTheme {
 
   static ThemeMode getThemeModePreference() {
     try {
-      return themeModeFromString(
-        bind.mainGetLocalOption(key: kCommConfKeyTheme),
-      );
+      final raw = bind.mainGetLocalOption(key: kCommConfKeyTheme);
+      if (raw.trim().isEmpty && _themeHydrated) {
+        return switch (themeNotifier.value) {
+          CamelliaThemePreference.light => ThemeMode.light,
+          CamelliaThemePreference.dark ||
+          CamelliaThemePreference.midnight => ThemeMode.dark,
+          CamelliaThemePreference.system => ThemeMode.system,
+        };
+      }
+      return themeModeFromString(raw);
     } catch (_) {
       return themeNotifier.value == CamelliaThemePreference.light
           ? ThemeMode.light
@@ -861,20 +888,7 @@ class MyTheme {
   static Future<void> changeThemePreference(
     CamelliaThemePreference preference,
   ) async {
-    themeNotifier.value = preference;
-    final mode = switch (preference) {
-      CamelliaThemePreference.light => ThemeMode.light,
-      CamelliaThemePreference.dark ||
-      CamelliaThemePreference.midnight => ThemeMode.dark,
-      CamelliaThemePreference.system => ThemeMode.system,
-    };
-    final resolvedTheme = mode == ThemeMode.light
-        ? lightTheme
-        : (preference == CamelliaThemePreference.midnight ? midnightTheme : darkTheme);
-    Get.changeTheme(resolvedTheme);
-    Get.changeThemeMode(mode);
-    updateSystemWindowTheme();
-
+    _themeHydrated = true;
     final persisted = switch (preference) {
       CamelliaThemePreference.light => 'light',
       CamelliaThemePreference.dark => 'dark',
@@ -885,6 +899,8 @@ class MyTheme {
       unawaited(bind.mainSetLocalOption(key: kCommConfKeyTheme, value: persisted));
       if (!isWeb) unawaited(bind.mainChangeTheme(dark: persisted));
     }
+    themeNotifier.value = preference;
+    await updateSystemWindowTheme();
   }
 
   static Future<void> changeDarkMode(ThemeMode mode) async {
@@ -2038,6 +2054,7 @@ void showToast(
   IconData? icon,
   AppTone? tone,
 }) {
+  final rawText = text;
   text = formatUserFriendlyError(text);
   final overlayState = globalKey.currentState?.overlay;
   if (overlayState == null) return;
@@ -2045,27 +2062,46 @@ void showToast(
   AppTone resolvedTone = tone ?? AppTone.info;
   IconData resolvedIcon = icon ?? Icons.info_outline_rounded;
   if (tone == null && icon == null) {
-    final lower = text.toLowerCase();
-    if (lower.contains('success') ||
-        lower.contains('copied') ||
-        lower.contains('done') ||
-        lower.contains('saved') ||
-        lower.contains('connected') ||
-        lower.contains('succeed')) {
+    final probe = '${rawText.toLowerCase()} ${text.toLowerCase()}';
+    if (probe.contains('success') ||
+        probe.contains('copied') ||
+        probe.contains('done') ||
+        probe.contains('saved') ||
+        probe.contains('connected') ||
+        probe.contains('succeed') ||
+        probe.contains('成功') ||
+        probe.contains('已复制') ||
+        probe.contains('已複製') ||
+        probe.contains('已保存') ||
+        probe.contains('已儲存')) {
       resolvedTone = AppTone.success;
       resolvedIcon = Icons.check_circle_outline_rounded;
-    } else if (lower.contains('fail') ||
-        lower.contains('error') ||
-        lower.contains('invalid') ||
-        lower.contains('denied') ||
-        lower.contains('cannot') ||
-        lower.contains('not exist')) {
+    } else if (probe.contains('fail') ||
+        probe.contains('error') ||
+        probe.contains('invalid') ||
+        probe.contains('denied') ||
+        probe.contains('cannot') ||
+        probe.contains('not exist') ||
+        probe.contains('失败') ||
+        probe.contains('失敗') ||
+        probe.contains('错误') ||
+        probe.contains('錯誤') ||
+        probe.contains('无效') ||
+        probe.contains('無效') ||
+        probe.contains('拒绝') ||
+        probe.contains('拒絕') ||
+        probe.contains('无法') ||
+        probe.contains('無法')) {
       resolvedTone = AppTone.danger;
       resolvedIcon = Icons.error_outline_rounded;
-    } else if (lower.contains('warn') ||
-        lower.contains('caution') ||
-        lower.contains('wait') ||
-        lower.contains('timeout')) {
+    } else if (probe.contains('warn') ||
+        probe.contains('caution') ||
+        probe.contains('wait') ||
+        probe.contains('timeout') ||
+        probe.contains('警告') ||
+        probe.contains('超时') ||
+        probe.contains('逾時') ||
+        probe.contains('请稍候')) {
       resolvedTone = AppTone.warning;
       resolvedIcon = Icons.warning_amber_rounded;
     }
@@ -2118,12 +2154,33 @@ class _HandshakeLoadingCardState extends State<_HandshakeLoadingCard>
   int _timeBasedStage = 0;
   Timer? _stageTimer;
 
-  static const _stages = <({String label, IconData icon})>[
-    (label: 'Addressing', icon: Icons.sensors_rounded),
-    (label: 'Route & Relay', icon: Icons.hub_rounded),
-    (label: 'Encrypted Handshake', icon: Icons.verified_user_rounded),
-    (label: 'Video Stream', icon: Icons.monitor_rounded),
-  ];
+  List<({String label, IconData icon})> get _stages {
+    final finalStage = switch (kWindowType) {
+      WindowType.FileTransfer => (
+        label: 'File Transfer',
+        icon: Icons.folder_copy_rounded,
+      ),
+      WindowType.Terminal => (
+        label: 'Terminal',
+        icon: Icons.terminal_rounded,
+      ),
+      WindowType.PortForward => (
+        label: 'Port Forward',
+        icon: Icons.hub_rounded,
+      ),
+      WindowType.ViewCamera => (
+        label: 'View Camera',
+        icon: Icons.videocam_rounded,
+      ),
+      _ => (label: 'Video Stream', icon: Icons.monitor_rounded),
+    };
+    return <({String label, IconData icon})>[
+      (label: 'Addressing', icon: Icons.sensors_rounded),
+      (label: 'Route & Relay', icon: Icons.hub_rounded),
+      (label: 'Encrypted Handshake', icon: Icons.verified_user_rounded),
+      finalStage,
+    ];
+  }
 
   @override
   void initState() {
@@ -4867,6 +4924,8 @@ String getWindowName({WindowType? overrideType}) {
       return "View Camera - $name";
     case WindowType.PortForward:
       return "Port Forward - $name";
+    case WindowType.Terminal:
+      return "Terminal - $name";
     case WindowType.RemoteDesktop:
       return "Remote Desktop - $name";
     default:
@@ -4880,17 +4939,15 @@ String getWindowNameWithId(String id, {WindowType? overrideType}) {
 }
 
 Future<void> updateSystemWindowTheme() async {
-  // Set system window theme for macOS.
-  final userPreference = MyTheme.getThemeModePreference();
-  if (userPreference != ThemeMode.system) {
-    if (isMacOS) {
-      await RdPlatformChannel.instance.changeSystemWindowTheme(
-        userPreference == ThemeMode.light
-            ? SystemWindowTheme.light
-            : SystemWindowTheme.dark,
-      );
-    }
-  }
+  if (!isMacOS) return;
+  try {
+    final resolvedMode = MyTheme.currentThemeMode();
+    await RdPlatformChannel.instance.changeSystemWindowTheme(
+      resolvedMode == ThemeMode.light
+          ? SystemWindowTheme.light
+          : SystemWindowTheme.dark,
+    );
+  } catch (_) {}
 }
 
 /// macOS only
@@ -5122,55 +5179,84 @@ Widget buildErrorBanner(
   required Function? retry,
   required Function close,
 }) {
-  return Obx(
-    () => Offstage(
-      offstage: !(!loading.value && err.value.isNotEmpty),
-      child: Center(
-        child: Container(
-          color: MyTheme.color(context).errorBannerBg,
+  return Obx(() {
+    if (loading.value || err.value.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final alertColor = glass.statusAlert;
+    final message = formatUserFriendlyError(err.value);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: alertColor.withValues(alpha: dark ? 0.14 : 0.08),
+          borderRadius: BorderRadius.circular(CamelliaRadius.control),
+          border: Border.all(
+            color: alertColor.withValues(alpha: dark ? 0.32 : 0.22),
+            width: 0.9,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              FittedBox(
-                child: Icon(
-                  Icons.info,
-                  color: Color.fromARGB(255, 249, 81, 81),
-                ),
-              ).marginAll(4),
-              Flexible(
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Tooltip(
-                    message: translate(err.value),
-                    child: SelectableText(translate(err.value)),
+              Icon(Icons.error_outline_rounded, size: 18, color: alertColor),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Tooltip(
+                  message: message,
+                  child: SelectableText(
+                    message,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ).marginSymmetric(vertical: 2),
+                ),
               ),
-              if (retry != null)
-                InkWell(
-                  onTap: () {
-                    retry.call();
-                  },
-                  child: Text(
-                    translate("Retry"),
-                    style: TextStyle(color: MyTheme.accent),
+              if (retry != null) ...[
+                const SizedBox(width: 8),
+                GlassButton(
+                  variant: GlassButtonVariant.subtle,
+                  minHeight: 30,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
                   ),
-                ).marginSymmetric(horizontal: 5),
-              FittedBox(
-                child: InkWell(
-                  onTap: () {
-                    close.call();
-                  },
-                  child: Icon(Icons.close).marginSymmetric(horizontal: 5),
+                  onPressed: () => retry.call(),
+                  child: Text(
+                    translate('Retry'),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: alertColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ).marginAll(4),
+              ],
+              const SizedBox(width: 4),
+              IconButton(
+                onPressed: () => close.call(),
+                tooltip: translate('Close'),
+                icon: Icon(
+                  CamelliaIcons.close,
+                  size: 16,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                style: IconButton.styleFrom(
+                  minimumSize: const Size(28, 28),
+                  padding: const EdgeInsets.all(4),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
             ],
           ),
         ),
-      ).marginOnly(bottom: 14),
-    ),
-  );
+      ),
+    );
+  });
 }
 
 String getDesktopTabLabel(String peerId, String alias) {
@@ -5816,17 +5902,10 @@ Widget buildPresetPasswordWarning() {
   return FutureBuilder<bool>(
     future: bind.isPresetPassword(),
     builder: (BuildContext context, AsyncSnapshot<bool> snapshot) {
-      if (snapshot.connectionState == ConnectionState.waiting) {
-        return CircularProgressIndicator(); // Show a loading spinner while waiting for the Future to complete
-      } else if (snapshot.hasError) {
-        return Text(
-          'Error: ${snapshot.error}',
-        ); // Show an error message if the Future completed with an error
-      } else if (snapshot.hasData && snapshot.data == true) {
+      if (snapshot.hasData && snapshot.data == true) {
         return _buildPresetPasswordWarning();
-      } else {
-        return SizedBox.shrink(); // Show nothing if the Future completed with false or null
       }
+      return const SizedBox.shrink();
     },
   );
 }
@@ -6200,7 +6279,7 @@ Widget? buildAvatarWidget({
       width: size,
       height: size,
       fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => fallback ?? SizedBox.shrink(),
+      errorBuilder: (_, _, _) => fallback ?? const SizedBox.shrink(),
     ),
   );
 }

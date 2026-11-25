@@ -29,7 +29,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
 const _kLinuxDisplayDocsUrl =
-    'https://github.com/camellia-computing/remote-client/blob/main/docs/platform-notes.md#linux-display-requirements';
+    'https://github.com/camellia-nexus/remote-client/blob/main/docs/platform-notes.md#linux-display-requirements';
 
 const String kOptionCloseToTray = 'close-to-tray';
 
@@ -183,7 +183,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget _buildConnectWorkspace(BuildContext context) {
     final incomingOnly = bind.isIncomingOnly();
     final outgoingOnly = bind.isOutgoingOnly();
-    final checklistItems = _collectChecklistItems();
 
     return FocusTraversalGroup(
       policy: WidgetOrderTraversalPolicy(),
@@ -193,9 +192,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           final pad = constraints.maxWidth < 680 ? 16.0 : 24.0;
           final hasSpaciousVertical =
               !incomingOnly &&
-              wideHero &&
-              constraints.maxHeight >= 720 &&
-              checklistItems.isEmpty &&
+              constraints.maxHeight >= 580 &&
+              (wideHero || outgoingOnly || constraints.maxHeight >= 760) &&
               PluginUiManager.instance.entries.isEmpty;
 
           final heroSection = _buildBentoHero(
@@ -240,12 +238,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
           if (hasSpaciousVertical) {
             return Padding(
-              padding: EdgeInsets.fromLTRB(pad, pad + 8, pad, 16),
+              padding: EdgeInsets.fromLTRB(pad, 16, pad, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ...topBlocks,
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 18),
                   const Expanded(child: PeerTabPage()),
                 ],
               ),
@@ -258,7 +256,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           return SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(
               pad,
-              pad + 8,
+              16,
               pad,
               MediaQuery.paddingOf(context).bottom + 24,
             ),
@@ -267,7 +265,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               children: [
                 ...topBlocks,
                 if (!incomingOnly) ...[
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 18),
                   SizedBox(height: devicePanelHeight, child: const PeerTabPage()),
                 ],
               ],
@@ -528,6 +526,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     showDialog<void>(
       context: context,
       builder: (dialogCtx) {
+        final tokens = AppVisual.tokens(dialogCtx);
         return Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520, maxHeight: 500),
@@ -535,23 +534,30 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               padding: const EdgeInsets.all(24),
               child: GlassCard(
                 layer: CamelliaGlassLayer.modal,
+                elevated: true,
                 title: translate('Permissions'),
                 subtitle: items.length == 1
                     ? items.first.title
                     : '${items.length} ${translate('Status')}',
-                trailing: IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 20),
+                trailing: GlassIconButton(
+                  icon: CamelliaIcons.close,
+                  size: 32,
+                  iconSize: 17,
                   tooltip: translate('Close'),
                   onPressed: () => Navigator.of(dialogCtx).pop(),
                 ),
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       for (var i = 0; i < items.length; i++) ...[
-                        if (i > 0) const Divider(height: 16),
+                        if (i > 0)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            child: Container(height: 0.85, color: tokens.border),
+                          ),
                         _ChecklistRow(item: items[i]),
                       ],
                     ],
@@ -743,6 +749,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
+    if (isDesktop) {
+      Future.delayed(const Duration(milliseconds: 300), () async {
+        if (!mounted) return;
+        try {
+          final maximized = await windowManager.isMaximized();
+          if (mounted && stateGlobal.isMaximized.value != maximized) {
+            stateGlobal.setMaximized(maximized);
+            setState(() {});
+          }
+        } catch (_) {}
+      });
+    }
   }
 
   @override
@@ -757,12 +775,85 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.dispose();
   }
 
+  Future<void> _saveMainWindowFrame({bool? flush}) async {
+    if (!isDesktop) return;
+    try {
+      await saveWindowPosition(WindowType.Main, flush: flush);
+    } catch (e) {
+      debugPrint('Error saving main window position: $e');
+    }
+  }
+
+  @override
+  void onWindowMoved() {
+    _saveMainWindowFrame();
+    super.onWindowMoved();
+  }
+
+  @override
+  void onWindowResized() {
+    _saveMainWindowFrame();
+    super.onWindowResized();
+  }
+
+  @override
+  void onWindowMaximize() {
+    stateGlobal.setMinimized(false);
+    stateGlobal.setMaximized(true);
+    _saveMainWindowFrame();
+    if (mounted) setState(() {});
+    super.onWindowMaximize();
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    stateGlobal.setMinimized(false);
+    stateGlobal.setMaximized(false);
+    _saveMainWindowFrame();
+    if (mounted) setState(() {});
+    super.onWindowUnmaximize();
+  }
+
+  @override
+  void onWindowMinimize() {
+    stateGlobal.setMinimized(true);
+    stateGlobal.setMaximized(false);
+    super.onWindowMinimize();
+  }
+
+  @override
+  void onWindowRestore() {
+    stateGlobal.setMinimized(false);
+    () async {
+      try {
+        final maximized = await windowManager.isMaximized();
+        stateGlobal.setMaximized(maximized);
+      } catch (_) {}
+      await _saveMainWindowFrame();
+      if (mounted) setState(() {});
+    }();
+    super.onWindowRestore();
+  }
+
+  @override
+  void onWindowFocus() {
+    stateGlobal.isFocused.value = true;
+    super.onWindowFocus();
+  }
+
+  @override
+  void onWindowBlur() {
+    stateGlobal.isFocused.value = false;
+    super.onWindowBlur();
+  }
+
   @override
   void onWindowClose() async {
     await _handleApplicationClose();
   }
 
   Future<void> _handleApplicationClose() async {
+    await _saveMainWindowFrame(flush: true);
     final closeToTray = option2bool(
       kOptionCloseToTray,
       bind.mainGetLocalOption(key: kOptionCloseToTray),

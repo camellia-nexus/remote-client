@@ -1,6 +1,8 @@
 import 'dart:async';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:camellia_remote_app/models/file_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
@@ -18,6 +20,7 @@ class FileManagerPage extends StatefulWidget {
     this.isSharedPassword,
     this.forceRelay,
   });
+
   final String id;
   final String? password;
   final bool? isSharedPassword;
@@ -52,11 +55,7 @@ extension SelectModeExt on Rx<SelectMode> {
         value = SelectMode.none;
         break;
       case SelectMode.none:
-        if (currentIsLocal) {
-          value = SelectMode.local;
-        } else {
-          value = SelectMode.remote;
-        }
+        value = currentIsLocal ? SelectMode.local : SelectMode.remote;
         break;
     }
   }
@@ -105,225 +104,485 @@ class _FileManagerPageState extends State<FileManagerPage> {
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    onPopInvokedWithResult: (didPop, _) async {
-      if (didPop) return;
-      if (selectMode.value != SelectMode.none) {
-        selectMode.value = SelectMode.none;
-        setState(() {});
-        return;
+  Future<void> _showCreateFolderDialog() async {
+    if (currentDir.path == "/") return;
+    final name = TextEditingController();
+    String? errorText;
+    void onTextChanged() {
+      if (errorText != null) {
+        errorText = null;
       }
-      if (currentFileController.canGoBack) {
-        currentFileController.goBack();
-        return;
-      }
-      if (gFFI.closed) {
-        Navigator.of(context).maybePop();
-      } else {
-        clientClose(gFFI.sessionId, gFFI);
-      }
-    },
-    child: Scaffold(
-      // backgroundColor: MyTheme.grayBg,
-      appBar: AppBar(
-        leading: Row(
-          children: [
-            IconButton(
-              icon: Icon(Icons.close),
-              onPressed: () => clientClose(gFFI.sessionId, gFFI),
-            ),
-          ],
-        ),
-        centerTitle: true,
-        title: SegmentedButton<bool>(
-          showSelectedIcon: false,
-          segments: [
-            ButtonSegment(
-              value: true,
-              icon: const Icon(Icons.phone_android_rounded),
-              label: Text(translate('Local')),
-            ),
-            ButtonSegment(
-              value: false,
-              icon: const Icon(Icons.screen_share_outlined),
-              label: Text(translate('Remote')),
-            ),
-          ],
-          selected: {showLocal},
-          onSelectionChanged: (selection) {
-            final next = selection.first;
-            if (next != showLocal) {
-              setState(() => showLocal = next);
-            }
-          },
-        ),
-        actions: [
-          PopupMenuButton<String>(
-            tooltip: "",
-            icon: Icon(Icons.more_vert),
-            itemBuilder: (context) {
-              return [
-                PopupMenuItem(
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.refresh,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      SizedBox(width: 5),
-                      Text(translate("Refresh File")),
-                    ],
-                  ),
-                  value: "refresh",
-                ),
-                PopupMenuItem(
-                  enabled: currentDir.path != "/",
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.check,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      SizedBox(width: 5),
-                      Text(translate("Multi Select")),
-                    ],
-                  ),
-                  value: "select",
-                ),
-                PopupMenuItem(
-                  enabled: currentDir.path != "/",
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.folder_outlined,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      SizedBox(width: 5),
-                      Text(translate("Create Folder")),
-                    ],
-                  ),
-                  value: "folder",
-                ),
-                PopupMenuItem(
-                  enabled: currentDir.path != "/",
-                  child: Row(
-                    children: [
-                      Icon(
-                        currentOptions.showHidden
-                            ? Icons.check_box_outlined
-                            : Icons.check_box_outline_blank,
-                        color: Theme.of(context).iconTheme.color,
-                      ),
-                      SizedBox(width: 5),
-                      Text(translate("Show Hidden Files")),
-                    ],
-                  ),
-                  value: "hidden",
-                ),
-              ];
-            },
-            onSelected: (v) async {
-              if (v == "refresh") {
-                currentFileController.refresh();
-              } else if (v == "select") {
-                model.localController.selectedItems.clear();
-                model.remoteController.selectedItems.clear();
-                selectMode.toggle(showLocal);
-                setState(() {});
-              } else if (v == "folder") {
-                final name = TextEditingController();
-                String? errorText;
-                void onTextChanged() {
-                  if (errorText != null) {
-                    errorText = null;
-                  }
-                }
+    }
 
-                name.addListener(onTextChanged);
-                try {
-                  await gFFI.dialogManager.show((setState, close, context) {
-                    return CustomAlertDialog(
-                      title: Text(translate("Create Folder")),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TextFormField(
-                            decoration: InputDecoration(
-                              labelText: translate(
-                                "Please enter the folder name",
-                              ),
-                              errorText: errorText,
-                            ),
-                            controller: name,
-                          ).workaroundFreezeLinuxMint(),
-                        ],
-                      ),
-                      actions: [
-                        dialogButton(
-                          "Cancel",
-                          onPressed: () => close(false),
-                          isOutline: true,
-                        ),
-                        dialogButton(
-                          "OK",
-                          onPressed: () {
-                            if (name.value.text.isNotEmpty) {
-                              if (!PathUtil.validName(
-                                name.value.text,
-                                currentFileController.options.value.isWindows,
-                              )) {
-                                setState(() {
-                                  errorText = translate("Invalid folder name");
-                                });
-                                return;
-                              }
-                              currentFileController.createDir(
-                                PathUtil.join(
-                                  currentDir.path,
-                                  name.value.text,
-                                  currentOptions.isWindows,
-                                ),
-                              );
-                              close();
-                            }
-                          },
-                        ),
-                      ],
-                    );
-                  });
-                } finally {
-                  name.removeListener(onTextChanged);
-                  name.dispose();
-                }
-              } else if (v == "hidden") {
-                currentFileController.toggleShowHidden();
-              }
-            },
+    name.addListener(onTextChanged);
+    try {
+      await gFFI.dialogManager.show((setState, close, context) {
+        void submit() {
+          final folderName = name.text.trim();
+          if (folderName.isEmpty) return;
+          if (!PathUtil.validName(
+            folderName,
+            currentFileController.options.value.isWindows,
+          )) {
+            setState(() {
+              errorText = translate("Invalid folder name");
+            });
+            return;
+          }
+          currentFileController.createDir(
+            PathUtil.join(
+              currentDir.path,
+              folderName,
+              currentOptions.isWindows,
+            ),
+          );
+          close();
+        }
+
+        return CustomAlertDialog(
+          title: ModernDialogHeader(
+            icon: CamelliaIcons.folderNew,
+            title: translate("Create Folder"),
+            onClose: () => close(false),
           ),
-        ],
-      ),
-      body: CamelliaBackdrop(
-        child: Column(
-          children: [
-            Expanded(
-              child: showLocal
-                  ? FileManagerView(
-                      controller: model.localController,
-                      selectMode: selectMode,
-                    )
-                  : FileManagerView(
-                      controller: model.remoteController,
-                      selectMode: selectMode,
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 280, maxWidth: 400),
+            child: GlassInput(
+              controller: name,
+              autofocus: true,
+              labelText: translate("Please enter the folder name"),
+              errorText: errorText,
+              prefixIcon: Icons.folder_outlined,
+              onSubmitted: (_) => submit(),
+            ),
+          ),
+          actions: [
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              onPressed: () => close(false),
+              child: Text(translate("Cancel")),
+            ),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              onPressed: submit,
+              child: Text(translate("OK")),
+            ),
+          ],
+          onSubmit: submit,
+          onCancel: () => close(false),
+        );
+      });
+    } finally {
+      name.removeListener(onTextChanged);
+      name.dispose();
+    }
+  }
+
+  Future<void> _showMoreOptionsSheet() async {
+    final canModifyDir = currentDir.path != "/";
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: translate('File Transfer'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final dark = theme.brightness == Brightness.dark;
+        final accent = dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(CamelliaIcons.refresh, color: accent),
+                title: Text(translate("Refresh File")),
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  currentFileController.refresh();
+                },
+              ),
+              ListTile(
+                enabled: canModifyDir,
+                leading: const Icon(Icons.checklist_rounded),
+                title: Text(translate("Multi Select")),
+                onTap: !canModifyDir
+                    ? null
+                    : () {
+                        Navigator.of(sheetCtx).pop();
+                        model.localController.selectedItems.clear();
+                        model.remoteController.selectedItems.clear();
+                        selectMode.toggle(showLocal);
+                        setState(() {});
+                      },
+              ),
+              ListTile(
+                enabled: canModifyDir,
+                leading: const Icon(CamelliaIcons.folderNew),
+                title: Text(translate("Create Folder")),
+                onTap: !canModifyDir
+                    ? null
+                    : () {
+                        Navigator.of(sheetCtx).pop();
+                        _showCreateFolderDialog();
+                      },
+              ),
+              ListTile(
+                enabled: canModifyDir,
+                leading: Icon(
+                  currentOptions.showHidden
+                      ? CamelliaIcons.eye
+                      : CamelliaIcons.eyeOff,
+                  color: currentOptions.showHidden ? accent : null,
+                ),
+                title: Text(translate("Show Hidden Files")),
+                trailing: currentOptions.showHidden
+                    ? Icon(CamelliaIcons.check, size: 18, color: accent)
+                    : null,
+                onTap: !canModifyDir
+                    ? null
+                    : () {
+                        Navigator.of(sheetCtx).pop();
+                        currentFileController.toggleShowHidden();
+                      },
+              ),
+              Obx(() {
+                final jobs = model.jobController.jobTable;
+                if (jobs.isEmpty) return const SizedBox.shrink();
+                return ListTile(
+                  leading: Icon(CamelliaIcons.transfer, color: accent),
+                  title: Text(translate("Transfer Queue")),
+                  trailing: GlassBadge(
+                    label: '${jobs.length}',
+                    tone: GlassBadgeTone.brand,
+                    tabularNums: true,
+                    compact: true,
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    _showTransferQueueSheet();
+                  },
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showTransferQueueSheet() async {
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Transfer Queue'),
+      actions: [
+        GlassButton(
+          variant: GlassButtonVariant.ghost,
+          minHeight: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          onPressed: () {
+            model.jobController.jobTable.clear();
+            Navigator.of(context).maybePop();
+          },
+          child: Text(translate('Clear')),
+        ),
+      ],
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final dark = theme.brightness == Brightness.dark;
+        final tokens =
+            theme.extension<AppDesignTokens>() ?? MyTheme.tokens(sheetCtx);
+        final glass = CamelliaGlassTokens.of(sheetCtx);
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.68,
+          ),
+          child: Obx(() {
+            final jobs = model.jobController.jobTable;
+            if (jobs.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 32,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CamelliaStateIllustration(
+                      glyph: CamelliaGlyph.fileTransfer,
+                      size: 52,
                     ),
+                    const SizedBox(height: 12),
+                    Text(
+                      translate('Idle'),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              shrinkWrap: true,
+              itemCount: jobs.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (ctx, index) {
+                final job = jobs[index];
+                final (statusColor, statusLabel) = switch (job.state) {
+                  JobState.inProgress => (
+                    glass.statusConnecting,
+                    '${readableFileSize(job.speed)}/s',
+                  ),
+                  JobState.done => (glass.statusOnline, translate('Successful')),
+                  JobState.error => (glass.statusAlert, job.getStatus()),
+                  JobState.paused => (
+                    glass.statusHighLatency,
+                    translate('Paused'),
+                  ),
+                  JobState.none => (tokens.muted, translate('Waiting')),
+                };
+
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.65 : 0.80,
+                    ),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                    border: Border.all(
+                      color: tokens.border.withValues(alpha: 0.85),
+                      width: 0.85,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              job.isRemoteToLocal
+                                  ? CamelliaIcons.download
+                                  : CamelliaIcons.upload,
+                              size: 17,
+                              color: statusColor,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                job.jobName.isEmpty
+                                    ? job.display()
+                                    : job.jobName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (job.state == JobState.paused)
+                              GlassIconButton(
+                                icon: CamelliaIcons.refresh,
+                                size: 30,
+                                iconSize: 15,
+                                tooltip: translate('Resume'),
+                                onPressed: () =>
+                                    model.jobController.resumeJob(job.id),
+                              ),
+                            if (job.state == JobState.inProgress ||
+                                job.state == JobState.paused) ...[
+                              const SizedBox(width: 4),
+                              GlassIconButton(
+                                icon: CamelliaIcons.close,
+                                size: 30,
+                                iconSize: 15,
+                                tooltip: translate('Cancel'),
+                                onPressed: () =>
+                                    model.jobController.cancelJob(job.id),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          statusLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: CamelliaTypography.tabular(
+                            theme.textTheme.labelSmall?.copyWith(
+                              color: statusColor,
+                            ),
+                          ),
+                        ),
+                        if (job.state == JobState.inProgress) ...[
+                          const SizedBox(height: 6),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: LinearProgressIndicator(
+                              minHeight: 3,
+                              value: job.effectiveTotalSize > 0
+                                  ? job.percent.clamp(0.0, 1.0)
+                                  : null,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          }),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (selectMode.value != SelectMode.none) {
+          selectMode.value = SelectMode.none;
+          setState(() {});
+          return;
+        }
+        if (currentFileController.canGoBack) {
+          currentFileController.goBack();
+          return;
+        }
+        if (gFFI.closed) {
+          Navigator.of(context).maybePop();
+        } else {
+          clientClose(gFFI.sessionId, gFFI);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          toolbarHeight: 56,
+          leadingWidth: 52,
+          flexibleSpace: GlassSurface(
+            layer: CamelliaGlassLayer.sidebar,
+            borderRadius: BorderRadius.zero,
+            showShadow: false,
+            strokeWidth: 0,
+            child: const SizedBox.expand(),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(0.85),
+            child: Container(
+              height: 0.85,
+              color: tokens.border.withValues(alpha: 0.72),
+            ),
+          ),
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Center(
+              child: GlassIconButton(
+                icon: CamelliaIcons.close,
+                size: 36,
+                iconSize: 18,
+                tooltip: translate('Close'),
+                onPressed: () => clientClose(gFFI.sessionId, gFFI),
+              ),
+            ),
+          ),
+          centerTitle: true,
+          title: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 240),
+            child: GlassSegmentedControl<bool>(
+              compact: true,
+              expand: true,
+              selected: showLocal,
+              items: [
+                GlassSegmentItem<bool>(
+                  value: true,
+                  icon: Icons.phone_android_rounded,
+                  label: translate('Local'),
+                ),
+                GlassSegmentItem<bool>(
+                  value: false,
+                  icon: CamelliaIcons.screen,
+                  label: translate('Remote'),
+                ),
+              ],
+              onChanged: (next) {
+                if (next != showLocal) {
+                  setState(() => showLocal = next);
+                }
+              },
+            ),
+          ),
+          actions: [
+            Obx(() {
+              final jobs = model.jobController.jobTable;
+              if (jobs.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: GlassBadge(
+                  label: '${jobs.length}',
+                  icon: CamelliaIcons.transfer,
+                  tone: GlassBadgeTone.brand,
+                  tabularNums: true,
+                  compact: true,
+                  onTap: _showTransferQueueSheet,
+                ),
+              );
+            }),
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: GlassIconButton(
+                icon: CamelliaIcons.more,
+                size: 36,
+                iconSize: 18,
+                tooltip: translate('More'),
+                onPressed: _showMoreOptionsSheet,
+              ),
             ),
           ],
         ),
+        body: CamelliaBackdrop(
+          child: Column(
+            children: [
+              Expanded(
+                child: showLocal
+                    ? FileManagerView(
+                        controller: model.localController,
+                        selectMode: selectMode,
+                        onCreateFolder: _showCreateFolderDialog,
+                      )
+                    : FileManagerView(
+                        controller: model.remoteController,
+                        selectMode: selectMode,
+                        onCreateFolder: _showCreateFolderDialog,
+                      ),
+              ),
+            ],
+          ),
+        ),
+        bottomSheet: bottomSheet(),
       ),
-      bottomSheet: bottomSheet(),
-    ),
-  );
+    );
+  }
 
   Widget? bottomSheet() {
     return Obx(() {
@@ -332,15 +591,18 @@ class _FileManagerPageState extends State<FileManagerPage> {
 
       final localLabel = selectedItems?.isLocal == null
           ? ""
-          : " [${selectedItems!.isLocal ? translate("Local") : translate("Remote")}]";
-      if (!(selectMode.value == SelectMode.none)) {
+          : " · ${selectedItems!.isLocal ? translate("Local") : translate("Remote")}";
+      if (selectMode.value != SelectMode.none) {
         final selectedItemsLen =
             "${selectedItems?.items.length ?? 0} ${translate("items")}";
         if (selectedItems == null ||
             selectedItems.items.isEmpty ||
             selectMode.value.eq(showLocal)) {
           return BottomSheetBody(
-            leading: Icon(Icons.check),
+            leading: Icon(
+              CamelliaIcons.check,
+              color: Theme.of(context).colorScheme.primary,
+            ),
             title: translate("Selected"),
             text: selectedItemsLen + localLabel,
             onCanceled: () {
@@ -349,21 +611,25 @@ class _FileManagerPageState extends State<FileManagerPage> {
               setState(() {});
             },
             actions: [
-              IconButton(
-                icon: Icon(Icons.compare_arrows),
+              GlassIconButton(
+                icon: CamelliaIcons.transfer,
+                size: 34,
+                iconSize: 17,
+                tooltip: showLocal ? translate('Remote') : translate('Local'),
                 onPressed: () => setState(() => showLocal = !showLocal),
               ),
-              IconButton(
-                icon: Icon(Icons.delete_forever),
-                onPressed: selectedItems != null
+              const SizedBox(width: 6),
+              GlassIconButton(
+                icon: CamelliaIcons.trash,
+                size: 34,
+                iconSize: 17,
+                accentColor: CamelliaGlassTokens.of(context).statusAlert,
+                tooltip: translate('Delete'),
+                onPressed: selectedItems != null && selectedItems.items.isNotEmpty
                     ? () async {
-                        if (selectedItems.items.isNotEmpty) {
-                          await currentFileController.removeAction(
-                            selectedItems,
-                          );
-                          selectedItems.items.clear();
-                          selectMode.value = SelectMode.none;
-                        }
+                        await currentFileController.removeAction(selectedItems);
+                        selectedItems.items.clear();
+                        selectMode.value = SelectMode.none;
                       }
                     : null,
               ),
@@ -371,7 +637,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
           );
         } else {
           return BottomSheetBody(
-            leading: Icon(Icons.input),
+            leading: Icon(
+              CamelliaIcons.paste,
+              color: Theme.of(context).colorScheme.primary,
+            ),
             title: translate("Paste here?"),
             text: selectedItemsLen + localLabel,
             onCanceled: () {
@@ -380,12 +649,22 @@ class _FileManagerPageState extends State<FileManagerPage> {
               setState(() {});
             },
             actions: [
-              IconButton(
-                icon: Icon(Icons.compare_arrows),
+              GlassIconButton(
+                icon: CamelliaIcons.transfer,
+                size: 34,
+                iconSize: 17,
+                tooltip: showLocal ? translate('Remote') : translate('Local'),
                 onPressed: () => setState(() => showLocal = !showLocal),
               ),
-              IconButton(
-                icon: Icon(Icons.paste),
+              const SizedBox(width: 6),
+              GlassButton(
+                variant: GlassButtonVariant.primary,
+                minHeight: 34,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                icon: const Icon(CamelliaIcons.paste, size: 15),
                 onPressed: () {
                   selectMode.value = SelectMode.none;
                   final otherSide = showLocal
@@ -399,6 +678,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
                   selectedItems.items.clear();
                   selectMode.value = SelectMode.none;
                 },
+                child: Text(translate('Paste')),
               ),
             ],
           );
@@ -406,11 +686,9 @@ class _FileManagerPageState extends State<FileManagerPage> {
       }
 
       if (jobTable.isEmpty) {
-        return Offstage();
+        return const Offstage();
       }
 
-      // Find the first job that is in progress (the one actually transferring data)
-      // Rust backend processes jobs sequentially, so the first inProgress job is the active one
       final activeJob =
           jobTable.firstWhereOrNull(
             (job) => job.state == JobState.inProgress,
@@ -421,8 +699,8 @@ class _FileManagerPageState extends State<FileManagerPage> {
         case JobState.inProgress:
           return BottomSheetBody(
             leading: SizedBox(
-              width: 22,
-              height: 22,
+              width: 20,
+              height: 20,
               child: CircularProgressIndicator(
                 strokeWidth: 2.2,
                 value: activeJob.effectiveTotalSize > 0
@@ -430,9 +708,13 @@ class _FileManagerPageState extends State<FileManagerPage> {
                     : null,
               ),
             ),
-            title: translate("Waiting"),
+            title: translate("Transfer Queue"),
             text:
                 "${translate("Speed")}: ${readableFileSize(activeJob.speed)}/s",
+            progress: activeJob.effectiveTotalSize > 0
+                ? activeJob.percent.clamp(0.0, 1.0)
+                : null,
+            onTap: _showTransferQueueSheet,
             onCanceled: () {
               model.jobController.cancelJob(activeJob.id);
               jobTable.clear();
@@ -446,6 +728,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
             ),
             title: "${translate("Successful")}!",
             text: activeJob.display(),
+            onTap: _showTransferQueueSheet,
             onCanceled: () => jobTable.clear(),
           );
         case JobState.error:
@@ -456,6 +739,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
             ),
             title: "${translate("Error")}!",
             text: activeJob.getStatus(),
+            onTap: _showTransferQueueSheet,
             onCanceled: () => jobTable.clear(),
           );
         case JobState.paused:
@@ -466,10 +750,13 @@ class _FileManagerPageState extends State<FileManagerPage> {
             ),
             title: translate("Paused"),
             text: activeJob.jobName,
+            onTap: _showTransferQueueSheet,
             actions: [
-              IconButton(
+              GlassIconButton(
                 tooltip: translate("Resume"),
-                icon: const Icon(CamelliaIcons.refresh),
+                icon: CamelliaIcons.refresh,
+                size: 34,
+                iconSize: 17,
                 onPressed: () => model.jobController.resumeJob(activeJob.id),
               ),
             ],
@@ -481,7 +768,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
         case JobState.none:
           break;
       }
-      return Offstage();
+      return const Offstage();
     });
   }
 
@@ -491,7 +778,6 @@ class _FileManagerPageState extends State<FileManagerPage> {
 
     if (localSelectedItems.items.isNotEmpty &&
         remoteSelectedItems.items.isNotEmpty) {
-      // assert unreachable
       debugPrint("Wrong SelectedItems state, reset");
       localSelectedItems.clear();
       remoteSelectedItems.clear();
@@ -512,8 +798,14 @@ class _FileManagerPageState extends State<FileManagerPage> {
 class FileManagerView extends StatefulWidget {
   final FileController controller;
   final Rx<SelectMode> selectMode;
+  final VoidCallback? onCreateFolder;
 
-  const FileManagerView({super.key, required this.controller, required this.selectMode});
+  const FileManagerView({
+    super.key,
+    required this.controller,
+    required this.selectMode,
+    this.onCreateFolder,
+  });
 
   @override
   State<StatefulWidget> createState() => _FileManagerViewState();
@@ -533,8 +825,9 @@ class _FileManagerViewState extends State<FileManagerView> {
   @override
   void initState() {
     super.initState();
-    _directorySubscription =
-        controller.directory.listen((e) => breadCrumbScrollToEnd());
+    _directorySubscription = controller.directory.listen(
+      (_) => breadCrumbScrollToEnd(),
+    );
   }
 
   @override
@@ -546,64 +839,267 @@ class _FileManagerViewState extends State<FileManagerView> {
     super.dispose();
   }
 
+  Future<void> _showSortSheet() async {
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Sort by'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final dark = theme.brightness == Brightness.dark;
+        final accent = dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+          child: Obx(
+            () => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final sortOption in SortBy.values)
+                  ListTile(
+                    dense: true,
+                    title: Text(
+                      translate(sortOption.toString()),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: controller.sortBy.value == sortOption
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                        color: controller.sortBy.value == sortOption
+                            ? accent
+                            : null,
+                      ),
+                    ),
+                    trailing: controller.sortBy.value == sortOption
+                        ? Icon(
+                            ascending.value
+                                ? Icons.arrow_upward_rounded
+                                : Icons.arrow_downward_rounded,
+                            size: 18,
+                            color: accent,
+                          )
+                        : null,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      if (controller.sortBy.value == sortOption) {
+                        ascending.value = !controller.sortAscending;
+                      } else {
+                        ascending.value = true;
+                      }
+                      controller.changeSortStyle(
+                        sortOption,
+                        ascending: ascending.value,
+                      );
+                      Navigator.of(sheetCtx).pop();
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showEntryActionsSheet(Entry entry) async {
+    final canRename =
+        !entry.isDrive && versionCmp(gFFI.ffiModel.pi.version, "1.3.0") >= 0;
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: entry.name,
+      builder: (sheetCtx) {
+        final glass = CamelliaGlassTokens.of(sheetCtx);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.checklist_rounded),
+                title: Text(translate("Multi Select")),
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  _selectedItems.clear();
+                  widget.selectMode.toggle(isLocal);
+                  if (widget.selectMode.value != SelectMode.none) {
+                    _selectedItems.add(entry);
+                  }
+                  setState(() {});
+                },
+              ),
+              if (canRename)
+                ListTile(
+                  leading: const Icon(CamelliaIcons.edit),
+                  title: Text(translate("Rename")),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    controller.renameAction(entry, isLocal);
+                  },
+                ),
+              ListTile(
+                leading: Icon(CamelliaIcons.trash, color: glass.statusAlert),
+                title: Text(
+                  translate("Delete"),
+                  style: TextStyle(
+                    color: glass.statusAlert,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  final items = SelectedItems(isLocal: isLocal)..add(entry);
+                  controller.removeAction(items);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+
     return Column(
       children: [
-        headTools(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+          child: headTools(),
+        ),
         Expanded(
           child: Obx(() {
             final entries = controller.directory.value.entries;
+            if (entries.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CamelliaStateIllustration(
+                        glyph: CamelliaGlyph.emptyFiles,
+                        size: 58,
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        translate('Empty Directory'),
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        controller.directory.value.path,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.bodySmall?.copyWith(
+                            color: tokens.muted,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          GlassButton(
+                            variant: GlassButtonVariant.secondary,
+                            minHeight: 36,
+                            icon: const Icon(CamelliaIcons.refresh, size: 16),
+                            onPressed: controller.refresh,
+                            child: Text(translate('Refresh File')),
+                          ),
+                          if (controller.directory.value.path != "/" &&
+                              widget.onCreateFolder != null)
+                            GlassButton(
+                              variant: GlassButtonVariant.secondary,
+                              minHeight: 36,
+                              icon: const Icon(
+                                CamelliaIcons.folderNew,
+                                size: 16,
+                              ),
+                              onPressed: widget.onCreateFolder,
+                              child: Text(translate('Create Folder')),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
             return ListView.builder(
               controller: _listScrollController,
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 24),
               itemCount: entries.length + 1,
               itemBuilder: (context, index) {
                 if (index >= entries.length) {
                   return listTail();
                 }
+                final entry = entries[index];
                 var selected = false;
                 if (widget.selectMode.value != SelectMode.none) {
-                  selected = _selectedItems.items.contains(entries[index]);
+                  selected = _selectedItems.items.contains(entry);
                 }
 
-                final sizeStr = entries[index].isFile
-                    ? readableFileSize(entries[index].size.toDouble())
+                final sizeStr = entry.isFile
+                    ? readableFileSize(entry.size.toDouble())
                     : "";
-
-                final showCheckBox = () {
-                  return widget.selectMode.value != SelectMode.none &&
-                      widget.selectMode.value.eq(
-                        controller.selectedItems.isLocal,
-                      );
-                }();
-                final entry = entries[index];
+                final showCheckBox =
+                    widget.selectMode.value != SelectMode.none &&
+                    widget.selectMode.value.eq(
+                      controller.selectedItems.isLocal,
+                    );
                 final iconColor = CamelliaIcons.fileTypeColor(
                   context,
                   entry.name,
                   isDirectory: !entry.isFile,
                   isDrive: entry.isDrive,
                 );
+
                 return Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  child: GlassSurface(
-                    layer: CamelliaGlassLayer.floating,
-                    showShadow: false,
-                    enableBlur: false,
-                    tintColor: selected
-                        ? Theme.of(
-                            context,
-                          ).colorScheme.primary.withValues(alpha: 0.14)
-                        : null,
-                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? accent.withValues(alpha: dark ? 0.18 : 0.10)
+                          : tokens.surface.withValues(
+                              alpha: dark ? 0.78 : 0.88,
+                            ),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: selected
+                            ? accent.withValues(alpha: 0.65)
+                            : tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
+                      ),
+                    ),
                     child: Material(
                       type: MaterialType.transparency,
                       child: ListTile(
+                        dense: true,
+                        minTileHeight: 54,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 2,
+                        ),
                         leading: Container(
-                          width: 38,
-                          height: 38,
+                          width: 36,
+                          height: 36,
                           decoration: BoxDecoration(
                             color: iconColor.withValues(alpha: 0.14),
                             borderRadius: BorderRadius.circular(10),
@@ -614,7 +1110,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                               isDirectory: !entry.isFile,
                               isDrive: entry.isDrive,
                             ),
-                            size: 21,
+                            size: 19,
                             color: iconColor,
                           ),
                         ),
@@ -622,32 +1118,35 @@ class _FileManagerViewState extends State<FileManagerView> {
                           entry.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                         selected: selected,
                         subtitle: entry.isDrive
                             ? null
                             : Text(
-                                "${entry.lastModified().toString().replaceAll(".000", "")}   $sizeStr",
+                                "${entry.lastModified().toString().replaceAll(".000", "")}${sizeStr.isEmpty ? "" : "  ·  $sizeStr"}",
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: CamelliaTypography.tabular(
-                                  Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.onSurfaceVariant,
-                                      ),
+                                  theme.textTheme.bodySmall?.copyWith(
+                                    color: tokens.muted,
+                                  ),
                                 ),
                               ),
                         trailing: entry.isDrive
-                            ? null
+                            ? Icon(
+                                Icons.chevron_right_rounded,
+                                size: 18,
+                                color: tokens.muted,
+                              )
                             : showCheckBox
                             ? Checkbox(
                                 value: selected,
                                 onChanged: (v) {
                                   if (v == null) return;
+                                  HapticFeedback.selectionClick();
                                   if (v && !selected) {
                                     _selectedItems.add(entry);
                                   } else if (!v && selected) {
@@ -656,74 +1155,40 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   setState(() {});
                                 },
                               )
-                            : PopupMenuButton<String>(
-                                tooltip: "",
-                                icon: const Icon(CamelliaIcons.more),
-                                itemBuilder: (context) {
-                                  return [
-                                    PopupMenuItem(
-                                      value: "delete",
-                                      child: Text(translate("Delete")),
-                                    ),
-                                    PopupMenuItem(
-                                      value: "multi_select",
-                                      child: Text(translate("Multi Select")),
-                                    ),
-                                    if (!entry.isDrive &&
-                                        versionCmp(
-                                              gFFI.ffiModel.pi.version,
-                                              "1.3.0",
-                                            ) >=
-                                            0)
-                                      PopupMenuItem(
-                                        value: "rename",
-                                        child: Text(translate("Rename")),
-                                      ),
-                                  ];
-                                },
-                                onSelected: (v) {
-                                  if (v == "delete") {
-                                    final items = SelectedItems(
-                                      isLocal: isLocal,
-                                    );
-                                    items.add(entry);
-                                    controller.removeAction(items);
-                                  } else if (v == "multi_select") {
-                                    _selectedItems.clear();
-                                    widget.selectMode.toggle(isLocal);
-                                    setState(() {});
-                                  } else if (v == "rename") {
-                                    controller.renameAction(entry, isLocal);
-                                  }
-                                },
+                            : GlassIconButton(
+                                icon: CamelliaIcons.more,
+                                size: 32,
+                                iconSize: 16,
+                                tooltip: translate('More'),
+                                onPressed: () => _showEntryActionsSheet(entry),
                               ),
                         onTap: () {
                           if (showCheckBox) {
+                            HapticFeedback.selectionClick();
                             if (selected) {
-                          _selectedItems.remove(entries[index]);
-                        } else {
-                          _selectedItems.add(entries[index]);
-                        }
-                        setState(() {});
-                        return;
-                      }
-                      if (entries[index].isDirectory ||
-                          entries[index].isDrive) {
-                        controller.openDirectory(entries[index].path);
-                      } else {
-                        // Perform file-related tasks.
-                      }
-                    },
-                    onLongPress: entries[index].isDrive
-                        ? null
-                        : () {
-                            _selectedItems.clear();
-                            widget.selectMode.toggle(isLocal);
-                            if (widget.selectMode.value != SelectMode.none) {
-                              _selectedItems.add(entries[index]);
+                              _selectedItems.remove(entry);
+                            } else {
+                              _selectedItems.add(entry);
                             }
                             setState(() {});
-                          },
+                            return;
+                          }
+                          if (entry.isDirectory || entry.isDrive) {
+                            controller.openDirectory(entry.path);
+                          }
+                        },
+                        onLongPress: entry.isDrive
+                            ? null
+                            : () {
+                                HapticFeedback.mediumImpact();
+                                _selectedItems.clear();
+                                widget.selectMode.toggle(isLocal);
+                                if (widget.selectMode.value !=
+                                    SelectMode.none) {
+                                  _selectedItems.add(entry);
+                                }
+                                setState(() {});
+                              },
                       ),
                     ),
                   ),
@@ -737,111 +1202,121 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   void breadCrumbScrollToEnd() {
-    Future.delayed(Duration(milliseconds: 200), () {
+    Future.delayed(const Duration(milliseconds: 200), () {
       if (_breadCrumbScroller.hasClients) {
         _breadCrumbScroller.animateTo(
           _breadCrumbScroller.position.maxScrollExtent,
-          duration: Duration(milliseconds: 200),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.fastLinearToSlowEaseIn,
         );
       }
     });
   }
 
-  Widget headTools() => Row(
-    children: [
-        Expanded(
-          child: Obx(() {
-            final home = controller.options.value.home;
-            final isWindows = controller.options.value.isWindows;
-            return BreadCrumb(
-              items: getPathBreadCrumbItems(
-                controller.shortPath,
-                isWindows,
-                () => controller.goToHomeDirectory(),
-                (list) {
-                  var path = "";
-                  if (home.startsWith(list[0])) {
-                    // absolute path
-                    for (var item in list) {
-                      path = PathUtil.join(path, item, isWindows);
-                    }
-                  } else {
-                    path += home;
-                    for (var item in list) {
-                      path = PathUtil.join(path, item, isWindows);
-                    }
-                  }
-                  controller.openDirectory(path);
-                },
-              ),
-              divider: Icon(Icons.chevron_right),
-              overflow: ScrollableOverflow(controller: _breadCrumbScroller),
-            );
-          }),
-        ),
-        Row(
-          children: [
-            IconButton(
-              icon: Icon(Icons.arrow_back),
-              onPressed: controller.goBack,
-            ),
-            IconButton(
-              icon: Icon(Icons.arrow_upward),
-              onPressed: controller.goToParentDirectory,
-            ),
-            PopupMenuButton<SortBy>(
-              tooltip: "",
-              icon: Icon(Icons.sort),
-              itemBuilder: (context) {
-                return SortBy.values
-                    .map(
-                      (e) => PopupMenuItem(
-                        child: Text(translate(e.toString())),
-                        value: e,
-                      ),
-                    )
-                    .toList();
-              },
-              onSelected: (sortBy) {
-                // If selecting the same sort option, flip the order
-                // If selecting a different sort option, use ascending order
-                if (controller.sortBy.value == sortBy) {
-                  ascending.value = !controller.sortAscending;
-                } else {
-                  ascending.value = true;
-                }
-                controller.changeSortStyle(sortBy, ascending: ascending.value);
-              },
-            ),
-          ],
-        ),
-      ],
-    );
+  Widget headTools() {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
 
-  Widget listTail() => Obx(
-    () => SizedBox(
-      height: 100,
+    return GlassSurface(
+      layer: CamelliaGlassLayer.floating,
+      showShadow: false,
+      enableBlur: false,
+      borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Obx(() {
+              final home = controller.options.value.home;
+              final isWindows = controller.options.value.isWindows;
+              return BreadCrumb(
+                items: getPathBreadCrumbItems(
+                  controller.shortPath,
+                  isWindows,
+                  () => controller.goToHomeDirectory(),
+                  (list) {
+                    var path = "";
+                    if (home.startsWith(list[0])) {
+                      for (var item in list) {
+                        path = PathUtil.join(path, item, isWindows);
+                      }
+                    } else {
+                      path += home;
+                      for (var item in list) {
+                        path = PathUtil.join(path, item, isWindows);
+                      }
+                    }
+                    controller.openDirectory(path);
+                  },
+                ),
+                divider: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 16,
+                  color: tokens.muted,
+                ),
+                overflow: ScrollableOverflow(controller: _breadCrumbScroller),
+              );
+            }),
+          ),
+          const SizedBox(width: 4),
+          GlassIconButton(
+            icon: CamelliaIcons.arrowBack,
+            size: 32,
+            iconSize: 16,
+            tooltip: translate('Back'),
+            onPressed: () {
+              controller.goBack();
+            },
+          ),
+          const SizedBox(width: 4),
+          GlassIconButton(
+            icon: CamelliaIcons.arrowUp,
+            size: 32,
+            iconSize: 16,
+            tooltip: translate('Up'),
+            onPressed: controller.goToParentDirectory,
+          ),
+          const SizedBox(width: 4),
+          GlassIconButton(
+            icon: Icons.sort_rounded,
+            size: 32,
+            iconSize: 16,
+            tooltip: translate('Sort by'),
+            onPressed: _showSortSheet,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget listTail() => Obx(() {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 68),
       child: Column(
         children: [
-          Padding(
-            padding: EdgeInsets.fromLTRB(30, 5, 30, 0),
-            child: Text(
-              controller.directory.value.path,
-              style: TextStyle(color: MyTheme.darkGray),
+          Text(
+            controller.directory.value.path,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: CamelliaTypography.tabular(
+              theme.textTheme.labelSmall?.copyWith(color: tokens.muted),
             ),
           ),
-          Padding(
-            padding: EdgeInsets.all(2),
-            child: Text(
-              "${translate("Total")}: ${controller.directory.value.entries.length} ${translate("items")}",
-              style: TextStyle(color: MyTheme.darkGray),
+          const SizedBox(height: 2),
+          Text(
+            "${translate("Total")}: ${controller.directory.value.entries.length} ${translate("items")}",
+            style: CamelliaTypography.tabular(
+              theme.textTheme.labelSmall?.copyWith(color: tokens.muted),
             ),
           ),
         ],
       ),
-    ),
-  );
+    );
+  });
 
   List<BreadCrumbItem> getPathBreadCrumbItems(
     String shortPath,
@@ -849,21 +1324,41 @@ class _FileManagerViewState extends State<FileManagerView> {
     void Function() onHome,
     void Function(List<String>) onPressed,
   ) {
+    final theme = Theme.of(context);
     final list = PathUtil.split(shortPath, isWindows);
-    final breadCrumbList = [
+    final breadCrumbList = <BreadCrumbItem>[
       BreadCrumbItem(
-        content: IconButton(icon: Icon(Icons.home_filled), onPressed: onHome),
+        content: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onHome,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              CamelliaIcons.home,
+              size: 17,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+        ),
       ),
     ];
     breadCrumbList.addAll(
       list.asMap().entries.map(
         (e) => BreadCrumbItem(
-          content: TextButton(
-            child: Text(e.value),
-            style: ButtonStyle(
-              minimumSize: WidgetStatePropertyAll(Size(0, 0)),
+          content: InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => onPressed(list.sublist(0, e.key + 1)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Text(
+                e.value,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: e.key == list.length - 1
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                ),
+              ),
             ),
-            onPressed: () => onPressed(list.sublist(0, e.key + 1)),
           ),
         ),
       ),
@@ -878,6 +1373,8 @@ class BottomSheetBody extends StatelessWidget {
     required this.leading,
     required this.title,
     required this.text,
+    this.progress,
+    this.onTap,
     this.onCanceled,
     this.actions,
   });
@@ -885,14 +1382,17 @@ class BottomSheetBody extends StatelessWidget {
   final Widget leading;
   final String title;
   final String text;
+  final double? progress;
+  final VoidCallback? onTap;
   final VoidCallback? onCanceled;
-  final List<IconButton>? actions;
+  final List<Widget>? actions;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final actionButtons = List<Widget>.of(actions ?? const []);
-    actionButtons.add(
+    final actionButtons = <Widget>[
+      ...?actions,
+      if (actions != null && actions!.isNotEmpty) const SizedBox(width: 6),
       GlassIconButton(
         icon: CamelliaIcons.close,
         size: 34,
@@ -900,51 +1400,70 @@ class BottomSheetBody extends StatelessWidget {
         tooltip: translate('Cancel'),
         onPressed: onCanceled,
       ),
+    ];
+
+    Widget card = GlassSurface(
+      layer: CamelliaGlassLayer.modal,
+      elevated: true,
+      borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              leading,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (text.isNotEmpty)
+                      Text(
+                        text,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              ...actionButtons,
+            ],
+          ),
+          if (progress != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(minHeight: 3, value: progress),
+            ),
+          ],
+        ],
+      ),
     );
+
+    if (onTap != null) {
+      card = GestureDetector(onTap: onTap, child: card);
+    }
+
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-      child: GlassSurface(
-        layer: CamelliaGlassLayer.modal,
-        elevated: true,
-        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            leading,
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (text.isNotEmpty)
-                    Text(
-                      text,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: CamelliaTypography.tabular(
-                        theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            ...actionButtons,
-          ],
-        ),
-      ),
+      child: card,
     );
   }
 }

@@ -112,14 +112,27 @@ class RustDeskMultiWindowManager {
   ) async {
     final isCamera = windowType == WindowType.ViewCamera.index;
     final windowIDs = isCamera ? _viewCameraWindows : _remoteDesktopWindows;
-    if (windowIDs.length > 1) {
-      for (final windowId in windowIDs) {
-        if (await DesktopMultiWindow.invokeMethod(
-          windowId,
-          kWindowEventActiveDisplaySession,
-          jsonEncode({'id': peerId, 'display': display}),
-        )) {
-          return;
+    if (windowIDs.isNotEmpty) {
+      for (final wId in List<int>.from(windowIDs)) {
+        try {
+          final active = await DesktopMultiWindow.invokeMethod(
+            wId,
+            kWindowEventActiveDisplaySession,
+            jsonEncode({'id': peerId, 'display': display}),
+          );
+          if (active == true) {
+            return;
+          }
+          if (active == null) {
+            _activeWindows.remove(wId);
+            _inactiveWindows.remove(wId);
+            windowIDs.remove(wId);
+          }
+        } catch (e) {
+          debugPrint('Pruning dead monitor window $wId: $e');
+          _activeWindows.remove(wId);
+          _inactiveWindows.remove(wId);
+          windowIDs.remove(wId);
         }
       }
     }
@@ -334,14 +347,27 @@ class RustDeskMultiWindowManager {
         type != WindowType.RemoteDesktop ||
         mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs);
 
-    if (windows.length > 1 || !openInTabs) {
-      for (final windowId in windows) {
-        if (await DesktopMultiWindow.invokeMethod(
-          windowId,
-          kWindowEventActiveSession,
-          remoteId,
-        )) {
-          return MultiWindowCallResult(windowId, null);
+    if (windows.isNotEmpty) {
+      for (final wId in List<int>.from(windows)) {
+        try {
+          final active = await DesktopMultiWindow.invokeMethod(
+            wId,
+            kWindowEventActiveSession,
+            remoteId,
+          );
+          if (active == true) {
+            return MultiWindowCallResult(wId, null);
+          }
+          if (active == null) {
+            _activeWindows.remove(wId);
+            _inactiveWindows.remove(wId);
+            windows.remove(wId);
+          }
+        } catch (e) {
+          debugPrint('Pruning dead session window $wId: $e');
+          _activeWindows.remove(wId);
+          _inactiveWindows.remove(wId);
+          windows.remove(wId);
         }
       }
     }
@@ -467,17 +493,28 @@ class RustDeskMultiWindowManager {
     bool isTerminalRunAsAdmin = false,
   }) async {
     // Iterate through terminal windows in reverse order to prioritize
-    // the most recently added or used windows, as they are more likely
-    // to have an active session (only if admin elevation is not explicitly requested).
-    if (!isTerminalRunAsAdmin) {
-      for (final windowId in _terminalWindows.reversed) {
-        if (await DesktopMultiWindow.invokeMethod(
-          windowId,
+    // the most recently added or used windows for both standard and admin modes,
+    // pruning dead window IDs if a previous attempt failed or closed.
+    for (final wId in List<int>.from(_terminalWindows.reversed)) {
+      try {
+        final active = await DesktopMultiWindow.invokeMethod(
+          wId,
           kWindowEventActiveSession,
-          {'id': remoteId, 'isTerminalRunAsAdmin': false},
-        )) {
-          return MultiWindowCallResult(windowId, null);
+          {'id': remoteId, 'isTerminalRunAsAdmin': isTerminalRunAsAdmin},
+        );
+        if (active == true) {
+          return MultiWindowCallResult(wId, null);
         }
+        if (active == null) {
+          _activeWindows.remove(wId);
+          _inactiveWindows.remove(wId);
+          _terminalWindows.remove(wId);
+        }
+      } catch (e) {
+        debugPrint('Pruning dead terminal window $wId: $e');
+        _activeWindows.remove(wId);
+        _inactiveWindows.remove(wId);
+        _terminalWindows.remove(wId);
       }
     }
 

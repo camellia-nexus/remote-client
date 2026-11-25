@@ -5,6 +5,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/event_loop.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
@@ -243,17 +245,22 @@ class FileModel {
     ) {
       cancel() => close(false);
       submit() => close(true);
+      final theme = Theme.of(context);
+      final tokens =
+          theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
+      final accent = theme.brightness == Brightness.dark
+          ? theme.colorScheme.secondary
+          : theme.colorScheme.primary;
       return CustomAlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.warning_rounded, color: Colors.red),
-            Text(title).paddingOnly(left: 10),
-          ],
+        title: ModernDialogHeader.warning(
+          title: title,
+          icon: CamelliaIcons.transfer,
+          onClose: cancel,
         ),
-        contentBoxConstraints: BoxConstraints(
+        contentBoxConstraints: const BoxConstraints(
           minHeight: 100,
           minWidth: 400,
-          maxWidth: 400,
+          maxWidth: 420,
         ),
         content: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -261,52 +268,103 @@ class FileModel {
           children: [
             Text(
               translate("This file exists, skip or overwrite this file?"),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 5),
-            Text(content),
-            Offstage(
-              offstage: !isIdentical,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 12),
-                  Text(
-                    translate("identical_file_tip"),
-                    style: const TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                ],
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
-            showCheckbox
-                ? CheckboxListTile(
-                    contentPadding: const EdgeInsets.all(0),
-                    dense: true,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: Text(translate("Do this for all conflicts")),
-                    value: fileConfirmCheckboxRemember,
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setState(() => fileConfirmCheckboxRemember = v);
-                    },
-                  )
-                : const SizedBox.shrink(),
+            const SizedBox(height: 6),
+            Text(
+              content,
+              style: CamelliaTypography.tabular(
+                theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            if (isIdentical) ...[
+              const SizedBox(height: 12),
+              Text(
+                translate("identical_file_tip"),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+            ],
+            if (showCheckbox) ...[
+              const SizedBox(height: 10),
+              InkWell(
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                onTap: () => setState(
+                  () =>
+                      fileConfirmCheckboxRemember =
+                          !fileConfirmCheckboxRemember,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 6,
+                    horizontal: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedContainer(
+                        duration: CamelliaMotion.resolve(
+                          context,
+                          CamelliaMotion.hover,
+                        ),
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: fileConfirmCheckboxRemember
+                              ? accent
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(
+                            color: fileConfirmCheckboxRemember
+                                ? accent
+                                : tokens.border,
+                            width: 1.1,
+                          ),
+                        ),
+                        child: fileConfirmCheckboxRemember
+                            ? const Icon(
+                                CamelliaIcons.check,
+                                size: 13,
+                                color: Colors.white,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 9),
+                      Flexible(
+                        child: Text(
+                          translate("Do this for all conflicts"),
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         actions: [
-          dialogButton(
-            "Cancel",
-            icon: Icon(Icons.close_rounded),
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
             onPressed: cancel,
-            isOutline: true,
+            child: Text(translate("Cancel")),
           ),
-          dialogButton(
-            "Skip",
-            icon: Icon(Icons.navigate_next_rounded),
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
             onPressed: () => close(null),
-            isOutline: true,
+            child: Text(translate("Skip")),
           ),
-          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            onPressed: submit,
+            child: Text(translate("Overwrite")),
+          ),
         ],
         onSubmit: submit,
         onCancel: cancel,
@@ -704,6 +762,28 @@ class FileController {
       debugPrint("Failed to removeFile, wrong files");
       return;
     }
+    if (items.items.isEmpty) return;
+
+    // Single upfront confirmation when multiple items are selected.
+    bool batchConfirmed = false;
+    if (items.items.length > 1) {
+      final previewNames = items.items
+          .take(4)
+          .map((e) => '• ${e.name}')
+          .join('\n');
+      final moreCount = items.items.length - 4;
+      final summary = moreCount > 0
+          ? '$previewNames\n+${moreCount.toString()} ${translate('More').toLowerCase()}'
+          : previewNames;
+      final confirmed = await showRemoveDialog(
+        '${translate('Delete items?')} (${items.items.length})',
+        summary,
+        false,
+      );
+      if (confirmed != true) return;
+      batchConfirmed = true;
+    }
+
     final isWindows = options.value.isWindows;
     await Future.forEach(items.items, (Entry item) async {
       final jobID = JobController.jobID.next();
@@ -749,11 +829,15 @@ class FileController {
         dialogManager?.dismissAll();
         if (fd.entries.isEmpty) {
           var deleteJobId = jobController.addDeleteDirJob(item, !isLocal, 0);
-          final confirm = await showRemoveDialog(
-            translate("Are you sure you want to delete this empty directory?"),
-            item.name,
-            false,
-          );
+          final confirm = batchConfirmed
+              ? true
+              : await showRemoveDialog(
+                  translate(
+                    "Are you sure you want to delete this empty directory?",
+                  ),
+                  item.name,
+                  false,
+                );
           if (confirm == true) {
             await sendRemoveEmptyDir(item.path, 0, deleteJobId);
           } else {
@@ -769,6 +853,20 @@ class FileController {
       } else {
         entries = [];
       }
+      if (entries.isEmpty) return;
+
+      // Single upfront confirmation per single file or non-empty directory.
+      final confirmedItem = batchConfirmed
+          ? true
+          : await showRemoveDialog(
+              item.isDirectory
+                  ? '$title (${entries.length})'
+                  : title,
+              item.isDirectory
+                  ? '${item.name}\n${translate("Are you sure you want to delete the file of this directory?")}'
+                  : content,
+              false,
+            );
       int deleteJobId;
       if (item.isDirectory) {
         deleteJobId = jobController.addDeleteDirJob(
@@ -780,55 +878,26 @@ class FileController {
         deleteJobId = jobController.addDeleteFileJob(item, !isLocal);
       }
 
-      for (var i = 0; i < entries.length; i++) {
-        final dirShow = item.isDirectory
-            ? "${translate("Are you sure you want to delete the file of this directory?")}\n"
-            : "";
-        final count = entries.length > 1 ? "${i + 1}/${entries.length}" : "";
-        content = "$dirShow\n\n${entries[i].path}".trim();
-        final confirm = await showRemoveDialog(
-          count.isEmpty ? title : "$title ($count)",
-          content,
-          item.isDirectory,
+      if (confirmedItem != true) {
+        jobController.updateJobStatus(
+          deleteJobId,
+          error: "cancel",
+          file_num: entries.length,
+          state: JobState.done,
         );
+        return;
+      }
+
+      for (var i = 0; i < entries.length; i++) {
         try {
-          if (confirm == true) {
-            sendRemoveFile(entries[i].path, i, deleteJobId);
-            final res = await jobController.jobResultListener.start();
-            // handle remove res;
-            if (item.isDirectory &&
-                res['file_num'] == (entries.length - 1).toString()) {
-              await sendRemoveEmptyDir(item.path, i, deleteJobId);
-            }
-          } else {
-            jobController.updateJobStatus(
-              deleteJobId,
-              file_num: i,
-              error: "cancel",
-            );
-          }
-          if (_removeCheckboxRemember) {
-            if (confirm == true) {
-              for (var j = i + 1; j < entries.length; j++) {
-                sendRemoveFile(entries[j].path, j, deleteJobId);
-                final res = await jobController.jobResultListener.start();
-                if (item.isDirectory &&
-                    res['file_num'] == (entries.length - 1).toString()) {
-                  await sendRemoveEmptyDir(item.path, i, deleteJobId);
-                }
-              }
-            } else {
-              jobController.updateJobStatus(
-                deleteJobId,
-                error: "cancel",
-                file_num: entries.length,
-                state: JobState.done,
-              );
-            }
-            break;
+          sendRemoveFile(entries[i].path, i, deleteJobId);
+          final res = await jobController.jobResultListener.start();
+          if (item.isDirectory &&
+              res['file_num'] == (entries.length - 1).toString()) {
+            await sendRemoveEmptyDir(item.path, i, deleteJobId);
           }
         } catch (e) {
-          print("remove error: $e");
+          debugPrint("remove error: $e");
         }
       }
     });
@@ -847,53 +916,110 @@ class FileController {
     ) {
       cancel() => close(false);
       submit() => close(true);
+      final theme = Theme.of(context);
+      final tokens =
+          theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
+      final glass = CamelliaGlassTokens.of(context);
+      final accent = theme.brightness == Brightness.dark
+          ? theme.colorScheme.secondary
+          : theme.colorScheme.primary;
       return CustomAlertDialog(
-        title: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.warning_rounded, color: Colors.red),
-            Expanded(child: Text(title).paddingOnly(left: 10)),
-          ],
+        title: ModernDialogHeader.error(
+          title: title,
+          icon: CamelliaIcons.trash,
+          onClose: cancel,
         ),
-        contentBoxConstraints: BoxConstraints(
-          minHeight: 100,
-          minWidth: 400,
-          maxWidth: 400,
+        contentBoxConstraints: const BoxConstraints(
+          minHeight: 84,
+          minWidth: 380,
+          maxWidth: 420,
         ),
         content: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(content),
+            Text(
+              content,
+              style: CamelliaTypography.tabular(
+                theme.textTheme.bodyMedium,
+              ),
+            ),
+            const SizedBox(height: 12),
             Text(
               translate("This is irreversible!"),
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.red,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: glass.statusAlert,
               ),
-            ).paddingOnly(top: 20),
-            showCheckbox
-                ? CheckboxListTile(
-                    contentPadding: const EdgeInsets.all(0),
-                    dense: true,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: Text(translate("Do this for all conflicts")),
-                    value: _removeCheckboxRemember,
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setState(() => _removeCheckboxRemember = v);
-                    },
-                  )
-                : const SizedBox.shrink(),
+            ),
+            if (showCheckbox) ...[
+              const SizedBox(height: 10),
+              InkWell(
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                onTap: () => setState(
+                  () => _removeCheckboxRemember = !_removeCheckboxRemember,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 6,
+                    horizontal: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedContainer(
+                        duration: CamelliaMotion.resolve(
+                          context,
+                          CamelliaMotion.hover,
+                        ),
+                        width: 18,
+                        height: 18,
+                        decoration: BoxDecoration(
+                          color: _removeCheckboxRemember
+                              ? accent
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(
+                            color: _removeCheckboxRemember
+                                ? accent
+                                : tokens.border,
+                            width: 1.1,
+                          ),
+                        ),
+                        child: _removeCheckboxRemember
+                            ? const Icon(
+                                CamelliaIcons.check,
+                                size: 13,
+                                color: Colors.white,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 9),
+                      Flexible(
+                        child: Text(
+                          translate("Do this for all conflicts"),
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         actions: [
-          dialogButton(
-            "Cancel",
-            icon: Icon(Icons.close_rounded),
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
             onPressed: cancel,
-            isOutline: true,
+            child: Text(translate("Cancel")),
           ),
-          dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+          GlassButton(
+            variant: GlassButtonVariant.danger,
+            icon: const Icon(CamelliaIcons.trash, size: 16),
+            onPressed: submit,
+            child: Text(translate("Delete")),
+          ),
         ],
         onSubmit: submit,
         onCancel: cancel,
@@ -979,23 +1105,38 @@ class FileController {
         }
 
         return CustomAlertDialog(
+          title: ModernDialogHeader(
+            title: translate('Rename'),
+            subtitle: item.name,
+            icon: Icons.drive_file_rename_outline_rounded,
+            onClose: close,
+          ),
+          contentBoxConstraints: const BoxConstraints(
+            minWidth: 360,
+            maxWidth: 400,
+          ),
           content: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              DialogTextField(
-                title: '${translate('Rename')} ${item.name}',
+              GlassInput(
                 controller: textEditingController,
                 errorText: errorText,
+                autofocus: true,
+                onSubmitted: (_) => submit(),
               ),
             ],
           ),
           actions: [
-            dialogButton(
-              "Cancel",
-              icon: Icon(Icons.close_rounded),
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
               onPressed: close,
-              isOutline: true,
+              child: Text(translate("Cancel")),
             ),
-            dialogButton("OK", icon: Icon(Icons.done_rounded), onPressed: submit),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              onPressed: submit,
+              child: Text(translate("OK")),
+            ),
           ],
           onSubmit: submit,
           onCancel: close,

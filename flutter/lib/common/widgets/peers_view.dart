@@ -8,6 +8,7 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/ab_model.dart';
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:visibility_detector/visibility_detector.dart';
@@ -169,6 +170,51 @@ class _PeersViewState extends State<_PeersView>
     }
   }
 
+  CamelliaGlyph _emptyGlyph() => switch (widget.peerTabIndex) {
+    PeerTabIndex.ab => CamelliaGlyph.addressBook,
+    PeerTabIndex.group => CamelliaGlyph.emptyGroups,
+    _ => CamelliaGlyph.emptyDevices,
+  };
+
+  Widget _buildStudioEmptyState({
+    required CamelliaGlyph glyph,
+    required String title,
+    required String subtitle,
+  }) {
+    final theme = Theme.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CamelliaStateIllustration(glyph: glyph, size: 54),
+              const SizedBox(height: 14),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<Peers>.value(
@@ -184,10 +230,10 @@ class _PeersViewState extends State<_PeersView>
                 message: translate('Please wait'),
               );
             }
-            return AppStatePane(
-              state: AppContentState.empty,
+            return _buildStudioEmptyState(
+              glyph: _emptyGlyph(),
               title: translate('Empty'),
-              message: translate(
+              subtitle: translate(
                 _emptyMessages[widget.peers.loadEvent] ?? 'Empty',
               ),
             );
@@ -222,10 +268,10 @@ class _PeersViewState extends State<_PeersView>
             if (peers.length > 1000) peers = peers.sublist(0, 1000);
             gFFI.peerTabModel.setCurrentTabCachedPeers(peers);
             if (peers.isEmpty) {
-              return AppStatePane(
-                state: AppContentState.noResults,
+              return _buildStudioEmptyState(
+                glyph: CamelliaGlyph.search,
                 title: translate('Search'),
-                message: translate('Empty'),
+                subtitle: translate('No matching devices'),
               );
             }
 

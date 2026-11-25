@@ -1,4 +1,6 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/mobile/pages/connection_page.dart';
 import 'package:camellia_remote_app/mobile/pages/scan_page.dart';
@@ -26,13 +28,19 @@ enum _MobileTabKind { connect, share, chat, settings }
 class _MobileTabSpec {
   const _MobileTabSpec({
     required this.kind,
-    required this.item,
+    required this.label,
+    required this.icon,
+    required this.selectedIcon,
     required this.builder,
+    this.badgeCount = 0,
   });
 
   final _MobileTabKind kind;
-  final GlassFloatingTabItem item;
+  final String label;
+  final IconData icon;
+  final IconData selectedIcon;
   final WidgetBuilder builder;
+  final int badgeCount;
 }
 
 class HomePage extends StatefulWidget {
@@ -44,10 +52,11 @@ class HomePage extends StatefulWidget {
   HomePageState createState() => HomePageState();
 }
 
-/// Hosts the mobile Liquid Glass workspace with a thumb-friendly floating
-/// capsule bottom tab bar and safe-area aware orientation layouts.
+/// Hosts the mobile Precision Studio workspace with an [IndexedStack] that
+/// preserves tab state across navigation and a frosted hairline bottom bar.
 class HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
+  final Map<_MobileTabKind, Widget> _cachedTabPages = {};
 
   List<_MobileTabSpec> _buildTabs() {
     final tabs = <_MobileTabSpec>[];
@@ -58,11 +67,9 @@ class HomePageState extends State<HomePage> {
       tabs.add(
         _MobileTabSpec(
           kind: _MobileTabKind.connect,
-          item: GlassFloatingTabItem(
-            label: translate('Connection'),
-            icon: Icons.sensors_outlined,
-            selectedIcon: Icons.sensors_rounded,
-          ),
+          label: translate('Connection'),
+          icon: CamelliaIcons.screen,
+          selectedIcon: CamelliaIcons.screen,
           builder: (_) => const ConnectionPage(appBarActions: []),
         ),
       );
@@ -72,11 +79,9 @@ class HomePageState extends State<HomePage> {
       tabs.add(
         _MobileTabSpec(
           kind: _MobileTabKind.share,
-          item: GlassFloatingTabItem(
-            label: translate('Share screen'),
-            icon: Icons.mobile_screen_share_outlined,
-            selectedIcon: Icons.mobile_screen_share_rounded,
-          ),
+          label: translate('Share screen'),
+          icon: Icons.mobile_screen_share_outlined,
+          selectedIcon: Icons.mobile_screen_share_rounded,
           builder: (_) => ServerPage(),
         ),
       );
@@ -86,12 +91,10 @@ class HomePageState extends State<HomePage> {
       tabs.add(
         _MobileTabSpec(
           kind: _MobileTabKind.chat,
-          item: GlassFloatingTabItem(
-            label: translate('Chat'),
-            icon: Icons.chat_bubble_outline_rounded,
-            selectedIcon: Icons.chat_bubble_rounded,
-            badgeCount: gFFI.chatModel.mobileUnreadSum.value,
-          ),
+          label: translate('Chat'),
+          icon: CamelliaIcons.chat,
+          selectedIcon: Icons.chat_bubble_rounded,
+          badgeCount: gFFI.chatModel.mobileUnreadSum.value,
           builder: (_) => ChatPage(type: ChatPageType.mobileMain),
         ),
       );
@@ -101,12 +104,10 @@ class HomePageState extends State<HomePage> {
       tabs.add(
         _MobileTabSpec(
           kind: _MobileTabKind.settings,
-          item: GlassFloatingTabItem(
-            label: translate('Settings'),
-            icon: Icons.tune_outlined,
-            selectedIcon: Icons.tune_rounded,
-          ),
-          builder: (_) => SettingsPage(),
+          label: translate('Settings'),
+          icon: CamelliaIcons.settings,
+          selectedIcon: CamelliaIcons.settings,
+          builder: (_) => const SettingsPage(),
         ),
       );
     }
@@ -127,7 +128,11 @@ class HomePageState extends State<HomePage> {
       isAndroid && _activeKind == _MobileTabKind.chat;
 
   void refreshPages() {
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {
+        _cachedTabPages.clear();
+      });
+    }
   }
 
   void selectChatPage() {
@@ -142,7 +147,10 @@ class HomePageState extends State<HomePage> {
   void _onSelectTab(int index, List<_MobileTabSpec> tabs) {
     if (index < 0 || index >= tabs.length) return;
     final previousKind = _activeKind;
-    setState(() => _selectedIndex = index);
+    if (index != _selectedIndex) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      setState(() => _selectedIndex = index);
+    }
     if (previousKind == _MobileTabKind.chat &&
         tabs[index].kind != _MobileTabKind.chat) {
       gFFI.chatModel.hideChatIconOverlay();
@@ -151,9 +159,33 @@ class HomePageState extends State<HomePage> {
     }
   }
 
+  List<Widget> _resolveTabChildren(
+    BuildContext context,
+    List<_MobileTabSpec> tabs,
+  ) {
+    final activeKinds = tabs.map((t) => t.kind).toSet();
+    _cachedTabPages.removeWhere((kind, _) => !activeKinds.contains(kind));
+    return tabs
+        .map(
+          (spec) => _cachedTabPages.putIfAbsent(
+            spec.kind,
+            () => KeyedSubtree(
+              key: ValueKey<_MobileTabKind>(spec.kind),
+              child: spec.builder(context),
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    final bottomSafe = MediaQuery.paddingOf(context).bottom;
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Obx(() {
       // Subscribe to live Android chat unread badge updates.
       final _ = gFFI.chatModel.mobileUnreadSum.value;
@@ -169,6 +201,7 @@ class HomePageState extends State<HomePage> {
           !bind.isDisableSettings() &&
           bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y';
       final showBottomBar = tabs.length > 1 && !keyboardVisible;
+      const navBarContentHeight = 60.0;
 
       return AppAmbientBackground(
         child: Scaffold(
@@ -179,12 +212,27 @@ class HomePageState extends State<HomePage> {
             surfaceTintColor: Colors.transparent,
             elevation: 0,
             scrolledUnderElevation: 0,
+            toolbarHeight: 56,
             centerTitle: false,
             titleSpacing: 16,
+            flexibleSpace: GlassSurface(
+              layer: CamelliaGlassLayer.sidebar,
+              borderRadius: BorderRadius.zero,
+              showShadow: false,
+              strokeWidth: 0,
+              child: const SizedBox.expand(),
+            ),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(0.85),
+              child: Container(
+                height: 0.85,
+                color: tokens.border.withValues(alpha: 0.72),
+              ),
+            ),
             title: Row(
               children: [
-                CamelliaAnimatedBrandMark(
-                  size: 34,
+                CamelliaBrandMark(
+                  size: 32,
                   semanticLabel: bind.mainGetAppNameSync(),
                 ),
                 const SizedBox(width: 10),
@@ -197,18 +245,19 @@ class HomePageState extends State<HomePage> {
                         bind.mainGetAppNameSync(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
-                            ),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
                       ),
                       if (activeTab != null)
                         Text(
-                          activeTab.item.label,
+                          activeTab.label,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: tokens.muted,
+                          ),
                         ),
                     ],
                   ),
@@ -220,13 +269,15 @@ class HomePageState extends State<HomePage> {
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: GlassIconButton(
-                    icon: Icons.qr_code_scanner_rounded,
+                    icon: CamelliaIcons.qrScan,
                     tooltip: translate('Scan QR'),
-                    size: 38,
-                    iconSize: 19,
+                    size: 36,
+                    iconSize: 18,
                     onPressed: () {
                       Navigator.of(context).push(
-                        MaterialPageRoute<void>(builder: (_) => ScanPage()),
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ScanPage(),
+                        ),
                       );
                     },
                   ),
@@ -239,16 +290,19 @@ class HomePageState extends State<HomePage> {
                     icon: GlassIconButton(
                       icon: Icons.forum_outlined,
                       tooltip: translate('Conversations'),
-                      size: 38,
-                      iconSize: 19,
-                      onPressed: () => ChatPage.showConversationSwitcher(
-                        context,
-                      ),
+                      size: 36,
+                      iconSize: 18,
+                      onPressed: () =>
+                          ChatPage.showConversationSwitcher(context),
                     ),
                   ),
                 ),
-              if (showShareMenu) const ServerAccessMenuButton(),
-              const SizedBox(width: 8),
+              if (showShareMenu)
+                const Padding(
+                  padding: EdgeInsets.only(right: 6),
+                  child: ServerAccessMenuButton(),
+                ),
+              const SizedBox(width: 10),
             ],
           ),
           body: SafeArea(
@@ -256,35 +310,213 @@ class HomePageState extends State<HomePage> {
             bottom: false,
             child: tabs.isEmpty
                 ? const SizedBox.shrink()
-                : AnimatedSwitcher(
-                    duration: CamelliaMotion.resolve(
-                      context,
-                      CamelliaMotion.content,
+                : Padding(
+                    padding: EdgeInsets.only(
+                      bottom: showBottomBar
+                          ? navBarContentHeight + bottomSafe
+                          : bottomSafe,
                     ),
-                    switchInCurve: CamelliaMotion.enter,
-                    switchOutCurve: CamelliaMotion.exit,
-                    child: KeyedSubtree(
-                      key: ValueKey<_MobileTabKind>(activeTab!.kind),
-                      child: Padding(
-                        padding: EdgeInsets.only(
-                          bottom: showBottomBar
-                              ? 86 + MediaQuery.paddingOf(context).bottom
-                              : 0,
-                        ),
-                        child: activeTab.builder(context),
-                      ),
+                    child: IndexedStack(
+                      index: clampedIndex,
+                      children: _resolveTabChildren(context, tabs),
                     ),
                   ),
           ),
           bottomNavigationBar: showBottomBar
-              ? GlassFloatingTabBar(
-                  items: tabs.map((t) => t.item).toList(growable: false),
+              ? _MobileStudioBottomBar(
+                  tabs: tabs,
                   currentIndex: clampedIndex,
+                  bottomPadding: bottomSafe,
+                  height: navBarContentHeight,
                   onTap: (i) => _onSelectTab(i, tabs),
                 )
               : null,
         ),
       );
     });
+  }
+}
+
+class _MobileStudioBottomBar extends StatelessWidget {
+  const _MobileStudioBottomBar({
+    required this.tabs,
+    required this.currentIndex,
+    required this.bottomPadding,
+    required this.height,
+    required this.onTap,
+  });
+
+  final List<_MobileTabSpec> tabs;
+  final int currentIndex;
+  final double bottomPadding;
+  final double height;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    final activeColor = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final reduceMotion = CamelliaMotion.reduceMotion(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: tokens.border.withValues(alpha: dark ? 0.85 : 0.90),
+            width: 0.85,
+          ),
+        ),
+      ),
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.modal,
+        borderRadius: BorderRadius.zero,
+        showShadow: false,
+        strokeWidth: 0,
+        padding: EdgeInsets.fromLTRB(10, 6, 10, bottomPadding + 6),
+        child: Center(
+          heightFactor: 1.0,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SizedBox(
+              height: height - 12,
+              child: Row(
+                children: [
+                  for (var i = 0; i < tabs.length; i++)
+                    Expanded(
+                      child: _MobileNavItem(
+                        spec: tabs[i],
+                        selected: i == currentIndex,
+                        activeColor: activeColor,
+                        mutedColor: tokens.muted,
+                        dark: dark,
+                        reduceMotion: reduceMotion,
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          onTap(i);
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileNavItem extends StatelessWidget {
+  const _MobileNavItem({
+    required this.spec,
+    required this.selected,
+    required this.activeColor,
+    required this.mutedColor,
+    required this.dark,
+    required this.reduceMotion,
+    required this.onTap,
+  });
+
+  final _MobileTabSpec spec;
+  final bool selected;
+  final Color activeColor;
+  final Color mutedColor;
+  final bool dark;
+  final bool reduceMotion;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: spec.label,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 160),
+              curve: CamelliaMotion.standard,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+              decoration: BoxDecoration(
+                color: selected
+                    ? activeColor.withValues(alpha: dark ? 0.20 : 0.12)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                border: selected
+                    ? Border.all(
+                        color: activeColor.withValues(
+                          alpha: dark ? 0.36 : 0.24,
+                        ),
+                        width: 0.85,
+                      )
+                    : null,
+              ),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    selected ? spec.selectedIcon : spec.icon,
+                    size: 20,
+                    color: selected ? activeColor : mutedColor,
+                  ),
+                  if (spec.badgeCount > 0)
+                    Positioned(
+                      right: -10,
+                      top: -4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: CamelliaColors.statusAlertLight,
+                          borderRadius: BorderRadius.circular(
+                            CamelliaRadius.pill,
+                          ),
+                        ),
+                        child: Text(
+                          spec.badgeCount > 99 ? '99+' : '${spec.badgeCount}',
+                          style: CamelliaTypography.tabular(
+                            const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              spec.label,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 11,
+                color: selected ? activeColor : mutedColor,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

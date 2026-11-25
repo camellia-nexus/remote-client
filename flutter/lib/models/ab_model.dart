@@ -9,7 +9,6 @@ import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:get/get.dart';
-import 'package:bot_toast/bot_toast.dart';
 
 import '../utils/http_service.dart' as http;
 import '../common.dart';
@@ -1307,10 +1306,7 @@ class AbModel {
   bool isCurrentAbFull(bool warn) {
     final res = current.isFull();
     if (res && warn) {
-      BotToast.showText(
-        contentColor: Colors.red,
-        text: translate('exceed_max_devices'),
-      );
+      showToast(translate('exceed_max_devices'));
     }
     return res;
   }

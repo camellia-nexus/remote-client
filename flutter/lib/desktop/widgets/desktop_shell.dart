@@ -14,12 +14,19 @@ import '../../ui/glass_components.dart';
 import 'dragable_divider.dart';
 
 /// Theme-aware active brand accent guaranteeing WCAG AA+ contrast across
-/// Light (`#4F46E5`), Dark (`#818CF8`), and OLED Midnight (`#818CF8`).
+/// Light, Dark, and OLED Midnight across all three Camellia theme styles.
 Color _shellActiveAccent(BuildContext context) {
   final theme = Theme.of(context);
-  return theme.brightness == Brightness.dark
-      ? CamelliaColors.indigoDark
-      : CamelliaColors.indigo;
+  final glass = CamelliaGlassTokens.of(context);
+  final style = glass.themeStyle != CamelliaThemeStyle.auroraFrost
+      ? glass.themeStyle
+      : MyTheme.themeStyleNotifier.value;
+  if (style == CamelliaThemeStyle.auroraFrost) {
+    return theme.brightness == Brightness.dark
+        ? CamelliaColors.indigoDark
+        : CamelliaColors.indigo;
+  }
+  return theme.colorScheme.primary;
 }
 
 /// Navigation destinations available in the Camellia Remote desktop shell.
@@ -218,8 +225,9 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
   void _handleSidebarMouseEnter(PointerEnterEvent event) {
     _hoverExitTimer?.cancel();
     _hoverEnterTimer?.cancel();
+    if (_isDragging) return;
     _hoverEnterTimer = Timer(const Duration(milliseconds: 100), () {
-      if (mounted && !_hoverExpanded) {
+      if (mounted && !_hoverExpanded && !_isDragging) {
         setState(() => _hoverExpanded = true);
       }
     });
@@ -237,6 +245,7 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
   }
 
   void _onDividerDragStart() {
+    _hoverEnterTimer?.cancel();
     _hoverExitTimer?.cancel();
     _isDragging = true;
   }
@@ -254,12 +263,21 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
   }
 
   void _onDividerEnter(PointerEnterEvent event) {
+    _hoverEnterTimer?.cancel();
     _hoverExitTimer?.cancel();
     _isDividerHovered = true;
   }
 
   void _onDividerExit(PointerExitEvent event) {
     _isDividerHovered = false;
+    if (!_isDragging && _hoverExpanded) {
+      _hoverExitTimer?.cancel();
+      _hoverExitTimer = Timer(const Duration(milliseconds: 220), () {
+        if (mounted && _hoverExpanded && !_isDragging && !_isDividerHovered) {
+          setState(() => _hoverExpanded = false);
+        }
+      });
+    }
   }
 
   @override
@@ -298,16 +316,27 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
     }
   }
 
+  List<DesktopNavDestination> _commandPaletteDestinations() {
+    return <DesktopNavDestination>[
+      DesktopNavDestination.connect,
+      if (widget.devicesBuilder != null) DesktopNavDestination.devices,
+      if (widget.addressBookBuilder != null) DesktopNavDestination.addressBook,
+      DesktopNavDestination.settings,
+    ];
+  }
+
   Future<void> openCommandPalette() async {
     await showCamelliaCommandPalette(
       context: context,
       onNavigate: setDestination,
       onToggleSidebar: toggleCollapse,
+      availableDestinations: _commandPaletteDestinations(),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
 
     final shellBody = LayoutBuilder(
@@ -393,14 +422,15 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
                       ),
                     ),
                   ),
-                  // Resizable Pane Splitting Divider
+                  // Resizable Pane Splitting Divider (8px interactive hit zone)
                   if (!collapsed)
                     DraggableDivider(
                       key: const ValueKey('desktop-nav-divider'),
                       axis: Axis.vertical,
-                      thickness: 1.0,
-                      padding: const EdgeInsets.symmetric(horizontal: 4.0),
-                      color: glass.specularBottom,
+                      thickness: 0.85,
+                      padding: const EdgeInsets.symmetric(horizontal: 3.575),
+                      color: tokens.border,
+                      activeColor: _shellActiveAccent(context).withValues(alpha: 0.82),
                       onDragStart: _onDividerDragStart,
                       onDragEnd: _onDividerDragEnd,
                       onEnter: _onDividerEnter,
@@ -420,8 +450,8 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
                     VerticalDivider(
                       key: const ValueKey('desktop-nav-divider'),
                       width: 1,
-                      thickness: 1,
-                      color: glass.specularBottom,
+                      thickness: 0.85,
+                      color: tokens.border,
                     ),
                 ],
               ),
@@ -451,10 +481,6 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
           const SingleActivator(LogicalKeyboardKey.keyK, control: true):
               openCommandPalette,
           const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
-              openCommandPalette,
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true):
-              openCommandPalette,
-          const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
               openCommandPalette,
         },
         child: widget.topBar != null
@@ -855,6 +881,9 @@ class _DesktopNavItemState extends State<_DesktopNavItem> {
     final scheme = theme.colorScheme;
     final glass = CamelliaGlassTokens.of(context);
     final dark = theme.brightness == Brightness.dark;
+    final themeStyle = glass.themeStyle != CamelliaThemeStyle.auroraFrost
+        ? glass.themeStyle
+        : MyTheme.themeStyleNotifier.value;
     final accent = _shellActiveAccent(context);
     final isSelected = widget.isSelected;
     final isCollapsed = widget.isCollapsed;
@@ -863,7 +892,13 @@ class _DesktopNavItemState extends State<_DesktopNavItem> {
 
     final Color backgroundColor;
     if (isSelected) {
-      backgroundColor = accent.withValues(alpha: dark ? 0.20 : 0.12);
+      if (themeStyle == CamelliaThemeStyle.auroraFrost) {
+        backgroundColor = dark
+            ? CamelliaColors.indigoDark.withValues(alpha: 0.20)
+            : CamelliaColors.indigo.withValues(alpha: 0.12);
+      } else {
+        backgroundColor = scheme.primary.withValues(alpha: 0.14);
+      }
     } else if (_hovered) {
       backgroundColor = glass.hoverOverlay;
     } else {
@@ -972,24 +1007,7 @@ class _DesktopNavItemState extends State<_DesktopNavItem> {
                     strokeWidth: 0.85,
                   )
                 : null,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                if (isSelected)
-                  Positioned(
-                    left: 2,
-                    child: Container(
-                      width: 3,
-                      height: 16,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                      ),
-                    ),
-                  ),
-                Icon(iconData, size: 22, color: foregroundColor),
-              ],
-            ),
+            child: Icon(iconData, size: 21, color: foregroundColor),
           ),
         ),
       );
@@ -1021,27 +1039,10 @@ class _DesktopNavItemState extends State<_DesktopNavItem> {
                 )
               : null,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                AnimatedOpacity(
-                  duration: CamelliaMotion.resolve(
-                    context,
-                    CamelliaMotion.state,
-                  ),
-                  curve: CamelliaMotion.springSnappy,
-                  opacity: isSelected ? 1.0 : 0.0,
-                  child: Container(
-                    width: 3,
-                    height: 18,
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      color: accent,
-                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                    ),
-                  ),
-                ),
-                Icon(iconData, size: 20, color: foregroundColor),
+                Icon(iconData, size: 19, color: foregroundColor),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -1211,6 +1212,8 @@ Future<void> showCamelliaCommandPalette({
   required BuildContext context,
   required ValueChanged<DesktopNavDestination> onNavigate,
   required VoidCallback onToggleSidebar,
+  List<DesktopNavDestination> availableDestinations =
+      DesktopNavDestination.values,
 }) {
   return showDialog<void>(
     context: context,
@@ -1219,6 +1222,7 @@ Future<void> showCamelliaCommandPalette({
       hostContext: context,
       onNavigate: onNavigate,
       onToggleSidebar: onToggleSidebar,
+      availableDestinations: availableDestinations,
     ),
   );
 }
@@ -1228,11 +1232,13 @@ class _CamelliaCommandPaletteDialog extends StatefulWidget {
     required this.hostContext,
     required this.onNavigate,
     required this.onToggleSidebar,
+    required this.availableDestinations,
   });
 
   final BuildContext hostContext;
   final ValueChanged<DesktopNavDestination> onNavigate;
   final VoidCallback onToggleSidebar;
+  final List<DesktopNavDestination> availableDestinations;
 
   @override
   State<_CamelliaCommandPaletteDialog> createState() =>
@@ -1343,7 +1349,7 @@ class _CamelliaCommandPaletteDialogState
 
   List<_CommandEntry> _buildEntries() {
     final staticCommands = <_CommandEntry>[
-      for (final dest in DesktopNavDestination.values)
+      for (final dest in widget.availableDestinations)
         _CommandEntry(
           title: dest.label,
           subtitle: translate('Switch workspace'),
@@ -1401,7 +1407,7 @@ class _CamelliaCommandPaletteDialogState
     if (strippedId.length >= 6 && RegExp(r'^\d+$').hasMatch(strippedId)) {
       results.add(
         _CommandEntry(
-          title: '${translate('Connect')} to ${formatID(strippedId)}',
+          title: '${translate('Connect')} · ${formatID(strippedId)}',
           subtitle: translate('Control Remote Desktop'),
           icon: Icons.bolt_rounded,
           badgeText: translate('Connect'),

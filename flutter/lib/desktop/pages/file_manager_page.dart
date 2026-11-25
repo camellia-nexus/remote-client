@@ -21,12 +21,17 @@ import 'file_manager_drop_stub.dart'
     if (dart.library.io) 'file_manager_drop_native.dart';
 
 import '../../consts.dart';
-import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
-import '../widgets/popup_menu.dart';
+
+class _FilePaneDragData {
+  const _FilePaneDragData({required this.isLocal, required this.entries});
+
+  final bool isLocal;
+  final List<Entry> entries;
+}
 
 /// status of location bar
 enum LocationStatus {
@@ -84,7 +89,8 @@ class _FileManagerPageState extends State<FileManagerPage>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   final _mouseFocusScope = Rx<MouseFocusScope>(MouseFocusScope.none);
 
-  final _dropMaskVisible = false.obs;
+  final _localDropMaskVisible = false.obs;
+  final _remoteDropMaskVisible = false.obs;
   final _transferDrawerExpanded = false.obs;
   final _transferScrollController = ScrollController();
   final _overlayKeyState = OverlayKeyState();
@@ -189,27 +195,29 @@ class _FileManagerPageState extends State<FileManagerPage>
                           padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
                           child: Row(
                             children: [
-                              if (!isWeb) ...[
+                                if (!isWeb) ...[
+                                  Expanded(
+                                    child: dropArea(
+                                      FileManagerView(
+                                        model.localController,
+                                        _ffi,
+                                        _mouseFocusScope,
+                                      ),
+                                      maskVisible: _localDropMaskVisible,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                ],
                                 Expanded(
                                   child: dropArea(
                                     FileManagerView(
-                                      model.localController,
+                                      model.remoteController,
                                       _ffi,
                                       _mouseFocusScope,
                                     ),
+                                    maskVisible: _remoteDropMaskVisible,
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                              ],
-                              Expanded(
-                                child: dropArea(
-                                  FileManagerView(
-                                    model.remoteController,
-                                    _ffi,
-                                    _mouseFocusScope,
-                                  ),
-                                ),
-                              ),
                             ],
                           ),
                         ),
@@ -226,24 +234,31 @@ class _FileManagerPageState extends State<FileManagerPage>
     );
   }
 
-  Widget dropArea(FileManagerView fileView) {
+  Widget dropArea(
+    FileManagerView fileView, {
+    required RxBool maskVisible,
+  }) {
+    final isLocalPane = fileView.controller.isLocal;
     return DropTarget(
+      enable: !isLocalPane,
       onDragDone: (detail) {
-        _dropMaskVisible.value = false;
-        handleDragDone(detail, fileView.controller.isLocal);
+        maskVisible.value = false;
+        handleDragDone(detail, isLocalPane);
       },
       onDragEntered: (enter) {
-        _dropMaskVisible.value = true;
+        if (!isLocalPane) {
+          maskVisible.value = true;
+        }
       },
       onDragExited: (exit) {
-        _dropMaskVisible.value = false;
+        maskVisible.value = false;
       },
       child: Stack(
         fit: StackFit.expand,
         children: [
           fileView,
           Obx(() {
-            if (!_dropMaskVisible.value) return const SizedBox.shrink();
+            if (!maskVisible.value) return const SizedBox.shrink();
             final theme = Theme.of(context);
             final accent = theme.brightness == Brightness.dark
                 ? theme.colorScheme.secondary
@@ -254,7 +269,8 @@ class _FileManagerPageState extends State<FileManagerPage>
                 tintColor: accent.withValues(alpha: 0.16),
                 borderTopColor: accent.withValues(alpha: 0.85),
                 borderBottomColor: accent.withValues(alpha: 0.55),
-                strokeWidth: 1.6,
+                strokeWidth: 1.4,
+                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -321,11 +337,33 @@ class _FileManagerPageState extends State<FileManagerPage>
 
     return Obx(() {
       final jobs = jobController.jobTable;
-      final activeCount = jobs
+      final activeJobs = jobs
           .where(
             (j) => j.state == JobState.inProgress || j.state == JobState.paused,
           )
+          .toList(growable: false);
+      final activeCount = activeJobs.length;
+      final completedCount = jobs
+          .where((j) => j.state == JobState.done || j.state == JobState.error)
           .length;
+      double totalSpeedBytes = 0.0;
+      int aggregateTotalBytes = 0;
+      int aggregateFinishedBytes = 0;
+      for (final j in activeJobs) {
+        if (j.state == JobState.inProgress && j.speed > 0 && j.speed.isFinite) {
+          totalSpeedBytes += j.speed;
+        }
+        if (j.effectiveTotalSize > 0) {
+          aggregateTotalBytes += j.effectiveTotalSize;
+          aggregateFinishedBytes += j.effectiveFinishedSize;
+        }
+      }
+      final double? aggregatePercent = aggregateTotalBytes > 0
+          ? (aggregateFinishedBytes / aggregateTotalBytes).clamp(0.0, 1.0)
+          : (activeCount > 0 ? null : 0.0);
+      final liveSpeedLabel = totalSpeedBytes > 0
+          ? '${readableFileSize(totalSpeedBytes)}/s'
+          : '';
       final expanded = _transferDrawerExpanded.value;
 
       return Padding(
@@ -333,6 +371,7 @@ class _FileManagerPageState extends State<FileManagerPage>
         child: GlassSurface(
           layer: CamelliaGlassLayer.modal,
           elevated: expanded,
+          strokeWidth: 0.85,
           borderRadius: BorderRadius.circular(CamelliaRadius.surface),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -374,7 +413,68 @@ class _FileManagerPageState extends State<FileManagerPage>
                           tabularNums: true,
                           compact: true,
                         ),
+                        if (activeCount > 0) ...[
+                          const SizedBox(width: 14),
+                          SizedBox(
+                            width: 140,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(
+                                CamelliaRadius.pill,
+                              ),
+                              child: LinearProgressIndicator(
+                                value: aggregatePercent,
+                                minHeight: 5,
+                                backgroundColor:
+                                    theme.colorScheme.surfaceContainerHighest,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  accent,
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (aggregatePercent != null) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              '${(aggregatePercent * 100).round()}%',
+                              style: CamelliaTypography.tabular(
+                                theme.textTheme.labelSmall?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (liveSpeedLabel.isNotEmpty) ...[
+                            const SizedBox(width: 10),
+                            Text(
+                              liveSpeedLabel,
+                              style: CamelliaTypography.tabular(
+                                theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                         const Spacer(),
+                        if (completedCount > 0) ...[
+                          GlassButton(
+                            variant: GlassButtonVariant.ghost,
+                            minHeight: 28,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            onPressed: () {
+                              jobController.jobTable.removeWhere(
+                                (j) =>
+                                    j.state == JobState.done ||
+                                    j.state == JobState.error,
+                              );
+                            },
+                            child: Text(translate('Clear Completed')),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         Icon(
                           expanded
                               ? Icons.keyboard_arrow_down_rounded
@@ -699,9 +799,9 @@ class _FileManagerViewState extends State<FileManagerView> {
   final _breadCrumbScroller = ScrollController();
   final _keyboardNode = FocusNode();
   final _listSearchBuffer = TimeoutStringBuffer();
-  final _nameColWidth = 0.0.obs;
-  final _modifiedColWidth = 0.0.obs;
-  final _sizeColWidth = 0.0.obs;
+  final _modifiedColWidth = 152.0.obs;
+  final _sizeColWidth = 92.0.obs;
+  final _hoveredEntry = ValueNotifier<Entry?>(null);
   final _fileListScrollController = ScrollController();
   final _pathInputController = TextEditingController();
   final _globalHeaderKey = GlobalKey();
@@ -740,6 +840,7 @@ class _FileManagerViewState extends State<FileManagerView> {
     _breadCrumbScroller.dispose();
     _fileListScrollController.dispose();
     _pathInputController.dispose();
+    _hoveredEntry.dispose();
     super.dispose();
   }
 
@@ -764,8 +865,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                           : MouseFocusScope.remote;
                       _keyboardNode.requestFocus();
                     },
-                    onExit: (evt) =>
-                        widget._mouseFocusScope.value = MouseFocusScope.none,
+                    onExit: (evt) {
+                      widget._mouseFocusScope.value = MouseFocusScope.none;
+                      _hoveredEntry.value = null;
+                    },
                     child: _buildFileList(context, _fileListScrollController),
                   ),
                 ),
@@ -781,21 +884,98 @@ class _FileManagerViewState extends State<FileManagerView> {
     final windowWidthNow = MediaQuery.sizeOf(context).width;
     if (_windowWidthPrev == null) {
       _windowWidthPrev = windowWidthNow;
-      final defaultColumnWidth = windowWidthNow * 0.115;
-      _fileTransferMinimumWidth = defaultColumnWidth / 3;
-      _nameColWidth.value = defaultColumnWidth;
-      _modifiedColWidth.value = defaultColumnWidth;
-      _sizeColWidth.value = defaultColumnWidth;
+      _fileTransferMinimumWidth = 68.0;
+      _modifiedColWidth.value = max(136.0, min(180.0, windowWidthNow * 0.12));
+      _sizeColWidth.value = max(84.0, min(116.0, windowWidthNow * 0.075));
+    } else if (_windowWidthPrev != windowWidthNow) {
+      _windowWidthPrev = windowWidthNow;
+    }
+  }
+
+  Future<void> _showCreateFolderDialog() async {
+    final name = TextEditingController();
+    String? errorText;
+    void onTextChanged() {
+      if (errorText != null) {
+        errorText = null;
+      }
     }
 
-    if (_windowWidthPrev != windowWidthNow) {
-      final difference = windowWidthNow / _windowWidthPrev!;
-      _windowWidthPrev = windowWidthNow;
-      _fileTransferMinimumWidth *= difference;
-      _nameColWidth.value *= difference;
-      _modifiedColWidth.value *= difference;
-      _sizeColWidth.value *= difference;
+    name.addListener(onTextChanged);
+    try {
+      await _ffi.dialogManager.show((setState, close, context) {
+        void submit() {
+          if (name.value.text.isNotEmpty) {
+            if (!PathUtil.validName(
+              name.value.text,
+              controller.options.value.isWindows,
+            )) {
+              setState(() {
+                errorText = translate("Invalid folder name");
+              });
+              return;
+            }
+            controller.createDir(
+              PathUtil.join(
+                controller.directory.value.path,
+                name.value.text,
+                controller.options.value.isWindows,
+              ),
+            );
+            close();
+          }
+        }
+
+        void cancel() => close(false);
+        return CustomAlertDialog(
+          title: ModernDialogHeader(
+            icon: CamelliaIcons.folderNew,
+            title: translate("Create Folder"),
+            onClose: cancel,
+          ),
+          contentBoxConstraints: const BoxConstraints(
+            minWidth: 360,
+            maxWidth: 400,
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GlassInput(
+                controller: name,
+                labelText: translate("Please enter the folder name"),
+                errorText: errorText,
+                autofocus: true,
+                onSubmitted: (_) => submit(),
+              ),
+            ],
+          ),
+          actions: [
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              onPressed: cancel,
+              child: Text(translate("Cancel")),
+            ),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              onPressed: submit,
+              child: Text(translate("OK")),
+            ),
+          ],
+          onSubmit: submit,
+          onCancel: cancel,
+        );
+      });
+    } finally {
+      name.removeListener(onTextChanged);
+      name.dispose();
     }
+  }
+
+  void _transferSelected() {
+    if (!SelectedItems.valid(selectedItems.items)) return;
+    final otherSideData = controller.getOtherSideDirectoryData();
+    controller.sendFiles(selectedItems, otherSideData);
+    selectedItems.clear();
   }
 
   void onLocationFocusChanged() {
@@ -811,7 +991,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Widget headTools() {
-    var uploadButtonTapPosition = RelativeRect.fill;
+    var uploadButtonTapGlobal = Offset.zero;
     final theme = Theme.of(context);
     final glass = CamelliaGlassTokens.of(context);
     final accent = theme.brightness == Brightness.dark
@@ -823,15 +1003,15 @@ class _FileManagerViewState extends State<FileManagerView> {
       children: [
         // Pane header
         Padding(
-          padding: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.only(bottom: 10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(11),
+                  borderRadius: BorderRadius.circular(10),
                   color: accent.withValues(alpha: 0.14),
                 ),
                 alignment: Alignment.center,
@@ -844,13 +1024,13 @@ class _FileManagerViewState extends State<FileManagerView> {
                     if (snapshot.hasData && snapshot.data!.isNotEmpty) {
                       return CamelliaIcons.platformBadge(
                         snapshot.data!,
-                        size: 22,
+                        size: 20,
                         color: accent,
                       );
                     }
                     return SizedBox(
-                      width: 18,
-                      height: 18,
+                      width: 16,
+                      height: 16,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: accent,
@@ -910,6 +1090,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                 layer: CamelliaGlassLayer.floating,
                 showShadow: false,
                 enableBlur: false,
+                strokeWidth: 0.85,
                 borderRadius: BorderRadius.circular(CamelliaRadius.control),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 8,
@@ -995,138 +1176,63 @@ class _FileManagerViewState extends State<FileManagerView> {
           ],
         ),
         const SizedBox(height: 8),
-        // Action row
+        // Action row (clean standard LTR alignment on both Local and Remote panes)
         Row(
-          textDirection: isLocal ? TextDirection.ltr : TextDirection.rtl,
           children: [
-            Expanded(
-              child: Row(
-                mainAxisAlignment: isLocal
-                    ? MainAxisAlignment.start
-                    : MainAxisAlignment.end,
-                children: [
-                  GlassIconButton(
-                    icon: CamelliaIcons.home,
-                    size: 34,
-                    iconSize: 17,
-                    tooltip: translate('Home'),
-                    onPressed: () {
-                      controller.goToHomeDirectory();
-                    },
-                  ),
-                  const SizedBox(width: 4),
-                  GlassIconButton(
-                    icon: CamelliaIcons.folderNew,
-                    size: 34,
-                    iconSize: 17,
-                    tooltip: translate('Create Folder'),
-                    onPressed: () async {
-                      final name = TextEditingController();
-                      String? errorText;
-                      void onTextChanged() {
-                        if (errorText != null) {
-                          errorText = null;
-                        }
+            GlassIconButton(
+              icon: CamelliaIcons.home,
+              size: 34,
+              iconSize: 17,
+              tooltip: translate('Home'),
+              onPressed: () {
+                controller.goToHomeDirectory();
+              },
+            ),
+            const SizedBox(width: 4),
+            GlassIconButton(
+              icon: CamelliaIcons.folderNew,
+              size: 34,
+              iconSize: 17,
+              tooltip: translate('Create Folder'),
+              onPressed: _showCreateFolderDialog,
+            ),
+            const SizedBox(width: 4),
+            Obx(() {
+              final showHidden = controller.options.value.showHidden;
+              return GlassIconButton(
+                icon: showHidden ? CamelliaIcons.eye : CamelliaIcons.eyeOff,
+                size: 34,
+                iconSize: 17,
+                selected: showHidden,
+                tooltip: translate('Show Hidden Files'),
+                onPressed: () {
+                  controller.toggleShowHidden();
+                  controller.options.refresh();
+                },
+              );
+            }),
+            const SizedBox(width: 4),
+            Obx(
+              () => GlassIconButton(
+                icon: CamelliaIcons.trash,
+                size: 34,
+                iconSize: 17,
+                accentColor: glass.statusAlert,
+                tooltip: translate('Delete'),
+                onPressed: SelectedItems.valid(selectedItems.items)
+                    ? () async {
+                        await controller.removeAction(selectedItems);
+                        selectedItems.clear();
                       }
-
-                      name.addListener(onTextChanged);
-                      try {
-                        await _ffi.dialogManager.show((
-                          setState,
-                          close,
-                          context,
-                        ) {
-                          submit() {
-                            if (name.value.text.isNotEmpty) {
-                              if (!PathUtil.validName(
-                                name.value.text,
-                                controller.options.value.isWindows,
-                              )) {
-                                setState(() {
-                                  errorText = translate("Invalid folder name");
-                                });
-                                return;
-                              }
-                              controller.createDir(
-                                PathUtil.join(
-                                  controller.directory.value.path,
-                                  name.value.text,
-                                  controller.options.value.isWindows,
-                                ),
-                              );
-                              close();
-                            }
-                          }
-
-                          cancel() => close(false);
-                          return CustomAlertDialog(
-                            title: ModernDialogHeader(
-                              icon: CamelliaIcons.folderNew,
-                              title: translate("Create Folder"),
-                              onClose: cancel,
-                            ),
-                            content: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                TextFormField(
-                                  decoration: InputDecoration(
-                                    labelText: translate(
-                                      "Please enter the folder name",
-                                    ),
-                                    errorText: errorText,
-                                  ),
-                                  controller: name,
-                                  autofocus: true,
-                                ).workaroundFreezeLinuxMint(),
-                              ],
-                            ),
-                            actions: [
-                              dialogButton(
-                                "Cancel",
-                                icon: const Icon(CamelliaIcons.close),
-                                onPressed: cancel,
-                                isOutline: true,
-                              ),
-                              dialogButton(
-                                "Ok",
-                                icon: const Icon(CamelliaIcons.check),
-                                onPressed: submit,
-                              ),
-                            ],
-                            onSubmit: submit,
-                            onCancel: cancel,
-                          );
-                        });
-                      } finally {
-                        name.removeListener(onTextChanged);
-                        name.dispose();
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 4),
-                  Obx(
-                    () => GlassIconButton(
-                      icon: CamelliaIcons.trash,
-                      size: 34,
-                      iconSize: 17,
-                      accentColor: glass.statusAlert,
-                      tooltip: translate('Delete'),
-                      onPressed: SelectedItems.valid(selectedItems.items)
-                          ? () async {
-                              await controller.removeAction(selectedItems);
-                              selectedItems.clear();
-                            }
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  menu(isLocal: isLocal),
-                ],
+                    : null,
               ),
             ),
+            const SizedBox(width: 4),
+            menu(isLocal: isLocal),
+            const Spacer(),
             if (isWeb)
               Padding(
-                padding: const EdgeInsets.only(left: 8),
+                padding: const EdgeInsets.only(right: 6),
                 child: Obx(
                   () => Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1153,43 +1259,46 @@ class _FileManagerViewState extends State<FileManagerView> {
                       const SizedBox(width: 2),
                       GestureDetector(
                         onTapDown: (e) {
-                          final x = e.globalPosition.dx;
-                          final y = e.globalPosition.dy;
-                          uploadButtonTapPosition = RelativeRect.fromLTRB(
-                            x,
-                            y,
-                            x,
-                            y,
-                          );
+                          uploadButtonTapGlobal = e.globalPosition;
                         },
                         child: GlassIconButton(
                           icon: Icons.keyboard_arrow_down_rounded,
                           size: 32,
                           iconSize: 17,
                           tooltip: translate('Upload options'),
-                          onPressed: () async {
-                            final value = await showMenu<bool>(
+                          onPressed: () {
+                            showFrostedContextMenu(
                               context: context,
-                              position: uploadButtonTapPosition,
-                              items: [
-                                PopupMenuItem<bool>(
-                                  value: false,
-                                  child: Text(translate('Upload files')),
+                              globalPosition: uploadButtonTapGlobal,
+                              itemsBuilder: (closeMenu) => [
+                                FrostedMenuItem(
+                                  label: translate('Upload files'),
+                                  icon: CamelliaIcons.upload,
+                                  onTap: () {
+                                    closeMenu();
+                                    isUploadFolder.value = false;
+                                    bind.mainSetLocalOption(
+                                      key: 'upload-folder-button',
+                                      value: '',
+                                    );
+                                    webselectFiles(is_folder: false);
+                                  },
                                 ),
-                                PopupMenuItem<bool>(
-                                  value: true,
-                                  child: Text(translate('Upload folder')),
+                                FrostedMenuItem(
+                                  label: translate('Upload folder'),
+                                  icon: Icons.folder_rounded,
+                                  onTap: () {
+                                    closeMenu();
+                                    isUploadFolder.value = true;
+                                    bind.mainSetLocalOption(
+                                      key: 'upload-folder-button',
+                                      value: 'Y',
+                                    );
+                                    webselectFiles(is_folder: true);
+                                  },
                                 ),
                               ],
                             );
-                            if (value != null) {
-                              isUploadFolder.value = value;
-                              bind.mainSetLocalOption(
-                                key: 'upload-folder-button',
-                                value: value ? 'Y' : '',
-                              );
-                              webselectFiles(is_folder: value);
-                            }
                           },
                         ),
                       ),
@@ -1197,7 +1306,6 @@ class _FileManagerViewState extends State<FileManagerView> {
                   ),
                 ),
               ),
-            const SizedBox(width: 6),
             Obx(
               () => GlassButton(
                 variant: GlassButtonVariant.primary,
@@ -1215,12 +1323,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                   size: 16,
                 ),
                 onPressed: SelectedItems.valid(selectedItems.items)
-                    ? () {
-                        final otherSideData = controller
-                            .getOtherSideDirectoryData();
-                        controller.sendFiles(selectedItems, otherSideData);
-                        selectedItems.clear();
-                      }
+                    ? _transferSelected
                     : null,
                 child: Text(
                   isLocal
@@ -1237,67 +1340,154 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Widget menu({bool isLocal = false}) {
-    var menuPos = RelativeRect.fill;
-
-    final List<MenuEntryBase<String>> items = [
-      MenuEntrySwitch<String>(
-        switchType: SwitchType.scheckbox,
-        text: translate("Show Hidden Files"),
-        getter: () async {
-          return controller.options.value.showHidden;
-        },
-        setter: (bool v) async {
-          controller.toggleShowHidden();
-        },
-        padding: kDesktopMenuPadding,
-        dismissOnClicked: true,
-      ),
-      MenuEntryButton(
-        childBuilder: (style) => Text(translate("Select All"), style: style),
-        proc: () => setState(
-          () => selectedItems.selectAll(controller.directory.value.entries),
-        ),
-        padding: kDesktopMenuPadding,
-        dismissOnClicked: true,
-      ),
-      MenuEntryButton(
-        childBuilder: (style) => Text(translate("Unselect All"), style: style),
-        proc: () => selectedItems.clear(),
-        padding: kDesktopMenuPadding,
-        dismissOnClicked: true,
-      ),
-    ];
-
+    var menuGlobalPos = Offset.zero;
     return Listener(
       onPointerDown: (e) {
-        final x = e.position.dx;
-        final y = e.position.dy;
-        menuPos = RelativeRect.fromLTRB(x, y, x, y);
+        menuGlobalPos = e.position;
       },
       child: GlassIconButton(
         icon: CamelliaIcons.more,
         size: 34,
         iconSize: 17,
         tooltip: translate('More'),
-        onPressed: () => mod_menu.showMenu(
-          context: context,
-          position: menuPos,
-          items: items
-              .map(
-                (e) => e.build(
-                  context,
-                  MenuConfig(
-                    commonColor: CustomPopupMenuTheme.commonColor,
-                    height: CustomPopupMenuTheme.height,
-                    dividerHeight: CustomPopupMenuTheme.dividerHeight,
-                  ),
-                ),
-              )
-              .expand((i) => i)
-              .toList(),
-          elevation: 8,
-        ),
+        onPressed: () {
+          showFrostedContextMenu(
+            context: context,
+            globalPosition: menuGlobalPos,
+            itemsBuilder: (closeMenu) => [
+              FrostedMenuToggleItem(
+                label: translate('Show Hidden Files'),
+                icon: CamelliaIcons.eye,
+                value: controller.options.value.showHidden,
+                onChanged: (_) {
+                  closeMenu();
+                  controller.toggleShowHidden();
+                  controller.options.refresh();
+                },
+              ),
+              const FrostedMenuDivider(),
+              FrostedMenuItem(
+                label: translate('Select All'),
+                icon: Icons.select_all_rounded,
+                onTap: () {
+                  closeMenu();
+                  setState(
+                    () => selectedItems.selectAll(
+                      controller.directory.value.entries,
+                    ),
+                  );
+                },
+              ),
+              FrostedMenuItem(
+                label: translate('Unselect All'),
+                icon: Icons.deselect_rounded,
+                onTap: () {
+                  closeMenu();
+                  selectedItems.clear();
+                },
+              ),
+            ],
+          );
+        },
       ),
+    );
+  }
+
+  void _showPaneContextMenu(Offset globalPos, {Entry? targetEntry}) {
+    final canRename =
+        targetEntry != null &&
+        !targetEntry.isDrive &&
+        versionCmp(_ffi.ffiModel.pi.version, "1.3.0") >= 0;
+    final hasValidSelection = SelectedItems.valid(selectedItems.items);
+    final transferLabel = isLocal
+        ? translate('Send')
+        : translate(isWeb ? 'Download' : 'Receive');
+    showFrostedContextMenu(
+      context: context,
+      globalPosition: globalPos,
+      itemsBuilder: (closeMenu) => [
+        if (targetEntry != null && !targetEntry.isFile) ...[
+          FrostedMenuItem(
+            label: translate('Open'),
+            icon: Icons.folder_rounded,
+            onTap: () {
+              closeMenu();
+              selectedItems.clear();
+              controller.openDirectory(targetEntry.path);
+            },
+          ),
+        ],
+        if (hasValidSelection)
+          FrostedMenuItem(
+            label: transferLabel,
+            icon: isLocal
+                ? CamelliaIcons.arrowForward
+                : (isWeb ? CamelliaIcons.download : CamelliaIcons.arrowBack),
+            onTap: () {
+              closeMenu();
+              _transferSelected();
+            },
+          ),
+        if (hasValidSelection || (targetEntry != null && !targetEntry.isFile))
+          const FrostedMenuDivider(),
+        FrostedMenuItem(
+          label: translate('Create Folder'),
+          icon: CamelliaIcons.folderNew,
+          onTap: () {
+            closeMenu();
+            _showCreateFolderDialog();
+          },
+        ),
+        if (canRename)
+          FrostedMenuItem(
+            label: translate('Rename'),
+            icon: Icons.drive_file_rename_outline_rounded,
+            onTap: () {
+              closeMenu();
+              controller.renameAction(targetEntry, isLocal);
+            },
+          ),
+        if (hasValidSelection)
+          FrostedMenuItem(
+            label: translate('Delete'),
+            icon: CamelliaIcons.trash,
+            destructive: true,
+            onTap: () async {
+              closeMenu();
+              await controller.removeAction(selectedItems);
+              selectedItems.clear();
+            },
+          ),
+        const FrostedMenuDivider(),
+        FrostedMenuItem(
+          label: translate('Select All'),
+          icon: Icons.select_all_rounded,
+          onTap: () {
+            closeMenu();
+            setState(
+              () => selectedItems.selectAll(controller.directory.value.entries),
+            );
+          },
+        ),
+        FrostedMenuToggleItem(
+          label: translate('Show Hidden Files'),
+          icon: CamelliaIcons.eye,
+          value: controller.options.value.showHidden,
+          onChanged: (_) {
+            closeMenu();
+            controller.toggleShowHidden();
+            controller.options.refresh();
+          },
+        ),
+        FrostedMenuItem(
+          label: translate('Refresh File'),
+          icon: CamelliaIcons.refresh,
+          onTap: () {
+            closeMenu();
+            controller.refresh();
+          },
+        ),
+      ],
     );
   }
 
@@ -1307,7 +1497,6 @@ class _FileManagerViewState extends State<FileManagerView> {
   ) {
     final fd = controller.directory.value;
     final entries = fd.entries;
-    Rx<Entry?> rightClickEntry = Rx(null);
 
     return ListSearchActionListener(
       node: _keyboardNode,
@@ -1328,7 +1517,6 @@ class _FileManagerViewState extends State<FileManagerView> {
             .skip(skipCount)
             .where((element) => element.name.toLowerCase().startsWith(buffer));
         if (searchResult.isEmpty) {
-          // cannot find next, lets restart search from head
           debugPrint("restart search from head");
           searchResult = entries.where(
             (element) => element.name.toLowerCase().startsWith(buffer),
@@ -1363,248 +1551,331 @@ class _FileManagerViewState extends State<FileManagerView> {
           kDesktopFileTransferRowHeight,
         );
       },
-      child: Obx(() {
-        final entries = controller.directory.value.entries;
-        final filteredEntries = _searchText.isNotEmpty
-            ? entries
-                  .where((element) {
-                    return element.name.contains(_searchText.value);
-                  })
-                  .toList(growable: false)
-            : entries;
-        final rows = filteredEntries
-            .map((entry) {
-              final sizeStr = entry.isFile
-                  ? readableFileSize(entry.size.toDouble())
-                  : "";
-              final lastModifiedStr = entry.isDrive
-                  ? " "
-                  : "${entry.lastModified().toString().replaceAll(".000", "")}   ";
-              var secondaryPosition = RelativeRect.fromLTRB(0, 0, 0, 0);
-              onTap() {
-                final items = selectedItems;
-                // handle double click
-                if (_checkDoubleClick(entry)) {
-                  controller.openDirectory(entry.path);
-                  items.clear();
-                  return;
+      child: DragTarget<_FilePaneDragData>(
+        onWillAcceptWithDetails: (details) =>
+            details.data.isLocal != isLocal && details.data.entries.isNotEmpty,
+        onAcceptWithDetails: (details) {
+          final data = details.data;
+          final sourceController = data.isLocal
+              ? _ffi.fileModel.localController
+              : _ffi.fileModel.remoteController;
+          final tempSelected = SelectedItems(isLocal: data.isLocal);
+          for (final e in data.entries) {
+            tempSelected.add(e);
+          }
+          sourceController.sendFiles(tempSelected, controller.directoryData());
+          sourceController.selectedItems.clear();
+        },
+        builder: (context, candidateData, rejectedData) {
+          final isCrossPaneHover = candidateData.isNotEmpty;
+          final theme = Theme.of(context);
+          final glass = CamelliaGlassTokens.of(context);
+          final accent = theme.brightness == Brightness.dark
+              ? theme.colorScheme.secondary
+              : theme.colorScheme.primary;
+          return AnimatedContainer(
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+            decoration: BoxDecoration(
+              color: isCrossPaneHover
+                  ? accent.withValues(alpha: 0.08)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(CamelliaRadius.control),
+              border: isCrossPaneHover
+                  ? Border.all(color: accent.withValues(alpha: 0.7), width: 1.2)
+                  : null,
+            ),
+            child: Obx(() {
+              final entries = controller.directory.value.entries;
+              final filteredEntries = _searchText.isNotEmpty
+                  ? entries
+                        .where((element) {
+                          return element.name
+                              .toLowerCase()
+                              .contains(_searchText.value.toLowerCase());
+                        })
+                        .toList(growable: false)
+                  : entries;
+
+              Widget buildRow(Entry entry) {
+                final sizeStr = entry.isFile
+                    ? readableFileSize(entry.size.toDouble())
+                    : "";
+                final lastModifiedStr = entry.isDrive
+                    ? ""
+                    : entry.lastModified().toString().replaceAll(".000", "");
+                Offset secondaryGlobalPos = Offset.zero;
+
+                void onTap() {
+                  final items = selectedItems;
+                  if (_checkDoubleClick(entry)) {
+                    controller.openDirectory(entry.path);
+                    items.clear();
+                    return;
+                  }
+                  _onSelectedChanged(items, filteredEntries, entry, isLocal);
                 }
-                _onSelectedChanged(items, filteredEntries, entry, isLocal);
-              }
 
-              onSecondaryTap() {
-                final items = [
-                  if (!entry.isDrive &&
-                      versionCmp(_ffi.ffiModel.pi.version, "1.3.0") >= 0)
-                    mod_menu.PopupMenuItem(
-                      child: Text(translate("Rename")),
-                      height: CustomPopupMenuTheme.height,
-                      onTap: () {
-                        controller.renameAction(entry, isLocal);
-                      },
-                    ),
-                ];
-                if (items.isNotEmpty) {
-                  rightClickEntry.value = entry;
-                  final future = mod_menu.showMenu(
-                    context: context,
-                    position: secondaryPosition,
-                    items: items,
-                  );
-                  future.then((value) {
-                    rightClickEntry.value = null;
-                  });
-                  future.onError((error, stackTrace) {
-                    rightClickEntry.value = null;
-                  });
+                void onSecondaryTapDown(TapDownDetails details) {
+                  secondaryGlobalPos = details.globalPosition;
                 }
-              }
 
-              onSecondaryTapDown(details) {
-                secondaryPosition = RelativeRect.fromLTRB(
-                  details.globalPosition.dx,
-                  details.globalPosition.dy,
-                  details.globalPosition.dx,
-                  details.globalPosition.dy,
-                );
-              }
+                void onSecondaryTap() {
+                  if (!selectedItems.items.contains(entry)) {
+                    selectedItems.clear();
+                    selectedItems.add(entry);
+                  }
+                  _showPaneContextMenu(secondaryGlobalPos, targetEntry: entry);
+                }
 
-              return Padding(
-                padding: EdgeInsets.symmetric(vertical: 1),
-                child: Obx(
-                  () => Container(
-                    decoration: BoxDecoration(
-                      color: selectedItems.items.contains(entry)
-                          ? MyTheme.button
-                          : Theme.of(context).cardColor,
-                      borderRadius: BorderRadius.all(Radius.circular(5.0)),
-                      border: rightClickEntry.value == entry
-                          ? Border.all(color: MyTheme.button, width: 1.0)
-                          : null,
-                    ),
-                    key: ValueKey(entry.name),
-                    height: kDesktopFileTransferRowHeight,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        Expanded(
-                          child: InkWell(
-                            child: Row(
-                              children: [
-                                GestureDetector(
-                                  child: Obx(
-                                    () => Container(
-                                      width: _nameColWidth.value,
-                                      child: Tooltip(
-                                        waitDuration: Duration(
-                                          milliseconds: 500,
-                                        ),
-                                        message: entry.name,
-                                        child: Row(
-                                          children: [
-                                            Padding(
-                                              padding: const EdgeInsets.only(
-                                                right: 8,
-                                              ),
-                                              child: Icon(
-                                                CamelliaIcons.fileTypeIcon(
-                                                  entry.name,
-                                                  isDirectory: !entry.isFile,
-                                                  isDrive: entry.isDrive,
-                                                ),
-                                                size: 19,
-                                                color:
-                                                    selectedItems.items
-                                                        .contains(entry)
-                                                    ? Colors.white
-                                                    : CamelliaIcons.fileTypeColor(
-                                                        context,
-                                                        entry.name,
-                                                        isDirectory:
-                                                            !entry.isFile,
-                                                        isDrive: entry.isDrive,
-                                                      ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              child: Text(
-                                                entry.name.nonBreaking,
-                                                style: TextStyle(
-                                                  color:
-                                                      selectedItems.items
-                                                          .contains(entry)
-                                                      ? Colors.white
-                                                      : null,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  onTap: onTap,
-                                  onSecondaryTap: onSecondaryTap,
-                                  onSecondaryTapDown: onSecondaryTapDown,
+                final rowContent = Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 1),
+                  child: Obx(() {
+                    final isSelected = selectedItems.items.contains(entry);
+                    return ValueListenableBuilder<Entry?>(
+                      valueListenable: _hoveredEntry,
+                      builder: (context, hovered, _) {
+                        final isHovered = identical(hovered, entry);
+                        return MouseRegion(
+                          onEnter: (_) => _hoveredEntry.value = entry,
+                          onExit: (_) {
+                            if (identical(_hoveredEntry.value, entry)) {
+                              _hoveredEntry.value = null;
+                            }
+                          },
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: onTap,
+                            onSecondaryTapDown: onSecondaryTapDown,
+                            onSecondaryTap: onSecondaryTap,
+                            child: AnimatedContainer(
+                              key: ValueKey(entry.name),
+                              duration: CamelliaMotion.resolve(
+                                context,
+                                CamelliaMotion.hover,
+                              ),
+                              height: kDesktopFileTransferRowHeight - 2,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? accent.withValues(alpha: 0.14)
+                                    : isHovered
+                                    ? glass.hoverOverlay
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(7),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? accent.withValues(alpha: 0.48)
+                                      : Colors.transparent,
+                                  width: 0.85,
                                 ),
-                                const SizedBox(width: 2.0),
-                                GestureDetector(
-                                  child: Obx(
-                                    () => SizedBox(
-                                      width: _modifiedColWidth.value,
-                                      child: Tooltip(
-                                        waitDuration: const Duration(
-                                          milliseconds: 500,
-                                        ),
-                                        message: lastModifiedStr,
-                                        child: Text(
-                                          lastModifiedStr,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: CamelliaTypography.tabular(
-                                            Theme.of(
-                                              context,
-                                            ).textTheme.bodySmall?.copyWith(
-                                              color:
-                                                  selectedItems.items.contains(
-                                                    entry,
-                                                  )
-                                                  ? Colors.white70
-                                                  : Theme.of(context)
-                                                        .colorScheme
-                                                        .onSurfaceVariant,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  onTap: onTap,
-                                  onSecondaryTap: onSecondaryTap,
-                                  onSecondaryTapDown: onSecondaryTapDown,
-                                ),
-                                const SizedBox(width: 2.0),
-                                Expanded(
-                                  child: GestureDetector(
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
                                     child: Tooltip(
                                       waitDuration: const Duration(
                                         milliseconds: 500,
                                       ),
-                                      message: sizeStr,
+                                      message: entry.name,
+                                      child: Row(
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              right: 8,
+                                            ),
+                                            child: Icon(
+                                              CamelliaIcons.fileTypeIcon(
+                                                entry.name,
+                                                isDirectory: !entry.isFile,
+                                                isDrive: entry.isDrive,
+                                              ),
+                                              size: 18,
+                                              color: isSelected
+                                                  ? accent
+                                                  : CamelliaIcons.fileTypeColor(
+                                                      context,
+                                                      entry.name,
+                                                      isDirectory:
+                                                          !entry.isFile,
+                                                      isDrive: entry.isDrive,
+                                                    ),
+                                            ),
+                                          ),
+                                          Expanded(
+                                            child: Text(
+                                              entry.name.nonBreaking,
+                                              style: theme.textTheme.bodyMedium
+                                                  ?.copyWith(
+                                                    fontSize: 13,
+                                                    fontWeight: isSelected
+                                                        ? FontWeight.w600
+                                                        : FontWeight.w400,
+                                                    color: theme
+                                                        .colorScheme
+                                                        .onSurface,
+                                                  ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Obx(
+                                    () => SizedBox(
+                                      width: _modifiedColWidth.value,
                                       child: Text(
-                                        sizeStr,
+                                        lastModifiedStr,
+                                        textAlign: TextAlign.right,
                                         overflow: TextOverflow.ellipsis,
                                         style: CamelliaTypography.tabular(
-                                          Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall?.copyWith(
-                                            color:
-                                                selectedItems.items.contains(
-                                                  entry,
-                                                )
-                                                ? Colors.white70
-                                                : Theme.of(context)
-                                                      .colorScheme
-                                                      .onSurfaceVariant,
+                                          theme.textTheme.bodySmall?.copyWith(
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
                                           ),
                                         ),
                                       ),
                                     ),
-                                    onTap: onTap,
-                                    onSecondaryTap: onSecondaryTap,
-                                    onSecondaryTapDown: onSecondaryTapDown,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 8),
+                                  Obx(
+                                    () => SizedBox(
+                                      width: _sizeColWidth.value,
+                                      child: Text(
+                                        sizeStr,
+                                        textAlign: TextAlign.right,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: CamelliaTypography.tabular(
+                                          theme.textTheme.bodySmall?.copyWith(
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        );
+                      },
+                    );
+                  }),
+                );
+
+                if (entry.isDrive) return rowContent;
+                final dragItems = selectedItems.items.contains(entry)
+                    ? selectedItems.items.toList(growable: false)
+                    : <Entry>[entry];
+                return Draggable<_FilePaneDragData>(
+                  data: _FilePaneDragData(
+                    isLocal: isLocal,
+                    entries: dragItems,
+                  ),
+                  feedback: Material(
+                    type: MaterialType.transparency,
+                    child: GlassSurface(
+                      layer: CamelliaGlassLayer.modal,
+                      elevated: true,
+                      strokeWidth: 0.85,
+                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CamelliaVectorIcon(
+                            CamelliaGlyph.folder,
+                            size: 16,
+                            color: accent,
+                          ),
+                          const SizedBox(width: 8),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 180),
+                            child: Text(
+                              entry.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          if (dragItems.length > 1) ...[
+                            const SizedBox(width: 8),
+                            GlassBadge(
+                              label: '${dragItems.length}',
+                              tone: GlassBadgeTone.brand,
+                              tabularNums: true,
+                              compact: true,
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            })
-            .toList(growable: false);
+                  child: rowContent,
+                );
+              }
 
-        return Column(
-          children: [
-            // Header
-            Row(children: [Expanded(child: _buildFileBrowserHeader(context))]),
-            // Body
-            Expanded(
-              child: ListView.builder(
-                controller: scrollController,
-                itemExtent: kDesktopFileTransferRowHeight,
-                itemBuilder: (context, index) {
-                  return rows[index];
-                },
-                itemCount: rows.length,
-              ),
-            ),
-          ],
-        );
-      }),
+              Offset emptyTapPos = Offset.zero;
+              return Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(child: _buildFileBrowserHeader(context)),
+                    ],
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => selectedItems.clear(),
+                      onSecondaryTapDown: (d) => emptyTapPos = d.globalPosition,
+                      onSecondaryTap: () => _showPaneContextMenu(emptyTapPos),
+                      child: filteredEntries.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CamelliaStateIllustration(
+                                    glyph: CamelliaGlyph.emptyFiles,
+                                    accentColor: accent,
+                                    size: 54,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    translate('This folder is empty'),
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              itemExtent: kDesktopFileTransferRowHeight,
+                              itemCount: filteredEntries.length,
+                              itemBuilder: (context, index) =>
+                                  buildRow(filteredEntries[index]),
+                            ),
+                    ),
+                  ),
+                ],
+              );
+            }),
+          );
+        },
+      ),
     );
   }
 
@@ -1702,23 +1973,35 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Widget _buildFileBrowserHeader(BuildContext context) {
-    final padding = EdgeInsets.all(1.0);
-    return SizedBox(
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
+    const padding = EdgeInsets.all(1.0);
+    return Container(
       key: _globalHeaderKey,
       height: kDesktopFileTransferHeaderHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: tokens.border, width: 0.85),
+        ),
+      ),
       child: Row(
         children: [
-          Obx(
-            () => headerItemFunc(
-              _nameColWidth.value,
+          Expanded(
+            child: headerItemFunc(
+              null,
               SortBy.name,
               translate("Name"),
+              alignRight: false,
             ),
           ),
           DraggableDivider(
             axis: Axis.vertical,
-            onPointerMove: (dx) =>
-                _onDrag(dx, _nameColWidth, _modifiedColWidth),
+            onPointerMove: (dx) {
+              final next = (_modifiedColWidth.value - dx).clamp(96.0, 260.0);
+              _modifiedColWidth.value = next;
+            },
             padding: padding,
           ),
           Obx(
@@ -1726,6 +2009,7 @@ class _FileManagerViewState extends State<FileManagerView> {
               _modifiedColWidth.value,
               SortBy.modified,
               translate("Modified"),
+              alignRight: true,
             ),
           ),
           DraggableDivider(
@@ -1734,11 +2018,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                 _onDrag(dx, _modifiedColWidth, _sizeColWidth),
             padding: padding,
           ),
-          Expanded(
-            child: headerItemFunc(
+          Obx(
+            () => headerItemFunc(
               _sizeColWidth.value,
               SortBy.size,
               translate("Size"),
+              alignRight: true,
             ),
           ),
         ],
@@ -1746,11 +2031,23 @@ class _FileManagerViewState extends State<FileManagerView> {
     );
   }
 
-  Widget headerItemFunc(double? width, SortBy sortBy, String name) {
+  Widget headerItemFunc(
+    double? width,
+    SortBy sortBy,
+    String name, {
+    bool alignRight = false,
+  }) {
+    final theme = Theme.of(context);
     final headerTextStyle =
-        Theme.of(context).dataTableTheme.headingTextStyle ?? TextStyle();
+        theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.2,
+        ) ??
+        const TextStyle();
     return ObxValue<Rx<bool?>>(
       (ascending) => InkWell(
+        borderRadius: BorderRadius.circular(5),
         onTap: () {
           if (ascending.value == null) {
             ascending.value = true;
@@ -1767,21 +2064,35 @@ class _FileManagerViewState extends State<FileManagerView> {
           width: width,
           height: kDesktopFileTransferHeaderHeight,
           child: Row(
+            mainAxisAlignment: alignRight
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  name,
-                  style: headerTextStyle,
-                  overflow: TextOverflow.ellipsis,
-                ).marginOnly(left: 4),
-              ),
-              ascending.value != null
-                  ? Icon(
-                      ascending.value!
-                          ? Icons.keyboard_arrow_up_rounded
-                          : Icons.keyboard_arrow_down_rounded,
-                    )
-                  : SizedBox(),
+              if (!alignRight)
+                Expanded(
+                  child: Text(
+                    name,
+                    style: headerTextStyle,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (ascending.value != null)
+                Icon(
+                  ascending.value!
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  size: 16,
+                  color: theme.colorScheme.onSurface,
+                ),
+              if (alignRight)
+                Flexible(
+                  child: Text(
+                    name,
+                    textAlign: TextAlign.right,
+                    style: headerTextStyle,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
             ],
           ),
         ),
@@ -1806,14 +2117,13 @@ class _FileManagerViewState extends State<FileManagerView> {
     });
 
     return items.isEmpty
-        ? Offstage()
+        ? const Offstage()
         : Row(
             key: _locationBarKey,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Listener(
-                  // handle mouse wheel
                   onPointerSignal: (e) {
                     if (e is PointerScrollEvent) {
                       final sc = _breadCrumbScroller;
@@ -1823,7 +2133,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                   },
                   child: BreadCrumb(
                     items: items,
-                    divider: const Icon(Icons.keyboard_arrow_right_rounded),
+                    divider: const Icon(
+                      Icons.keyboard_arrow_right_rounded,
+                      size: 16,
+                    ),
                     overflow: ScrollableOverflow(
                       controller: _breadCrumbScroller,
                     ),
@@ -1836,33 +2149,20 @@ class _FileManagerViewState extends State<FileManagerView> {
                 onTap: () async {
                   final renderBox =
                       _locationBarKey.currentContext?.findRenderObject()
-                          as RenderBox;
-                  _locationBarKey.currentContext?.size;
-
+                          as RenderBox?;
+                  if (renderBox == null) return;
                   final size = renderBox.size;
                   final offset = renderBox.localToGlobal(Offset.zero);
-
-                  final x = offset.dx;
-                  final y = offset.dy + size.height + 1;
+                  final globalPos = Offset(offset.dx, offset.dy + size.height + 2);
 
                   final isPeerWindows = controller.options.value.isWindows;
-                  final List<MenuEntryBase> menuItems = [
-                    MenuEntryButton(
-                      childBuilder: (TextStyle? style) => isPeerWindows
-                          ? buildWindowsThisPC(context, style)
-                          : Text('/', style: style),
-                      proc: () {
-                        controller.openDirectory('/');
-                      },
-                      dismissOnClicked: true,
-                    ),
-                    MenuEntryDivider(),
-                  ];
+                  final List<Entry> driveEntries = [];
                   if (isPeerWindows) {
                     var loadingTag = "";
                     if (!isLocal) {
-                      loadingTag =
-                          _ffi.dialogManager.showLoading(translate("Waiting"));
+                      loadingTag = _ffi.dialogManager.showLoading(
+                        translate("Waiting"),
+                      );
                     }
                     try {
                       final showHidden = controller.options.value.showHidden;
@@ -1871,30 +2171,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                         isLocal,
                         showHidden,
                       );
-                      for (var entry in fd.entries) {
-                        menuItems.add(
-                          MenuEntryButton(
-                            childBuilder: (TextStyle? style) => Row(
-                              children: [
-                                Image(
-                                  image: iconHardDrive,
-                                  fit: BoxFit.scaleDown,
-                                  color: Theme.of(
-                                    context,
-                                  ).iconTheme.color?.withValues(alpha: 0.7),
-                                ),
-                                SizedBox(width: 10),
-                                Text(entry.name, style: style),
-                              ],
-                            ),
-                            proc: () {
-                              controller.openDirectory('${entry.name}\\');
-                            },
-                            dismissOnClicked: true,
-                          ),
-                        );
-                      }
-                      menuItems.add(MenuEntryDivider());
+                      driveEntries.addAll(fd.entries);
                     } catch (e) {
                       debugPrint("buildBread fetchDirectory err=$e");
                     } finally {
@@ -1903,24 +2180,35 @@ class _FileManagerViewState extends State<FileManagerView> {
                       }
                     }
                   }
-                  mod_menu.showMenu(
+                  if (!mounted) return;
+                  showFrostedContextMenu(
                     context: context,
-                    position: RelativeRect.fromLTRB(x, y, x, y),
-                    elevation: 4,
-                    items: menuItems
-                        .map(
-                          (e) => e.build(
-                            context,
-                            MenuConfig(
-                              commonColor: CustomPopupMenuTheme.commonColor,
-                              height: CustomPopupMenuTheme.height,
-                              dividerHeight: CustomPopupMenuTheme.dividerHeight,
-                              boxWidth: size.width,
-                            ),
+                    globalPosition: globalPos,
+                    minWidth: max(180, min(280, size.width)),
+                    itemsBuilder: (closeMenu) => [
+                      FrostedMenuItem(
+                        label: isPeerWindows ? translate('This PC') : '/',
+                        icon: isPeerWindows
+                            ? Icons.computer_rounded
+                            : Icons.folder_rounded,
+                        onTap: () {
+                          closeMenu();
+                          controller.openDirectory('/');
+                        },
+                      ),
+                      if (driveEntries.isNotEmpty) ...[
+                        const FrostedMenuDivider(),
+                        for (final entry in driveEntries)
+                          FrostedMenuItem(
+                            label: entry.name,
+                            icon: Icons.storage_rounded,
+                            onTap: () {
+                              closeMenu();
+                              controller.openDirectory('${entry.name}\\');
+                            },
                           ),
-                        )
-                        .expand((i) => i)
-                        .toList(),
+                      ],
+                    ],
                   );
                 },
                 iconSize: 20,

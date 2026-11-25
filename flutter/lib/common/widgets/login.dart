@@ -2,15 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
 import 'package:camellia_remote_app/models/management_api_contract.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../common.dart';
@@ -38,7 +40,10 @@ class _OidcProviderBranding {
 _OidcProviderBranding _oidcProviderBranding(String op) {
   switch (op.toLowerCase()) {
     case 'azure':
-      return _OidcProviderBranding(label: 'Microsoft', iconKey: 'microsoft');
+      return const _OidcProviderBranding(
+        label: 'Microsoft',
+        iconKey: 'microsoft',
+      );
     default:
       return _OidcProviderBranding(
         label:
@@ -54,17 +59,16 @@ class _IconOP extends StatelessWidget {
   final String? icon;
   final EdgeInsets margin;
   const _IconOP({
-    Key? key,
     required this.op,
     required this.icon,
     this.margin = const EdgeInsets.symmetric(horizontal: 4.0),
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: margin,
-      child: icon == null
+      child: icon == null || icon!.trim().isEmpty
           ? Icon(
               CamelliaIcons.authProviderIcon(op),
               size: 18,
@@ -96,19 +100,19 @@ class ButtonOP extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final branding = _oidcProviderBranding(op);
-    final buttonLabel = translate("Continue with {${branding.label}}");
+    final buttonLabel = translate('Continue with {${branding.label}}');
     return SizedBox(
       width: double.infinity,
       child: Obx(
         () => GlassButton(
           variant: GlassButtonVariant.secondary,
           expand: true,
-          minHeight: height < 40 ? 40 : height,
+          minHeight: height < 42 ? 42 : height,
           loading: curOP.value == op,
           icon: _IconOP(
             op: branding.iconKey,
             icon: icon,
-            margin: const EdgeInsets.only(right: 4),
+            margin: const EdgeInsets.only(right: 2),
           ),
           onPressed: curOP.value.isEmpty ? onTap : null,
           child: Text(
@@ -133,16 +137,14 @@ class WidgetOP extends StatefulWidget {
   final RxString curOP;
   final Function(Map<String, dynamic> authBody, int requestGen) cbLogin;
   const WidgetOP({
-    Key? key,
+    super.key,
     required this.config,
     required this.curOP,
     required this.cbLogin,
-  }) : super(key: key);
+  });
 
   @override
-  State<StatefulWidget> createState() {
-    return _WidgetOPState();
-  }
+  State<StatefulWidget> createState() => _WidgetOPState();
 }
 
 class _WidgetOPState extends State<WidgetOP> {
@@ -161,7 +163,7 @@ class _WidgetOPState extends State<WidgetOP> {
     super.dispose();
   }
 
-  _beginQueryState(int requestGen) {
+  void _beginQueryState(int requestGen) {
     _updateTimer?.cancel();
     final myAttemptGen = ++_attemptGen;
     _updateTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -178,7 +180,7 @@ class _WidgetOPState extends State<WidgetOP> {
     });
   }
 
-  _updateState(int requestGen, int myAttemptGen) {
+  void _updateState(int requestGen, int myAttemptGen) {
     if (!mounted ||
         requestGen != AuthGenerationTracker.currentAuthGen ||
         myAttemptGen != _attemptGen) {
@@ -205,8 +207,8 @@ class _WidgetOPState extends State<WidgetOP> {
       if (resultMap == null) {
         return;
       }
-      final String stateMsg = resultMap['state_msg'];
-      String failedMsg = resultMap['failed_msg'];
+      final String stateMsg = resultMap['state_msg'] ?? '';
+      final String failedMsg = resultMap['failed_msg'] ?? '';
       final String? url = resultMap['url'];
       final bool urlLaunched = (resultMap['url_launched'] as bool?) ?? false;
       final authBody = resultMap['auth_body'];
@@ -239,6 +241,7 @@ class _WidgetOPState extends State<WidgetOP> {
               widget.curOP.value = '';
               _updateTimer?.cancel();
               _updateTimer = null;
+              showToast(formatUserFriendlyError(failedMsg));
             }
           });
         }
@@ -249,7 +252,7 @@ class _WidgetOPState extends State<WidgetOP> {
     });
   }
 
-  _resetState() {
+  void _resetState() {
     _stateMsg = '';
     _failedMsg = '';
     _url = '';
@@ -257,6 +260,7 @@ class _WidgetOPState extends State<WidgetOP> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       children: [
         ButtonOP(
@@ -264,7 +268,7 @@ class _WidgetOPState extends State<WidgetOP> {
           curOP: widget.curOP,
           icon: widget.config.icon,
           primaryColor: str2color(widget.config.op, 0x7f),
-          height: 36,
+          height: 42,
           onTap: () async {
             if (widget.curOP.value.isNotEmpty) return;
             _resetState();
@@ -272,16 +276,19 @@ class _WidgetOPState extends State<WidgetOP> {
             widget.curOP.value = widget.config.op;
             try {
               await bind.mainAccountAuth(op: widget.config.op, rememberMe: true);
-              if (requestGen != AuthGenerationTracker.currentAuthGen || !mounted) {
+              if (requestGen != AuthGenerationTracker.currentAuthGen ||
+                  !mounted) {
                 return;
               }
               _beginQueryState(requestGen);
             } catch (e) {
               if (requestGen != AuthGenerationTracker.currentAuthGen) return;
               widget.curOP.value = '';
+              final friendly = friendlyAuthErrorMessage(e);
+              showToast(friendly);
               if (mounted) {
                 setState(() {
-                  _failedMsg = e.toString();
+                  _failedMsg = friendly;
                 });
               }
             }
@@ -296,59 +303,24 @@ class _WidgetOPState extends State<WidgetOP> {
             offstage:
                 _failedMsg.isEmpty && widget.curOP.value != widget.config.op,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_stateMsg.isNotEmpty && _failedMsg.isEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 8.0),
                     child: SelectableText(
                       translate(_stateMsg),
-                      style: DefaultTextStyle.of(
-                        context,
-                      ).style.copyWith(fontSize: 12),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 if (_failedMsg.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 8.0),
-                    child: Builder(
-                      builder: (context) {
-                        final errorColor = Theme.of(context).colorScheme.error;
-                        final bgColor = Theme.of(
-                          context,
-                        ).colorScheme.errorContainer.withValues(alpha: 0.3);
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8.0,
-                            vertical: 6.0,
-                          ),
-                          decoration: BoxDecoration(
-                            color: bgColor,
-                            borderRadius: BorderRadius.circular(4.0),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.error_outline,
-                                color: errorColor,
-                                size: 16,
-                              ),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: SelectableText(
-                                  translate(_failedMsg),
-                                  style: DefaultTextStyle.of(context).style
-                                      .copyWith(
-                                        fontSize: 13,
-                                        color: errorColor,
-                                      ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+                    child: _AuthErrorBanner(
+                      message: formatUserFriendlyError(_failedMsg),
                     ),
                   ),
               ],
@@ -358,25 +330,22 @@ class _WidgetOPState extends State<WidgetOP> {
         Obx(
           () => Offstage(
             offstage: widget.curOP.value != widget.config.op,
-            child: const SizedBox(height: 5.0),
-          ),
-        ),
-        Obx(
-          () => Offstage(
-            offstage: widget.curOP.value != widget.config.op,
-            child: GlassButton(
-              variant: GlassButtonVariant.subtle,
-              minHeight: 34,
-              onPressed: () {
-                _attemptGen++;
-                widget.curOP.value = '';
-                _updateTimer?.cancel();
-                _updateTimer = null;
-                _resetState();
-                AuthGenerationTracker.invalidate();
-                bind.mainAccountAuthCancel();
-              },
-              child: Text(translate('Cancel')),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: GlassButton(
+                variant: GlassButtonVariant.subtle,
+                minHeight: 34,
+                onPressed: () {
+                  _attemptGen++;
+                  widget.curOP.value = '';
+                  _updateTimer?.cancel();
+                  _updateTimer = null;
+                  _resetState();
+                  AuthGenerationTracker.invalidate();
+                  bind.mainAccountAuthCancel();
+                },
+                child: Text(translate('Cancel')),
+              ),
             ),
           ),
         ),
@@ -390,41 +359,29 @@ class LoginWidgetOP extends StatelessWidget {
   final RxString curOP;
   final Function(Map<String, dynamic> authBody, int requestGen) cbLogin;
 
-  LoginWidgetOP({
-    Key? key,
+  const LoginWidgetOP({
+    super.key,
     required this.ops,
     required this.curOP,
     required this.cbLogin,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
-    var children = ops
-        .map(
-          (op) => [
-            WidgetOP(config: op, curOP: curOP, cbLogin: cbLogin),
-            const Divider(indent: 5, endIndent: 5),
-          ],
-        )
-        .expand((i) => i)
-        .toList();
-    if (children.isNotEmpty) {
-      children.removeLast();
-    }
-    return SingleChildScrollView(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 320),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
-        ),
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < ops.length; i++) ...[
+          WidgetOP(config: ops[i], curOP: curOP, cbLogin: cbLogin),
+          if (i < ops.length - 1) const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 }
 
-class LoginWidgetUserPass extends StatelessWidget {
+class LoginWidgetUserPass extends StatefulWidget {
   final TextEditingController username;
   final TextEditingController pass;
   final String? usernameMsg;
@@ -433,8 +390,9 @@ class LoginWidgetUserPass extends StatelessWidget {
   final RxString curOP;
   final Function() onLogin;
   final FocusNode? userFocusNode;
+
   const LoginWidgetUserPass({
-    Key? key,
+    super.key,
     this.userFocusNode,
     required this.username,
     required this.pass,
@@ -443,49 +401,159 @@ class LoginWidgetUserPass extends StatelessWidget {
     required this.isInProgress,
     required this.curOP,
     required this.onLogin,
-  }) : super(key: key);
+  });
+
+  @override
+  State<LoginWidgetUserPass> createState() => _LoginWidgetUserPassState();
+}
+
+class _LoginWidgetUserPassState extends State<LoginWidgetUserPass> {
+  final FocusNode _passFocusNode = FocusNode();
+  final GlassShakeController _shakeController = GlassShakeController();
+  bool _passwordVisible = false;
+
+  @override
+  void didUpdateWidget(covariant LoginWidgetUserPass oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextErr = widget.passMsg?.trim() ?? '';
+    final prevErr = oldWidget.passMsg?.trim() ?? '';
+    if (nextErr.isNotEmpty && nextErr != prevErr) {
+      _shakeController.shake();
+    }
+  }
+
+  @override
+  void dispose() {
+    _passFocusNode.dispose();
+    _shakeController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.all(0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const SizedBox(height: 8.0),
-          DialogTextField(
-            title: translate(DialogTextField.kUsernameTitle),
-            controller: username,
-            focusNode: userFocusNode,
-            prefixIcon: DialogTextField.kUsernameIcon,
-            errorText: usernameMsg,
-          ),
-          PasswordWidget(
-            controller: pass,
-            autoFocus: false,
-            reRequestFocus: true,
-            errorText: passMsg,
-          ),
-          const SizedBox(height: 14.0),
-          SizedBox(
-            width: double.infinity,
-            child: Obx(
-              () => GlassButton(
-                variant: GlassButtonVariant.primary,
-                expand: true,
-                loading: isInProgress,
-                onPressed:
-                    !isInProgress &&
-                        (curOP.value.isEmpty || curOP.value == 'rustdesk')
-                    ? () {
-                        onLogin();
-                      }
-                    : null,
-                child: Text(translate('Login')),
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        GlassInput(
+          labelText: translate(DialogTextField.kUsernameTitle),
+          hintText: translate('Enter account or email'),
+          prefixIcon: Icons.person_outline_rounded,
+          controller: widget.username,
+          focusNode: widget.userFocusNode,
+          errorText: widget.usernameMsg,
+          textInputAction: TextInputAction.next,
+          onSubmitted: (_) => _passFocusNode.requestFocus(),
+        ),
+        const SizedBox(height: 12),
+        GlassShakeBox(
+          controller: _shakeController,
+          child: GlassInput(
+            labelText: translate(DialogTextField.kPasswordTitle),
+            hintText: translate('Enter your password'),
+            prefixIcon: CamelliaIcons.lock,
+            controller: widget.pass,
+            focusNode: _passFocusNode,
+            obscureText: !_passwordVisible,
+            showClearButton: false,
+            errorText: widget.passMsg,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) {
+              if (!widget.isInProgress &&
+                  (widget.curOP.value.isEmpty ||
+                      widget.curOP.value == 'rustdesk')) {
+                widget.onLogin();
+              }
+            },
+            trailing: Tooltip(
+              message: translate(
+                _passwordVisible ? 'Hide password' : 'Show password',
+              ),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                onTap: () => setState(() {
+                  _passwordVisible = !_passwordVisible;
+                }),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Icon(
+                    _passwordVisible ? CamelliaIcons.eye : CamelliaIcons.eyeOff,
+                    size: 17,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ),
           ),
-        ],
+        ),
+        const SizedBox(height: 16),
+        Obx(
+          () => GlassButton(
+            variant: GlassButtonVariant.primary,
+            expand: true,
+            loading: widget.isInProgress,
+            icon: const Icon(Icons.login_rounded, size: 17),
+            onPressed:
+                !widget.isInProgress &&
+                    (widget.curOP.value.isEmpty ||
+                        widget.curOP.value == 'rustdesk')
+                ? () => widget.onLogin()
+                : null,
+            child: Text(translate('Login')),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AuthErrorBanner extends StatelessWidget {
+  const _AuthErrorBanner({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final alertColor = glass.statusAlert;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: alertColor.withValues(alpha: dark ? 0.16 : 0.09),
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        border: Border.all(
+          color: alertColor.withValues(alpha: dark ? 0.34 : 0.24),
+          width: 0.85,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(
+                Icons.error_outline_rounded,
+                size: 17,
+                color: alertColor,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SelectableText(
+                message,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                  fontWeight: FontWeight.w500,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -519,6 +587,11 @@ String friendlyAuthErrorMessage(dynamic err) {
     if (err.statusCode == 403 || err.code == 'forbidden') {
       return translate('Access denied. Please contact administrator.');
     }
+    if (err.statusCode == 404) {
+      return translate(
+        'Authentication endpoint not found. Please check your API server address.',
+      );
+    }
     if (err.statusCode == 429 || err.code == 'too_many_requests') {
       return translate('Too many login attempts. Please try again later.');
     }
@@ -529,11 +602,11 @@ String friendlyAuthErrorMessage(dynamic err) {
   } else if (err is RequestException) {
     final cause = err.cause.trim();
     if (cause == 'invalid_credentials' ||
-        cause.contains('password') ||
-        cause.contains('username')) {
+        cause.toLowerCase().contains('password') ||
+        cause.toLowerCase().contains('username')) {
       return translate('Invalid account or password');
     }
-    return translate(cause);
+    return formatUserFriendlyError(cause);
   } else if (err is SocketException) {
     return translate(
       'Cannot connect to server. Please check your network connection.',
@@ -563,7 +636,14 @@ String friendlyAuthErrorMessage(dynamic err) {
     if (str.contains('401') || str.contains('invalid_credentials')) {
       return translate('Invalid account or password');
     }
-    return translate('Login failed. Please check credentials and server status.');
+    if (str.contains('API server is empty') || str.contains('No host specified')) {
+      return translate(
+        'API server is not configured. Please configure ID/Relay Server in Network settings.',
+      );
+    }
+    return translate(
+      'Login failed. Please check credentials and server status.',
+    );
   }
 }
 
@@ -609,7 +689,7 @@ Future<bool> handleLoginResponseStatic({
         isEmailVerification = false;
       } else {
         if (requestGen == AuthGenerationTracker.currentAuthGen) {
-          onPasswordMsg?.call(translate("Failed, bad tfa type from server"));
+          onPasswordMsg?.call(translate('Failed, bad tfa type from server'));
         }
       }
       if (isEmailVerification != null) {
@@ -640,7 +720,7 @@ Future<bool> handleLoginResponseStatic({
       break;
     default:
       if (requestGen == AuthGenerationTracker.currentAuthGen) {
-        onPasswordMsg?.call(translate("Failed, bad response from server"));
+        onPasswordMsg?.call(translate('Failed, bad response from server'));
       }
       break;
   }
@@ -649,28 +729,39 @@ Future<bool> handleLoginResponseStatic({
 
 // call this directly
 Future<bool?> loginDialog() async {
-  var username = TextEditingController(
+  final username = TextEditingController(
     text: UserModel.getLocalUserInfo()?['name'] ?? '',
   );
-  var password = TextEditingController();
+  final password = TextEditingController();
   final userFocusNode = FocusNode()..requestFocus();
-  Timer(const Duration(milliseconds: 100), () => userFocusNode.requestFocus());
+  Timer(const Duration(milliseconds: 100), () {
+    if (userFocusNode.canRequestFocus) {
+      userFocusNode.requestFocus();
+    }
+  });
 
   String? usernameMsg;
   String? passwordMsg;
+  String? authBannerMsg;
   var isInProgress = false;
   final RxString curOP = ''.obs;
 
   void Function(void Function())? dialogSetState;
   void onUsernameChanged() {
-    if (usernameMsg != null) {
-      dialogSetState?.call(() => usernameMsg = null);
+    if (usernameMsg != null || authBannerMsg != null) {
+      dialogSetState?.call(() {
+        usernameMsg = null;
+        authBannerMsg = null;
+      });
     }
   }
 
   void onPasswordChanged() {
-    if (passwordMsg != null) {
-      dialogSetState?.call(() => passwordMsg = null);
+    if (passwordMsg != null || authBannerMsg != null) {
+      dialogSetState?.call(() {
+        passwordMsg = null;
+        authBannerMsg = null;
+      });
     }
   }
 
@@ -696,7 +787,7 @@ Future<bool?> loginDialog() async {
         }
       }
 
-      onDialogCancel() {
+      void onDialogCancel() {
         isInProgress = false;
         safeClose(false);
       }
@@ -713,7 +804,8 @@ Future<bool?> loginDialog() async {
           closeCallback: closeCallback,
           requestGen: requestGen,
           onPasswordMsg: (msg) {
-            passwordMsg = msg;
+            authBannerMsg = msg;
+            showToast(msg);
             if (context.mounted) {
               setState(() {});
             }
@@ -725,9 +817,8 @@ Future<bool?> loginDialog() async {
         );
       }
 
-      onLogin() async {
-        // validate
-        if (username.text.isEmpty) {
+      Future<void> onLogin() async {
+        if (username.text.trim().isEmpty) {
           if (context.mounted) {
             setState(() => usernameMsg = translate('Username missed'));
           }
@@ -742,7 +833,10 @@ Future<bool?> loginDialog() async {
         final requestGen = AuthGenerationTracker.nextGen();
         curOP.value = 'rustdesk';
         if (context.mounted) {
-          setState(() => isInProgress = true);
+          setState(() {
+            authBannerMsg = null;
+            isInProgress = true;
+          });
         }
         try {
           final myId = await bind.mainGetMyId();
@@ -751,7 +845,7 @@ Future<bool?> loginDialog() async {
           if (requestGen != AuthGenerationTracker.currentAuthGen) return;
           final resp = await gFFI.userModel.login(
             LoginRequest(
-              username: username.text,
+              username: username.text.trim(),
               password: password.text,
               id: myId,
               uuid: myUuid,
@@ -763,7 +857,10 @@ Future<bool?> loginDialog() async {
           await handleLoginResponse(resp, true, safeClose, requestGen);
         } catch (err) {
           if (requestGen == AuthGenerationTracker.currentAuthGen) {
-            passwordMsg = friendlyAuthErrorMessage(err);
+            final friendly = friendlyAuthErrorMessage(err);
+            authBannerMsg = friendly;
+            passwordMsg = friendly;
+            showToast(friendly);
           }
         }
         if (requestGen == AuthGenerationTracker.currentAuthGen) {
@@ -774,59 +871,82 @@ Future<bool?> loginDialog() async {
         }
       }
 
-      thirdAuthWidget() => Obx(() {
-        return Offstage(
-          offstage: loginOptions.isEmpty,
-          child: Column(
-            children: [
-              const SizedBox(height: 8.0),
-              Center(
-                child: Text(translate('or'), style: TextStyle(fontSize: 16)),
-              ),
-              const SizedBox(height: 8.0),
-              LoginWidgetOP(
-                ops: loginOptions
-                    .map((e) => ConfigOP(op: e['name'], icon: e['icon']))
-                    .toList(),
-                curOP: curOP,
-                cbLogin: (Map<String, dynamic> authBody, int requestGen) async {
-                  if (requestGen != AuthGenerationTracker.currentAuthGen) {
-                    return;
-                  }
-                  LoginResponse? resp;
-                  try {
-                    // access_token is already stored in the rust side.
-                    resp = gFFI.userModel.getLoginResponseFromAuthBody(
-                      authBody,
-                    );
-                  } catch (e) {
-                    debugPrint(
-                      'Failed to parse oidc login body: keys=${authBody.keys.toList()}',
-                    );
-                  }
-                  if (requestGen != AuthGenerationTracker.currentAuthGen) {
-                    return;
-                  }
+      Widget thirdAuthWidget() => Obx(() {
+        if (loginOptions.isEmpty) return const SizedBox.shrink();
+        final theme = Theme.of(context);
+        final glass = CamelliaGlassTokens.of(context);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Divider(
+                    height: 1,
+                    thickness: 0.85,
+                    color: glass.specularBottom,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    translate('or'),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Divider(
+                    height: 1,
+                    thickness: 0.85,
+                    color: glass.specularBottom,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            LoginWidgetOP(
+              ops: loginOptions
+                  .map((e) => ConfigOP(op: e['name'], icon: e['icon']))
+                  .toList(),
+              curOP: curOP,
+              cbLogin: (Map<String, dynamic> authBody, int requestGen) async {
+                if (requestGen != AuthGenerationTracker.currentAuthGen) {
+                  return;
+                }
+                LoginResponse? resp;
+                try {
+                  // access_token is already stored in the rust side.
+                  resp = gFFI.userModel.getLoginResponseFromAuthBody(authBody);
+                } catch (e) {
+                  debugPrint(
+                    'Failed to parse oidc login body: keys=${authBody.keys.toList()}',
+                  );
+                }
+                if (requestGen != AuthGenerationTracker.currentAuthGen) {
+                  return;
+                }
 
-                  if (resp != null) {
-                    await handleLoginResponse(
-                      resp,
-                      false,
-                      safeClose,
-                      requestGen,
-                    );
-                  } else {
-                    safeClose(true);
-                  }
-                },
-              ),
-            ],
-          ),
+                if (resp != null) {
+                  await handleLoginResponse(
+                    resp,
+                    false,
+                    safeClose,
+                    requestGen,
+                  );
+                } else {
+                  safeClose(true);
+                }
+              },
+            ),
+          ],
         );
       });
 
       final title = ModernDialogHeader(
-        icon: CamelliaIcons.lock,
+        icon: CamelliaIcons.shield,
         title: translate('Login'),
         subtitle: translate('Sign in to sync devices and address book'),
         onClose: onDialogCancel,
@@ -834,16 +954,23 @@ Future<bool?> loginDialog() async {
 
       return CustomAlertDialog(
         title: title,
-        contentBoxConstraints: const BoxConstraints(minWidth: 360),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 360,
+          maxWidth: 420,
+        ),
         content: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SizedBox(height: 8.0),
+            if (authBannerMsg != null && authBannerMsg!.isNotEmpty) ...[
+              _AuthErrorBanner(message: authBannerMsg!),
+              const SizedBox(height: 12),
+            ],
             LoginWidgetUserPass(
               username: username,
               pass: password,
               usernameMsg: usernameMsg,
-              passMsg: passwordMsg,
+              passMsg: authBannerMsg != null ? null : passwordMsg,
               isInProgress: isInProgress,
               curOP: curOP,
               onLogin: onLogin,
@@ -895,7 +1022,7 @@ Future<bool> handleVerifyResponseStatic({
       break;
     default:
       if (verifyGen == AuthGenerationTracker.currentAuthGen) {
-        onErrorText?.call(translate("Failed, bad response from server"));
+        onErrorText?.call(translate('Failed, bad response from server'));
       }
       break;
   }
@@ -917,7 +1044,7 @@ Future<bool?> verificationCodeDialog(
 
   try {
     final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
-      safeClose([bool? result]) {
+      void safeClose([bool? result]) {
         if (!dialogClosed) {
           dialogClosed = true;
           AuthGenerationTracker.invalidate();
@@ -928,7 +1055,10 @@ Future<bool?> verificationCodeDialog(
       void onVerify() async {
         final verifyGen = AuthGenerationTracker.nextGen();
         if (context.mounted) {
-          setState(() => isInProgress = true);
+          setState(() {
+            errorText = null;
+            isInProgress = true;
+          });
         }
 
         try {
@@ -938,8 +1068,8 @@ Future<bool?> verificationCodeDialog(
           if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
           final resp = await gFFI.userModel.login(
             LoginRequest(
-              verificationCode: code.text,
-              tfaCode: isEmailVerification ? null : code.text,
+              verificationCode: code.text.trim(),
+              tfaCode: isEmailVerification ? null : code.text.trim(),
               secret: secret,
               username: user?.name,
               id: myId,
@@ -964,12 +1094,14 @@ Future<bool?> verificationCodeDialog(
               }
               break;
             default:
-              errorText = translate("Failed, bad response from server");
+              errorText = translate('Failed, bad response from server');
+              showToast(errorText!);
               break;
           }
         } catch (err) {
           if (verifyGen == AuthGenerationTracker.currentAuthGen) {
             errorText = friendlyAuthErrorMessage(err);
+            showToast(errorText!);
           }
         }
 
@@ -984,57 +1116,75 @@ Future<bool?> verificationCodeDialog(
               controller: code,
               errorText: errorText,
               readyCallback: onVerify,
-              onChanged: () => errorText = null,
+              onChanged: () {
+                if (context.mounted) setState(() => errorText = null);
+              },
             )
           : Dialog2FaField(
               controller: code,
               errorText: errorText,
               readyCallback: onVerify,
-              onChanged: () => errorText = null,
+              onChanged: () {
+                if (context.mounted) setState(() => errorText = null);
+              },
             );
 
-      getOnSubmit() => codeField.isReady ? onVerify : null;
+      VoidCallback? getOnSubmit() => codeField.isReady ? onVerify : null;
 
       return CustomAlertDialog(
         title: ModernDialogHeader(
-          icon: Icons.verified_user_outlined,
-          title: translate("Verification code"),
+          icon: CamelliaIcons.shield,
+          title: translate('Verification code'),
+          subtitle: translate(
+            isEmailVerification
+                ? 'Enter the verification code sent to your email'
+                : 'Enter the 6-digit code from your authenticator app',
+          ),
           onClose: safeClose,
         ),
-        contentBoxConstraints: const BoxConstraints(maxWidth: 340),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 400,
+        ),
         content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Offstage(
-              offstage: !isEmailVerification || user?.email == null,
-              child: TextField(
-                decoration: const InputDecoration(
-                  labelText: "Email",
-                  prefixIcon: Icon(Icons.email_outlined),
-                ),
-                readOnly: true,
+            if (isEmailVerification &&
+                user?.email != null &&
+                user!.email.isNotEmpty) ...[
+              GlassInput(
+                labelText: translate('Email'),
+                prefixIcon: Icons.alternate_email_rounded,
                 controller: emailCtrl,
-              ).workaroundFreezeLinuxMint(),
-            ),
-            isEmailVerification ? const SizedBox(height: 10) : const Offstage(),
+                readOnly: true,
+                showClearButton: false,
+              ),
+              const SizedBox(height: 12),
+            ],
             codeField,
           ],
         ),
         onCancel: safeClose,
         onSubmit: getOnSubmit(),
         actions: [
-          dialogButton("Cancel", onPressed: safeClose, isOutline: true),
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: safeClose,
+            child: Text(translate('Cancel')),
+          ),
           GlassButton(
             variant: GlassButtonVariant.primary,
             loading: isInProgress,
             minHeight: 38,
             onPressed: isInProgress ? null : getOnSubmit(),
-            child: Text(translate("Verify")),
+            child: Text(translate('Verify')),
           ),
         ],
       );
     });
-    // For verification code, desktop update other models in login dialog, mobile need to close login dialog first,
-    // otherwise the soft keyboard will jump out on each key press, so mobile update in verification code dialog.
+    // For verification code, desktop updates other models in login dialog; mobile closes login dialog first.
     if (isMobile && res == true) {
       await UserModel.updateOtherModels();
     }
@@ -1050,20 +1200,21 @@ Future<bool?> verificationCodeDialog(
 
 void logOutConfirmDialog() {
   gFFI.dialogManager.show((setState, close, context) {
-    submit() {
+    void submit() {
       close();
       gFFI.userModel.logOut();
     }
 
     return CustomAlertDialog(
       title: ModernDialogHeader.warning(
-        title: translate("Logout"),
+        title: translate('Logout'),
+        subtitle: translate('Sign out of your account on this device'),
         onClose: close,
       ),
-      content: Text(translate("logout_tip")),
+      content: Text(translate('logout_tip')),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit, isDestructive: true),
+        dialogButton('Cancel', onPressed: close, isOutline: true),
+        dialogButton('OK', onPressed: submit, isDestructive: true),
       ],
       onSubmit: submit,
       onCancel: close,

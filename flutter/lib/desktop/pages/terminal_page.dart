@@ -5,6 +5,8 @@ import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/model.dart';
 import 'package:camellia_remote_app/models/terminal_model.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:xterm/xterm.dart';
 import 'terminal_connection_manager.dart';
 
@@ -54,6 +56,8 @@ class _TerminalPageState extends State<TerminalPage>
   late FFI _ffi;
   late TerminalModel _terminalModel;
   double? _cellHeight;
+  double _fontSize = 14.0;
+  final _overlayKeyState = OverlayKeyState();
   final FocusNode _terminalFocusNode = FocusNode(canRequestFocus: false);
   StreamSubscription<DesktopTabState>? _tabStateSubscription;
 
@@ -75,6 +79,7 @@ class _TerminalPageState extends State<TerminalPage>
       connToken: widget.connToken,
       isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
     );
+    _ffi.dialogManager.setOverlayState(_overlayKeyState);
 
     // Create terminal model with specific terminal ID
     _terminalModel = TerminalModel(_ffi, widget.terminalId);
@@ -162,6 +167,7 @@ class _TerminalPageState extends State<TerminalPage>
     if (state.selected >= 0 && state.selected < state.tabs.length) {
       final selectedTab = state.tabs[state.selected];
       if (selectedTab.key == widget.tabKey && mounted) {
+        _ffi.dialogManager.setOverlayState(_overlayKeyState);
         _requestFocusIfSelected();
       }
     }
@@ -212,49 +218,223 @@ class _TerminalPageState extends State<TerminalPage>
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: Column(
+  Future<void> _copySelection() async {
+    final selection = _terminalModel.terminalController.selection;
+    if (selection == null) return;
+    final text = _terminalModel.terminal.buffer.getText(selection);
+    _terminalModel.terminalController.clearSelection();
+    await Clipboard.setData(ClipboardData(text: text));
+    showToast(translate('Copied'), tone: AppTone.info);
+  }
+
+  Future<void> _pasteClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    final text = data?.text;
+    if (text != null && text.isNotEmpty) {
+      _terminalModel.terminal.paste(text);
+    }
+    _requestFocusIfSelected();
+  }
+
+  void _clearTerminal() {
+    _terminalModel.terminal.buffer.clear();
+    _terminalModel.terminal.setCursor(0, 0);
+    _requestFocusIfSelected();
+  }
+
+  void _adjustFontSize(double delta) {
+    setState(() {
+      _fontSize = (_fontSize + delta).clamp(10.0, 28.0);
+    });
+    _requestFocusIfSelected();
+  }
+
+  Widget _buildUtilityBar(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: tokens.surfaceContainer.withValues(alpha: 0.9),
+        border: Border(
+          bottom: BorderSide(color: tokens.border, width: 0.85),
+        ),
+      ),
+      child: Row(
         children: [
-          Container(height: 3, color: Theme.of(context).colorScheme.primary),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final heightPx = constraints.maxHeight;
-                return TerminalView(
-                  _terminalModel.terminal,
-                  controller: _terminalModel.terminalController,
-                  focusNode: _terminalFocusNode,
-                  // Note: autofocus is not used here because focus is managed manually
-                  // via _onTabStateChanged() to handle tab switching properly.
-                  backgroundOpacity: 0.7,
-                  padding: _calculatePadding(heightPx),
-                  onSecondaryTapDown: (details, offset) async {
-                    final selection =
-                        _terminalModel.terminalController.selection;
-                    if (selection != null) {
-                      final text = _terminalModel.terminal.buffer.getText(
-                        selection,
-                      );
-                      _terminalModel.terminalController.clearSelection();
-                      await Clipboard.setData(ClipboardData(text: text));
-                    } else {
-                      final data = await Clipboard.getData('text/plain');
-                      final text = data?.text;
-                      if (text != null) {
-                        _terminalModel.terminal.paste(text);
-                      }
-                    }
-                  },
-                );
-              },
+          ListenableBuilder(
+            listenable: _terminalModel,
+            builder: (context, _) {
+              final opened = _terminalModel.terminalOpened;
+              final dotColor = opened
+                  ? glass.statusOnline
+                  : glass.statusConnecting;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    opened ? translate('Connected') : translate('Connecting...'),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(width: 10),
+          GlassBadge(
+            label: widget.isTerminalRunAsAdmin
+                ? translate('Admin')
+                : translate('Standard'),
+            tone: widget.isTerminalRunAsAdmin
+                ? GlassBadgeTone.warning
+                : GlassBadgeTone.neutral,
+            compact: true,
+          ),
+          const Spacer(),
+          GlassIconButton(
+            icon: CamelliaIcons.copy,
+            size: 26,
+            iconSize: 14,
+            tooltip: translate('Copy'),
+            onPressed: _copySelection,
+          ),
+          const SizedBox(width: 4),
+          GlassIconButton(
+            icon: Icons.content_paste_rounded,
+            size: 26,
+            iconSize: 14,
+            tooltip: translate('Paste'),
+            onPressed: _pasteClipboard,
+          ),
+          const SizedBox(width: 4),
+          GlassIconButton(
+            icon: Icons.cleaning_services_outlined,
+            size: 26,
+            iconSize: 14,
+            tooltip: translate('Clear Terminal'),
+            onPressed: _clearTerminal,
+          ),
+          Container(
+            width: 1,
+            height: 16,
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            color: tokens.border,
+          ),
+          GlassIconButton(
+            icon: CamelliaIcons.minimize,
+            size: 24,
+            iconSize: 13,
+            tooltip: translate('Decrease'),
+            onPressed: _fontSize > 10 ? () => _adjustFontSize(-1) : null,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Text(
+              '${_fontSize.toInt()}px',
+              style: CamelliaTypography.tabular(
+                theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
+          ),
+          GlassIconButton(
+            icon: CamelliaIcons.add,
+            size: 24,
+            iconSize: 13,
+            tooltip: translate('Increase'),
+            onPressed: _fontSize < 28 ? () => _adjustFontSize(1) : null,
           ),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return Overlay(
+      key: _overlayKeyState.key,
+      initialEntries: [
+        OverlayEntry(
+          builder: (_) => Scaffold(
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+            body: Column(
+              children: [
+                _buildUtilityBar(context),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final heightPx = constraints.maxHeight;
+                      return TerminalView(
+                        _terminalModel.terminal,
+                        controller: _terminalModel.terminalController,
+                        focusNode: _terminalFocusNode,
+                        textStyle: TerminalStyle(fontSize: _fontSize),
+                        backgroundOpacity: 0.85,
+                        padding: _calculatePadding(heightPx),
+                        onSecondaryTapDown: (details, offset) {
+                          final hasSelection =
+                              _terminalModel.terminalController.selection !=
+                              null;
+                          showFrostedContextMenu(
+                            context: context,
+                            globalPosition: details.globalPosition,
+                            itemsBuilder: (closeMenu) => [
+                              FrostedMenuItem(
+                                label: translate('Copy'),
+                                icon: CamelliaIcons.copy,
+                                onTap: hasSelection
+                                    ? () {
+                                        closeMenu();
+                                        _copySelection();
+                                      }
+                                    : null,
+                              ),
+                              FrostedMenuItem(
+                                label: translate('Paste'),
+                                icon: Icons.content_paste_rounded,
+                                onTap: () {
+                                  closeMenu();
+                                  _pasteClipboard();
+                                },
+                              ),
+                              const FrostedMenuDivider(),
+                              FrostedMenuItem(
+                                label: translate('Clear Terminal'),
+                                icon: Icons.cleaning_services_outlined,
+                                onTap: () {
+                                  closeMenu();
+                                  _clearTerminal();
+                                },
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

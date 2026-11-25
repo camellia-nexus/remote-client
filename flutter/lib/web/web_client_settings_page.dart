@@ -1,15 +1,20 @@
 import 'dart:convert';
 
 import 'package:camellia_remote_app/common.dart';
-import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/common/widgets/login.dart';
+import 'package:camellia_remote_app/common/widgets/server_settings_dialog.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher_string.dart';
+
+const String kWebPrefFullscreenOnConnect = 'web_fullscreen_on_connect';
+const String kWebPrefPointerLock = 'web_pointer_lock';
 
 class WebClientSettingsPage extends StatefulWidget {
   const WebClientSettingsPage({super.key, this.embedded = false});
@@ -28,11 +33,17 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
   final List<({String key, String label})> _langs = [];
   bool _langsLoaded = false;
   String? _langsError;
+  bool _fullscreenOnConnect = false;
+  bool _pointerLockPreferred = false;
 
   @override
   void initState() {
     super.initState();
     _aboutFuture = _loadAboutInfo();
+    _fullscreenOnConnect =
+        bind.getLocalFlutterOption(k: kWebPrefFullscreenOnConnect) == 'Y';
+    _pointerLockPreferred =
+        bind.getLocalFlutterOption(k: kWebPrefPointerLock) == 'Y';
     _loadLanguages();
   }
 
@@ -92,185 +103,12 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     }
   }
 
-  Future<ServerConfig?> _loadServerConfig() async {
-    try {
-      final rawOptions = await bind.mainGetOptions();
-      final options = jsonDecode(rawOptions);
-      if (options is! Map<String, dynamic>) {
-        return null;
+  void _openServerSettings() {
+    showServerSettings(gFFI.dialogManager, (cb) {
+      if (mounted) {
+        setState(cb);
       }
-      return ServerConfig.fromOptions(options);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _openServerSettings() async {
-    final serverConfig = await _loadServerConfig();
-    if (!mounted) return;
-    if (serverConfig == null) {
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => CustomAlertDialog(
-          title: ModernDialogHeader.warning(
-            title: translate('ID/Relay Server'),
-            subtitle: translate('Failed to load server configuration'),
-          ),
-          content: Text(
-            translate(
-              'Please verify your browser network connection and retry loading endpoint settings.',
-            ),
-            style: Theme.of(ctx).textTheme.bodyMedium,
-          ),
-          actions: [
-            dialogButton(
-              'Cancel',
-              onPressed: () => Navigator.of(ctx).pop(),
-              isOutline: true,
-            ),
-            dialogButton(
-              'Retry',
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _openServerSettings();
-              },
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    final idCtrl = TextEditingController(text: serverConfig.idServer);
-    final relayCtrl = TextEditingController(text: serverConfig.relayServer);
-    final apiCtrl = TextEditingController(text: serverConfig.apiServer);
-    final keyCtrl = TextEditingController(text: serverConfig.key);
-
-    final idErr = ''.obs;
-    final relayErr = ''.obs;
-    final apiErr = ''.obs;
-    final controllers = [idCtrl, relayCtrl, apiCtrl, keyCtrl];
-    final errMsgs = [idErr, relayErr, apiErr];
-    var isInProgress = false;
-
-    try {
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          return StatefulBuilder(
-            builder: (context, setDialogState) {
-              Future<void> submit() async {
-                setDialogState(() {
-                  isInProgress = true;
-                });
-                final ok = await setServerConfig(
-                  null,
-                  errMsgs,
-                  ServerConfig(
-                    idServer: idCtrl.text.trim(),
-                    relayServer: relayCtrl.text.trim(),
-                    apiServer: apiCtrl.text.trim(),
-                    key: keyCtrl.text.trim(),
-                  ),
-                );
-                if (!dialogContext.mounted) {
-                  return;
-                }
-                setDialogState(() {
-                  isInProgress = false;
-                });
-                if (ok) {
-                  Navigator.of(dialogContext).pop();
-                  showToast(translate('Successful'));
-                  if (mounted) {
-                    setState(() {});
-                  }
-                } else {
-                  setDialogState(() {});
-                  showToast(translate('Failed'));
-                }
-              }
-
-              return CustomAlertDialog(
-                title: Row(
-                  children: [
-                    Expanded(
-                      child: ModernDialogHeader(
-                        icon: Icons.dns_rounded,
-                        title: translate('ID/Relay Server'),
-                        subtitle: translate(
-                          'Configure server endpoints and key',
-                        ),
-                      ),
-                    ),
-                    ...ServerConfigImportExportWidgets(controllers, errMsgs),
-                  ],
-                ),
-                content: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 540),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        GlassInput(
-                          labelText: translate('ID Server'),
-                          controller: idCtrl,
-                          errorText: idErr.value.isEmpty ? null : idErr.value,
-                          hintText: 'host[:port]',
-                          tabularNums: true,
-                        ),
-                        const SizedBox(height: 12),
-                        GlassInput(
-                          labelText: translate('Relay Server'),
-                          controller: relayCtrl,
-                          errorText: relayErr.value.isEmpty
-                              ? null
-                              : relayErr.value,
-                          hintText: 'host[:port]',
-                          tabularNums: true,
-                        ),
-                        const SizedBox(height: 12),
-                        GlassInput(
-                          labelText: translate('API Server'),
-                          controller: apiCtrl,
-                          errorText: apiErr.value.isEmpty ? null : apiErr.value,
-                          hintText: 'https://api.example.com',
-                        ),
-                        const SizedBox(height: 12),
-                        GlassInput(
-                          labelText: translate('Key'),
-                          controller: keyCtrl,
-                          tabularNums: true,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  GlassButton(
-                    variant: GlassButtonVariant.secondary,
-                    onPressed: isInProgress
-                        ? null
-                        : () => Navigator.of(dialogContext).pop(),
-                    child: Text(translate('Cancel')),
-                  ),
-                  GlassButton(
-                    variant: GlassButtonVariant.primary,
-                    loading: isInProgress,
-                    onPressed: isInProgress ? null : submit,
-                    child: Text(translate('OK')),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-    } finally {
-      for (final c in controllers) {
-        c.dispose();
-      }
-    }
+    });
   }
 
   String _otherLabel(String raw) {
@@ -290,7 +128,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     required List<Widget> children,
   }) {
     final theme = Theme.of(context);
-    final glass = CamelliaGlassTokens.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
     final accent = theme.brightness == Brightness.dark
         ? theme.colorScheme.secondary
         : theme.colorScheme.primary;
@@ -306,7 +145,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
         ),
         child: Icon(icon, size: 17, color: accent),
       ),
-      padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -314,8 +153,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
             if (i > 0)
               Divider(
                 height: 1,
-                thickness: 0.8,
-                color: glass.specularBottom.withValues(alpha: 0.55),
+                thickness: 0.85,
+                color: tokens.border.withValues(alpha: 0.65),
               ),
             children[i],
           ],
@@ -333,38 +172,46 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     String? subtitle,
   }) {
     final theme = Theme.of(context);
-    final glass = CamelliaGlassTokens.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final dropdownField = GlassSurface(
-          layer: CamelliaGlassLayer.floating,
-          showShadow: false,
-          enableBlur: false,
-          borderRadius: BorderRadius.circular(CamelliaRadius.control),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: value,
-              items: items,
-              isExpanded: true,
-              isDense: true,
-              dropdownColor: theme.colorScheme.surfaceContainerHigh,
-              icon: Icon(
-                Icons.keyboard_arrow_down_rounded,
-                size: 18,
-                color: theme.colorScheme.onSurfaceVariant,
+        final dropdownField = DecoratedBox(
+          decoration: BoxDecoration(
+            color: tokens.surfaceContainer.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            border: Border.all(
+              color: tokens.border.withValues(alpha: 0.85),
+              width: 0.85,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: value,
+                items: items,
+                isExpanded: true,
+                isDense: true,
+                dropdownColor: theme.colorScheme.surfaceContainerHigh,
+                icon: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: 18,
+                  color: tokens.muted,
+                ),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                ),
+                onChanged: onChanged,
               ),
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurface,
-              ),
-              onChanged: onChanged,
             ),
           ),
         );
 
         final headerRow = Row(
           children: [
-            Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
+            Icon(icon, size: 19, color: tokens.muted),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -382,7 +229,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                     Text(
                       subtitle,
                       style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                        color: tokens.muted,
                       ),
                     ),
                   ],
@@ -412,17 +259,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
             children: [
               Expanded(child: headerRow),
               const SizedBox(width: 14),
-              SizedBox(
-                width: 210,
-                height: 38,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                    border: Border.all(color: glass.specularBottom, width: 0.6),
-                  ),
-                  child: dropdownField,
-                ),
-              ),
+              SizedBox(width: 210, height: 38, child: dropdownField),
             ],
           ),
         );
@@ -432,6 +269,9 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
 
   Widget _buildThemeRow(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+
     return ValueListenableBuilder<CamelliaThemePreference>(
       valueListenable: MyTheme.themeNotifier,
       builder: (context, pref, _) {
@@ -480,11 +320,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
 
               final labelCol = Row(
                 children: [
-                  Icon(
-                    Icons.palette_outlined,
-                    size: 20,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                  Icon(Icons.brightness_6_rounded, size: 19, color: tokens.muted),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -502,7 +338,99 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                             'Switch between Light, Dark, OLED Midnight, or System appearance.',
                           ),
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                            color: tokens.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+
+              if (constraints.maxWidth < 620) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [labelCol, const SizedBox(height: 10), switcher],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: labelCol),
+                  const SizedBox(width: 14),
+                  switcher,
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildThemeStyleRow(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+
+    return ValueListenableBuilder<CamelliaThemeStyle>(
+      valueListenable: MyTheme.themeStyleNotifier,
+      builder: (context, style, _) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 480;
+              final switcher = GlassSegmentedControl<CamelliaThemeStyle>(
+                compact: compact,
+                expand: compact,
+                selected: style,
+                items: [
+                  GlassSegmentItem(
+                    value: CamelliaThemeStyle.auroraFrost,
+                    icon: Icons.auto_awesome_rounded,
+                    label: compact ? null : translate('Aurora Frost'),
+                    tooltip: translate('Aurora Frost'),
+                  ),
+                  GlassSegmentItem(
+                    value: CamelliaThemeStyle.obsidianCyber,
+                    icon: Icons.bolt_rounded,
+                    label: compact ? null : translate('Obsidian Cyber'),
+                    tooltip: translate('Obsidian Cyber'),
+                  ),
+                  GlassSegmentItem(
+                    value: CamelliaThemeStyle.nordicTitanium,
+                    icon: Icons.layers_rounded,
+                    label: compact ? null : translate('Nordic Titanium'),
+                    tooltip: translate('Nordic Titanium'),
+                  ),
+                ],
+                onChanged: (next) async {
+                  await MyTheme.changeThemeStyle(next);
+                  if (mounted) {
+                    setState(() {});
+                  }
+                },
+              );
+
+              final labelCol = Row(
+                children: [
+                  Icon(Icons.palette_outlined, size: 19, color: tokens.muted),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          translate('Theme Style'),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          translate('Modern Liquid Glass'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: tokens.muted,
                           ),
                         ),
                       ],
@@ -534,6 +462,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final allowWebSocket = mainGetBoolOptionSync(kOptionAllowWebSocket);
 
@@ -592,11 +522,12 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
       padding: EdgeInsets.all(widget.embedded ? 16 : 20),
       children: [
         _sectionCard(
-          icon: Icons.tune_rounded,
+          icon: CamelliaIcons.settings,
           title: 'General',
           subtitle: 'Appearance and display language',
           children: [
             _buildThemeRow(context),
+            _buildThemeStyleRow(context),
             if (_langsLoaded && _langs.isNotEmpty)
               _dropdownTile(
                 icon: Icons.language_rounded,
@@ -632,8 +563,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 ),
                 trailing: GlassIconButton(
                   icon: CamelliaIcons.refresh,
-                  size: 36,
-                  iconSize: 18,
+                  size: 34,
+                  iconSize: 17,
                   tooltip: translate('Retry'),
                   onPressed: _loadLanguages,
                 ),
@@ -655,7 +586,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                     Icon(
                       Icons.account_circle_outlined,
                       size: 22,
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: tokens.muted,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -664,7 +595,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                         children: [
                           Text(
                             isLogin
-                                ? gFFI.userModel.userName.value
+                                ? gFFI.userModel.displayNameOrUserName
                                 : translate('Not logged in'),
                             style: theme.textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w600,
@@ -675,10 +606,10 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                             isLogin
                                 ? translate('Signed in to Camellia account')
                                 : translate(
-                                    'Sign in to access your synced devices',
+                                    'Sign in to sync devices and address book',
                                   ),
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                              color: tokens.muted,
                             ),
                           ),
                         ],
@@ -689,10 +620,10 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                       variant: isLogin
                           ? GlassButtonVariant.secondary
                           : GlassButtonVariant.primary,
-                      minHeight: 38,
+                      minHeight: 36,
                       onPressed: () async {
                         if (isLogin) {
-                          await gFFI.userModel.logOut();
+                          logOutConfirmDialog();
                         } else {
                           await loginDialog();
                         }
@@ -712,16 +643,13 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
         ),
         const SizedBox(height: 14),
         _sectionCard(
-          icon: Icons.hub_outlined,
+          icon: CamelliaIcons.tunnel,
           title: 'Network',
           subtitle: 'Relay routing and browser transport status',
           children: [
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                Icons.dns_outlined,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              leading: Icon(Icons.dns_outlined, color: tokens.muted),
               title: Text(
                 translate('ID/Relay Server'),
                 style: theme.textTheme.bodyMedium?.copyWith(
@@ -730,9 +658,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
               ),
               subtitle: Text(
                 translate('Configure server endpoints and key'),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
               ),
               trailing: GlassButton(
                 variant: GlassButtonVariant.secondary,
@@ -744,10 +670,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                Icons.web_asset_outlined,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              leading: Icon(Icons.web_asset_outlined, color: tokens.muted),
               title: Text(
                 translate('Use WebSocket'),
                 style: theme.textTheme.bodyMedium?.copyWith(
@@ -758,9 +681,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 translate(
                   'Web client transport is WS/WSS only (browser limitation).',
                 ),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
               ),
               trailing: GlassBadge(
                 label: allowWebSocket
@@ -775,10 +696,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                CamelliaIcons.lock,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              leading: Icon(CamelliaIcons.lock, color: tokens.muted),
               title: Text(
                 translate('Direct IP access unavailable'),
                 style: theme.textTheme.bodyMedium?.copyWith(
@@ -789,9 +707,63 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 translate(
                   'Use a device ID with the authenticated ID/Relay route. Direct endpoints stay disabled until they support peer identity verification and end-to-end session encryption.',
                 ),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          icon: Icons.web_rounded,
+          title: 'Browser Session Controls',
+          subtitle: 'Session ergonomics and input behavior',
+          children: [
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              value: _fullscreenOnConnect,
+              onChanged: (v) async {
+                setState(() => _fullscreenOnConnect = v);
+                await bind.setLocalFlutterOption(
+                  k: kWebPrefFullscreenOnConnect,
+                  v: v ? 'Y' : 'N',
+                );
+              },
+              secondary: Icon(Icons.fullscreen_rounded, color: tokens.muted),
+              title: Text(
+                translate('Fullscreen Mode'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
                 ),
+              ),
+              subtitle: Text(
+                translate(
+                  'Maximizes remote canvas and reduces browser chrome. Press Esc to exit.',
+                ),
+                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
+              ),
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              value: _pointerLockPreferred,
+              onChanged: (v) async {
+                setState(() => _pointerLockPreferred = v);
+                await bind.setLocalFlutterOption(
+                  k: kWebPrefPointerLock,
+                  v: v ? 'Y' : 'N',
+                );
+              },
+              secondary: Icon(CamelliaIcons.mouse, color: tokens.muted),
+              title: Text(
+                translate('Pointer Lock (Relative Mouse)'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                translate(
+                  'Captures cursor for 3D apps and precision navigation. Press Esc to release pointer.',
+                ),
+                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
               ),
             ),
           ],
@@ -803,7 +775,7 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
           subtitle: 'Default scaling, video quality, and codec preferences',
           children: [
             _dropdownTile(
-              icon: Icons.desktop_windows_outlined,
+              icon: Icons.fit_screen_rounded,
               title: 'Default View Style',
               value: viewStyle,
               items: [
@@ -916,7 +888,8 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
         const SizedBox(height: 14),
         _sectionCard(
           icon: CamelliaIcons.shield,
-          title: translate('About'),
+          title: 'About',
+          subtitle: 'Version, privacy, and licenses',
           children: [
             FutureBuilder<_AboutInfo>(
               future: _aboutFuture,
@@ -925,7 +898,6 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                 final version = info?.version ?? '';
                 final buildDate = info?.buildDate ?? '';
                 final fingerprint = info?.fingerprint ?? '';
-                final year = DateTime.now().year;
                 final monoStyle = CamelliaTypography.tabular(
                   theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurface,
@@ -938,29 +910,50 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
                     children: [
                       SelectionArea(
                         child: Text(
-                          '${translate('Version')}: ${version.isEmpty ? '-' : version}',
+                          '${translate('Version')}: ${version.isEmpty ? '—' : version}',
                           style: monoStyle,
                         ),
                       ),
                       const SizedBox(height: 6),
                       SelectionArea(
                         child: Text(
-                          '${translate('Build Date')}: ${buildDate.isEmpty ? '-' : buildDate}',
+                          '${translate('Build Date')}: ${buildDate.isEmpty ? '—' : buildDate}',
                           style: monoStyle,
                         ),
                       ),
                       const SizedBox(height: 6),
                       SelectionArea(
                         child: Text(
-                          '${translate('Fingerprint')}: ${fingerprint.isEmpty ? '-' : fingerprint}',
+                          '${translate('Fingerprint')}: ${fingerprint.isEmpty ? '—' : fingerprint}',
                           style: monoStyle,
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Copyright © $year Camellia Computing.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                      const SizedBox(height: 10),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => launchUrlString(
+                          'https://github.com/camellia-nexus/remote-client',
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'github.com/camellia-nexus/remote-client',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.open_in_new_rounded,
+                                size: 14,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],

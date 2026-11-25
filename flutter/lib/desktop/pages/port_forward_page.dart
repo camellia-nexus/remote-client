@@ -57,13 +57,16 @@ class _PortForwardPageState extends State<PortForwardPage>
   final TextEditingController localPortController = TextEditingController();
   final TextEditingController remoteHostController = TextEditingController();
   final TextEditingController remotePortController = TextEditingController();
+  final _overlayKeyState = OverlayKeyState();
   RxList<_PortForward> pfs = RxList.empty(growable: true);
   late FFI _ffi;
+  Worker? _connReadyWorker;
 
   @override
   void initState() {
     super.initState();
     _ffi = FFI(null);
+    _ffi.dialogManager.setOverlayState(_overlayKeyState);
     _ffi.start(
       widget.id,
       isPortForward: true,
@@ -77,15 +80,33 @@ class _PortForwardPageState extends State<PortForwardPage>
       Get.delete<FFI>(tag: 'pf_${widget.id}', force: true);
     }
     Get.put<FFI>(_ffi, tag: 'pf_${widget.id}');
+    if (!widget.isRDP) {
+      refreshTunnelConfig();
+    }
+    _connReadyWorker = ever<bool>(_ffi.ffiModel.pi.isSet, (bool ready) {
+      if (ready && mounted) {
+        _ffi.dialogManager.dismissAll();
+        if (!widget.isRDP) {
+          refreshTunnelConfig();
+        }
+      }
+    });
     debugPrint("Port forward page init success with id ${widget.id}");
-    // Call onSelected in post frame callback, since we cannot guarantee that the callback will not call setState.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_ffi.ffiModel.pi.isSet.isFalse) {
+        _ffi.dialogManager.showLoading(
+          translate('Connecting...'),
+          onCancel: closeConnection,
+        );
+      }
       widget.tabController.onSelected?.call(widget.id);
     });
   }
 
   @override
   void dispose() {
+    _connReadyWorker?.dispose();
     localPortController.dispose();
     remoteHostController.dispose();
     remotePortController.dispose();
@@ -98,17 +119,13 @@ class _PortForwardPageState extends State<PortForwardPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: FutureBuilder(
-        future: () async {
-          if (!widget.isRDP) {
-            refreshTunnelConfig();
-          }
-        }(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done) {
-            return CamelliaBackdrop(
+    return Overlay(
+      key: _overlayKeyState.key,
+      initialEntries: [
+        OverlayEntry(
+          builder: (_) => Scaffold(
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+            body: CamelliaBackdrop(
               padding: const EdgeInsets.all(20),
               child: GlassCard(
                 accent: CamelliaColors.aqua,
@@ -125,35 +142,40 @@ class _PortForwardPageState extends State<PortForwardPage>
                   ],
                 ),
               ),
-            );
-          }
-          return const Offstage();
-        },
-      ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  buildPrompt(BuildContext context) {
+  Widget buildPrompt(BuildContext context) {
     final glass = CamelliaGlassTokens.of(context);
-    return Obx(
-      () => Offstage(
-        offstage: pfs.isEmpty && !widget.isRDP,
+    return Obx(() {
+      final connected = _ffi.ffiModel.pi.isSet.isTrue;
+      return Offstage(
+        offstage: pfs.isEmpty && !widget.isRDP && !connected,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
           child: GlassSurface(
             layer: CamelliaGlassLayer.floating,
+            strokeWidth: 0.85,
             tintColor: glass.statusEncrypted.withValues(
               alpha: Theme.of(context).brightness == Brightness.dark
-                  ? 0.16
-                  : 0.10,
+                  ? 0.14
+                  : 0.08,
             ),
             showShadow: false,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(
               children: [
                 TelemetryPill(
-                  label: translate('Listening ...'),
-                  statusColor: glass.statusOnline,
+                  label: connected
+                      ? translate('Listening ...')
+                      : translate('Connecting...'),
+                  statusColor: connected
+                      ? glass.statusOnline
+                      : glass.statusConnecting,
                   icon: Icons.lan_rounded,
                   compact: true,
                 ),
@@ -170,32 +192,59 @@ class _PortForwardPageState extends State<PortForwardPage>
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
-  buildTunnel(BuildContext context) {
+  Widget buildTunnel(BuildContext context) {
+    final theme = Theme.of(context);
     return Obx(
-      () => ListView.builder(
+      () => ListView(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-        itemCount: pfs.length + 1,
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return buildTunnelAddRow(context);
-          }
-          return buildTunnelDataRow(context, pfs[index - 1], index - 1);
-        },
+        children: [
+          buildTunnelAddRow(context),
+          if (pfs.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 36),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CamelliaStateIllustration(
+                      glyph: CamelliaGlyph.emptyTunnels,
+                      accentColor: CamelliaColors.aqua,
+                      size: 56,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      translate('No active port tunnels'),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      translate('Add a local-to-remote port forward rule above'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            for (var i = 0; i < pfs.length; i++)
+              buildTunnelDataRow(context, pfs[i], i),
+        ],
       ),
     );
   }
 
-  buildTunnelAddRow(BuildContext context) {
-    var portInputFormatter = [
-      FilteringTextInputFormatter.allow(
-        RegExp(
-          r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
-        ),
-      ),
+  Widget buildTunnelAddRow(BuildContext context) {
+    final portInputFormatter = <TextInputFormatter>[
+      FilteringTextInputFormatter.digitsOnly,
+      LengthLimitingTextInputFormatter(5),
     ];
 
     Future<void> onAddTunnel() async {
@@ -227,7 +276,7 @@ class _PortForwardPageState extends State<PortForwardPage>
 
     final addButton = GlassButton(
       variant: GlassButtonVariant.primary,
-      icon: const Icon(Icons.add_rounded, size: 18),
+      icon: const Icon(CamelliaIcons.add, size: 18),
       onPressed: onAddTunnel,
       child: Text(translate('Add')),
     );
@@ -246,6 +295,7 @@ class _PortForwardPageState extends State<PortForwardPage>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     buildTunnelInputCell(
                       context,
@@ -253,6 +303,8 @@ class _PortForwardPageState extends State<PortForwardPage>
                       inputFormatters: portInputFormatter,
                       label: translate('Local Port'),
                       hint: '8080',
+                      tabularNums: true,
+                      onSubmitted: onAddTunnel,
                     ),
                     buildTunnelInputCell(
                       context,
@@ -260,17 +312,21 @@ class _PortForwardPageState extends State<PortForwardPage>
                       inputFormatters: portInputFormatter,
                       label: translate('Remote Port'),
                       hint: '80',
+                      tabularNums: true,
+                      onSubmitted: onAddTunnel,
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     buildTunnelInputCell(
                       context,
                       controller: remoteHostController,
                       label: translate('Remote Host'),
                       hint: 'localhost',
+                      onSubmitted: onAddTunnel,
                     ),
                     const SizedBox(width: 8),
                     addButton,
@@ -280,7 +336,7 @@ class _PortForwardPageState extends State<PortForwardPage>
             );
           }
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               buildTunnelInputCell(
                 context,
@@ -288,16 +344,19 @@ class _PortForwardPageState extends State<PortForwardPage>
                 inputFormatters: portInputFormatter,
                 label: translate('Local Port'),
                 hint: '8080',
+                tabularNums: true,
+                onSubmitted: onAddTunnel,
               ),
               const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 6),
-                child: Icon(Icons.arrow_forward_rounded, size: 20),
+                padding: EdgeInsets.only(left: 6, right: 6, bottom: 10),
+                child: Icon(CamelliaIcons.arrowForward, size: 18),
               ),
               buildTunnelInputCell(
                 context,
                 controller: remoteHostController,
                 label: translate('Remote Host'),
                 hint: 'localhost',
+                onSubmitted: onAddTunnel,
               ),
               buildTunnelInputCell(
                 context,
@@ -305,6 +364,8 @@ class _PortForwardPageState extends State<PortForwardPage>
                 inputFormatters: portInputFormatter,
                 label: translate('Remote Port'),
                 hint: '80',
+                tabularNums: true,
+                onSubmitted: onAddTunnel,
               ),
               const SizedBox(width: 8),
               addButton,
@@ -315,24 +376,27 @@ class _PortForwardPageState extends State<PortForwardPage>
     );
   }
 
-  buildTunnelInputCell(
+  Widget buildTunnelInputCell(
     BuildContext context, {
     required TextEditingController controller,
     List<TextInputFormatter>? inputFormatters,
     String? label,
     String? hint,
+    bool tabularNums = false,
+    VoidCallback? onSubmitted,
   }) {
     return Expanded(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6),
-        child: TextField(
+        child: GlassInput(
           controller: controller,
+          labelText: label,
+          hintText: hint,
+          tabularNums: tabularNums,
+          minHeight: 40,
           inputFormatters: inputFormatters,
-          style: CamelliaTypography.tabular(
-            Theme.of(context).textTheme.bodyMedium,
-          ),
-          decoration: InputDecoration(labelText: label, hintText: hint),
-        ).workaroundFreezeLinuxMint(),
+          onSubmitted: onSubmitted != null ? (_) => onSubmitted() : null,
+        ),
       ),
     );
   }
@@ -447,15 +511,20 @@ class _PortForwardPageState extends State<PortForwardPage>
     );
   }
 
-  void refreshTunnelConfig() async {
-    String peer = bind.mainGetPeerSync(id: widget.id);
-    Map<String, dynamic> config = jsonDecode(peer);
-    List<dynamic> infos = config['port_forwards'] as List;
-    List<_PortForward> result = List.empty(growable: true);
-    for (var e in infos) {
-      result.add(_PortForward.fromJson(e));
+  void refreshTunnelConfig() {
+    try {
+      final peer = bind.mainGetPeerSync(id: widget.id);
+      if (!mounted || peer.isEmpty) return;
+      final Map<String, dynamic> config = jsonDecode(peer);
+      final infos = (config['port_forwards'] as List?) ?? const [];
+      final List<_PortForward> result = [];
+      for (final e in infos) {
+        result.add(_PortForward.fromJson(e));
+      }
+      pfs.value = result;
+    } catch (e) {
+      debugPrint('refreshTunnelConfig failed: $e');
     }
-    pfs.value = result;
   }
 
   Widget buildRdp(BuildContext context) {

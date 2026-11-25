@@ -1,6 +1,11 @@
 import 'dart:math' as math;
 
+import 'package:camellia_remote_app/common/widgets/dialog.dart';
+import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
@@ -11,7 +16,7 @@ const String kStoredPasswordSentinel =
 
 void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
   final dm = dialogManager ?? gFFI.dialogManager;
-  var socks = await bind.mainGetSocks();
+  final socks = await bind.mainGetSocks();
 
   String proxy = '';
   String proxyMsg = '';
@@ -22,20 +27,19 @@ void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
     username = socks[1];
     password = socks[2];
   }
-  var proxyController = TextEditingController(text: proxy);
-  var userController = TextEditingController(text: username);
-  var pwdController = TextEditingController(text: password);
-  RxBool obscure = true.obs;
+  final proxyController = TextEditingController(text: proxy);
+  final userController = TextEditingController(text: username);
+  final pwdController = TextEditingController(text: password);
+  final RxBool obscure = true.obs;
 
-  // proxy settings
-  // The following option is a not real key, it is just used for custom client advanced settings.
-  const String optionProxyUrl = "proxy-url";
+  const String optionProxyUrl = 'proxy-url';
   final isOptFixed = isOptionFixed(optionProxyUrl);
+  final maxEncryptLen = bind.mainMaxEncryptLen();
 
   var isInProgress = false;
   var isClosed = false;
   dm.show((setState, close, context) {
-    safeClose() {
+    void safeClose() {
       if (isClosed) return;
       isClosed = true;
       proxyController.clear();
@@ -47,13 +51,23 @@ void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
       close();
     }
 
-    submit() async {
-      if (isInProgress || isClosed) return;
+    void clearAll() {
+      proxyController.clear();
+      userController.clear();
+      pwdController.clear();
+      setState(() {
+        proxyMsg = '';
+        password = '';
+      });
+    }
+
+    Future<void> submit() async {
+      if (isInProgress || isClosed || isOptFixed) return;
       setState(() {
         proxyMsg = '';
         isInProgress = true;
       });
-      cancel() {
+      void cancelLoading() {
         if (isClosed) return;
         setState(() {
           isInProgress = false;
@@ -76,10 +90,8 @@ void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
           ),
         );
         if (isClosed) return;
-        if (proxyMsg.isEmpty) {
-          // ignore
-        } else {
-          cancel();
+        if (proxyMsg.isNotEmpty) {
+          cancelLoading();
           return;
         }
       }
@@ -94,128 +106,122 @@ void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
 
     final responsiveMinWidth = math.max(
       0.0,
-      math.min(MediaQuery.sizeOf(context).width - 32, 500.0),
+      math.min(MediaQuery.sizeOf(context).width - 48, 460.0),
     );
+    final theme = Theme.of(context);
 
     return CustomAlertDialog(
-      title: Text(translate('Socks5/Http(s) Proxy')),
+      title: ModernDialogHeader(
+        icon: CamelliaIcons.tunnel,
+        title: translate('Socks5/Http(s) Proxy'),
+        subtitle: translate('default_proxy_tip'),
+        onClose: safeClose,
+      ),
       content: ConstrainedBox(
-        constraints: BoxConstraints(minWidth: responsiveMinWidth),
+        constraints: BoxConstraints(
+          minWidth: responsiveMinWidth,
+          maxWidth: 480.0,
+        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Row(
-                        children: [
-                          Text(translate('Server')).marginOnly(right: 4),
-                          Tooltip(
-                            waitDuration: const Duration(milliseconds: 0),
-                            message: translate("default_proxy_tip"),
-                            child: Icon(
-                              Icons.help_outline_outlined,
-                              size: 16,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.color
-                                  ?.withValues(alpha: 0.5),
-                            ),
-                          ),
-                        ],
+            if (isInProgress) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                child: const LinearProgressIndicator(minHeight: 2.5),
+              ),
+              const SizedBox(height: 12),
+            ],
+            GlassInput(
+              labelText: translate('Server'),
+              hintText: 'socks5://127.0.0.1:1080',
+              prefixIcon: Icons.dns_outlined,
+              controller: proxyController,
+              autofocus: true,
+              enabled: !isOptFixed,
+              tabularNums: true,
+              errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
+              onChanged: (_) {
+                if (proxyMsg.isNotEmpty) {
+                  setState(() => proxyMsg = '');
+                }
+              },
+              onSubmitted: (_) => submit(),
+            ).workaroundFreezeLinuxMint(),
+            const SizedBox(height: 12),
+            GlassInput(
+              labelText: translate('Username'),
+              hintText: translate('Optional'),
+              prefixIcon: Icons.person_outline_rounded,
+              controller: userController,
+              enabled: !isOptFixed,
+              onSubmitted: (_) => submit(),
+            ).workaroundFreezeLinuxMint(),
+            const SizedBox(height: 12),
+            Obx(
+              () => GlassInput(
+                labelText: translate('Password'),
+                hintText: password == kStoredPasswordSentinel
+                    ? translate('Unchanged')
+                    : translate('Optional'),
+                prefixIcon: CamelliaIcons.lock,
+                obscureText: obscure.value,
+                showClearButton: false,
+                controller: pwdController,
+                enabled: !isOptFixed,
+                inputFormatters: [
+                  LengthLimitingTextInputFormatter(maxEncryptLen),
+                ],
+                onSubmitted: (_) => submit(),
+                trailing: Tooltip(
+                  message: translate(
+                    obscure.value ? 'Show password' : 'Hide password',
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                    onTap: () => obscure.value = !obscure.value,
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Icon(
+                        obscure.value
+                            ? CamelliaIcons.eyeOff
+                            : CamelliaIcons.eye,
+                        size: 17,
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
-                      labelText: isMobile ? translate('Server') : null,
-                      helperText: isMobile
-                          ? translate("default_proxy_tip")
-                          : null,
-                      helperMaxLines: isMobile ? 3 : null,
                     ),
-                    controller: proxyController,
-                    autofocus: true,
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Username")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: TextField(
-                    controller: userController,
-                    decoration: InputDecoration(
-                      labelText: isMobile ? translate('Username') : null,
-                    ),
-                    enabled: !isOptFixed,
-                  ).workaroundFreezeLinuxMint(),
-                ),
-              ],
-            ).marginOnly(bottom: 8),
-            Row(
-              children: [
-                if (!isMobile)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 140),
-                    child: Text(
-                      '${translate("Password")}:',
-                      textAlign: TextAlign.right,
-                    ).marginOnly(right: 10),
-                  ),
-                Expanded(
-                  child: Obx(
-                    () => TextField(
-                      obscureText: obscure.value,
-                      decoration: InputDecoration(
-                        labelText: isMobile ? translate('Password') : null,
-                        hintText: password == kStoredPasswordSentinel
-                            ? translate('Unchanged')
-                            : null,
-                        suffixIcon: IconButton(
-                          onPressed: () => obscure.value = !obscure.value,
-                          icon: Icon(
-                            obscure.value
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                        ),
-                      ),
-                      controller: pwdController,
-                      enabled: !isOptFixed,
-                      maxLength: bind.mainMaxEncryptLen(),
-                    ).workaroundFreezeLinuxMint(),
                   ),
                 ),
-              ],
+              ).workaroundFreezeLinuxMint(),
             ),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress)
-              const LinearProgressIndicator().marginOnly(top: 8),
           ],
         ),
       ),
       actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        if (!isOptFixed) dialogButton('OK', onPressed: submit),
+        if (!isOptFixed)
+          GlassButton(
+            variant: GlassButtonVariant.ghost,
+            minHeight: 38,
+            onPressed: isInProgress ? null : clearAll,
+            child: Text(translate('Clear')),
+          ),
+        GlassButton(
+          variant: GlassButtonVariant.secondary,
+          minHeight: 38,
+          onPressed: safeClose,
+          child: Text(translate('Cancel')),
+        ),
+        if (!isOptFixed)
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            minHeight: 38,
+            loading: isInProgress,
+            onPressed: isInProgress ? null : submit,
+            child: Text(translate('OK')),
+          ),
       ],
-      onSubmit: submit,
+      onSubmit: isOptFixed ? null : submit,
       onCancel: safeClose,
     );
   });

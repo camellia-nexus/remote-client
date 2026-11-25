@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
@@ -28,17 +27,7 @@ final peerCardUiType = PeerUiType.grid.obs;
 
 bool? hideUsernameOnCard;
 
-Color _getCohesiveCardTint(String id, bool isLight) {
-  const tints = [
-    CamelliaColors.azure,
-    CamelliaColors.indigo,
-    CamelliaColors.aqua,
-    CamelliaColors.orchid,
-    CamelliaColors.leaf,
-  ];
-  final index = id.hashCode.abs() % tints.length;
-  return tints[index].withValues(alpha: isLight ? 0.06 : 0.12);
-}
+final RxString _activeFocusedPeerKey = ''.obs;
 
 class _PeerCard extends StatefulWidget {
   final Peer peer;
@@ -59,25 +48,34 @@ class _PeerCard extends StatefulWidget {
 
 class _PeerCardState extends State<_PeerCard>
     with AutomaticKeepAliveClientMixin {
-  var _menuPos = RelativeRect.fill;
+  Offset _lastPointerPos = Offset.zero;
   bool _hovered = false;
   bool _focused = false;
   bool? _isFavorite;
   final double _cardRadius = CamelliaRadius.surface;
   final double _tileRadius = CamelliaRadius.control;
 
-  Future<void> _ensureFavoriteLoaded() async {
-    if (_isFavorite != null) return;
+  String get _cardSelectionKey => '${widget.tab.index}:${widget.peer.id}';
+
+  Future<void> _refreshFavoriteState() async {
     if (widget.tab == PeerTabIndex.fav) {
-      if (mounted) setState(() => _isFavorite = true);
+      if (mounted && _isFavorite != true) {
+        setState(() => _isFavorite = true);
+      }
       return;
     }
     try {
       final favs = await bind.mainGetFav();
-      if (mounted) {
-        setState(() => _isFavorite = favs.contains(widget.peer.id));
+      final next = favs.contains(widget.peer.id);
+      if (mounted && _isFavorite != next) {
+        setState(() => _isFavorite = next);
       }
     } catch (_) {}
+  }
+
+  Future<void> _ensureFavoriteLoaded() async {
+    if (_isFavorite != null) return;
+    await _refreshFavoriteState();
   }
 
   Future<void> _toggleFavorite() async {
@@ -101,6 +99,19 @@ class _PeerCardState extends State<_PeerCard>
     } catch (_) {}
   }
 
+  RelativeRect _resolveMenuRect(Offset globalPos) {
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    final overlaySize = overlay?.size ?? MediaQuery.sizeOf(context);
+    final local = overlay != null
+        ? overlay.globalToLocal(globalPos)
+        : globalPos;
+    return RelativeRect.fromRect(
+      Rect.fromLTWH(local.dx, local.dy, 0, 0),
+      Offset.zero & overlaySize,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -114,6 +125,7 @@ class _PeerCardState extends State<_PeerCard>
     final PeerTabModel peerTabModel = Provider.of(context);
     final peer = super.widget.peer;
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onDoubleTap: peerTabModel.multiSelectionMode
           ? null
           : () => widget.connect(context, peer.id),
@@ -124,10 +136,23 @@ class _PeerCardState extends State<_PeerCard>
           if (isMobile) {
             widget.connect(context, peer.id);
           } else {
+            _activeFocusedPeerKey.value = _cardSelectionKey;
             peerTabModel.select(peer);
           }
         }
       },
+      onSecondaryTapDown: (details) {
+        _lastPointerPos = details.globalPosition;
+        if (!peerTabModel.multiSelectionMode && (isDesktop || isWebDesktop)) {
+          _activeFocusedPeerKey.value = _cardSelectionKey;
+        }
+      },
+      onSecondaryTapUp: peerTabModel.multiSelectionMode
+          ? null
+          : (details) {
+              _lastPointerPos = details.globalPosition;
+              _showPeerMenu(peer.id, anchor: details.globalPosition);
+            },
       onLongPress: () => peerTabModel.select(peer),
       child: child,
     );
@@ -135,12 +160,25 @@ class _PeerCardState extends State<_PeerCard>
 
   Widget _buildPortrait() {
     final peer = super.widget.peer;
-    return GlassCard(
-      layer: CamelliaGlassLayer.floating,
-      enableBlur: false,
-      borderRadius: BorderRadius.circular(_tileRadius),
+    final tokens = AppVisual.tokens(context);
+    final PeerTabModel peerTabModel = Provider.of(context);
+    final isSelected =
+        peerTabModel.multiSelectionMode && peerTabModel.isPeerSelected(peer.id);
+    final accent = Theme.of(context).colorScheme.primary;
+
+    return AnimatedContainer(
+      duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
       margin: const EdgeInsets.symmetric(horizontal: 2),
-      padding: EdgeInsets.zero,
+      decoration: BoxDecoration(
+        color: isSelected
+            ? Color.alphaBlend(accent.withValues(alpha: 0.08), tokens.surface)
+            : tokens.surface,
+        borderRadius: BorderRadius.circular(_tileRadius),
+        border: Border.all(
+          color: isSelected ? accent : tokens.border,
+          width: isSelected ? 1.2 : 0.85,
+        ),
+      ),
       child: gestureDetector(
         child: Padding(
           padding: const EdgeInsets.only(left: 12, top: 8, bottom: 8),
@@ -156,6 +194,7 @@ class _PeerCardState extends State<_PeerCard>
     final reduceMotion = CamelliaMotion.reduceMotion(context);
 
     return FocusableActionDetector(
+      mouseCursor: SystemMouseCursors.click,
       onShowHoverHighlight: (hovered) {
         if (_hovered != hovered && mounted) {
           setState(() => _hovered = hovered);
@@ -180,14 +219,20 @@ class _PeerCardState extends State<_PeerCard>
         curve: CamelliaMotion.springSnappy,
         transform: Matrix4.translationValues(
           0,
-          (_hovered && !reduceMotion) ? -2.0 : 0.0,
+          (_hovered &&
+                  !reduceMotion &&
+                  peerCardUiType.value == PeerUiType.grid)
+              ? -1.5
+              : 0.0,
           0,
         ),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(
             peerCardUiType.value == PeerUiType.grid ? _cardRadius : _tileRadius,
           ),
-          boxShadow: _focused
+          boxShadow: (_focused &&
+                  FocusManager.instance.highlightMode ==
+                      FocusHighlightMode.traditional)
               ? [
                   BoxShadow(
                     color: glass.focusGlow.withValues(alpha: 0.30),
@@ -217,13 +262,17 @@ class _PeerCardState extends State<_PeerCard>
     Peer peer,
     bool visible, {
     bool inline = false,
+    bool compact = false,
   }) {
     final PeerTabModel peerTabModel = Provider.of(context);
     if (peerTabModel.multiSelectionMode) return const SizedBox.shrink();
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final dark = theme.brightness == Brightness.dark;
-    final accent = dark ? theme.colorScheme.secondary : theme.colorScheme.primary;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
     final favActive = _isFavorite == true || widget.tab == PeerTabIndex.fav;
 
     final buttons = <Widget>[
@@ -232,76 +281,137 @@ class _PeerCardState extends State<_PeerCard>
         tooltip: translate('Connect'),
         accentColor: accent,
         emphasized: true,
+        compact: compact,
         onTap: () => widget.connect(context, peer.id),
       ),
       _QuickCardActionIcon(
         icon: Icons.folder_copy_outlined,
         tooltip: translate('Transfer file'),
+        compact: compact,
         onTap: () =>
             connectInPeerTab(context, peer, widget.tab, isFileTransfer: true),
       ),
-      _QuickCardActionIcon(
-        icon: Icons.terminal_rounded,
-        tooltip: translate('Terminal'),
-        onTap: () =>
-            connectInPeerTab(context, peer, widget.tab, isTerminal: true),
-      ),
+      if (!compact)
+        _QuickCardActionIcon(
+          icon: Icons.terminal_rounded,
+          tooltip: translate('Terminal'),
+          compact: compact,
+          onTap: () =>
+              connectInPeerTab(context, peer, widget.tab, isTerminal: true),
+        ),
       _QuickCardActionIcon(
         icon: favActive ? Icons.star_rounded : Icons.star_outline_rounded,
         tooltip: favActive
             ? translate('Remove from Favorites')
             : translate('Add to Favorites'),
         accentColor: favActive ? glass.statusHighLatency : null,
+        compact: compact,
         onTap: _toggleFavorite,
       ),
-      if (!inline)
-        Listener(
-          onPointerDown: (e) {
-            final x = e.position.dx;
-            final y = e.position.dy;
-            _menuPos = RelativeRect.fromLTRB(x, y, x, y);
-          },
-          child: _QuickCardActionIcon(
-            icon: CamelliaIcons.more,
-            tooltip: translate('More'),
-            onTap: () => _showPeerMenu(peer.id),
-          ),
-        ),
     ];
 
-    final pill = GlassSurface(
-      layer: CamelliaGlassLayer.modal,
-      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-      enableBlur: false,
-      showShadow: !inline,
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-      child: Row(mainAxisSize: MainAxisSize.min, children: buttons),
-    );
-
-    if (inline) {
-      return IgnorePointer(
-        ignoring: !visible,
-        child: AnimatedOpacity(
-          opacity: visible ? 1.0 : 0.0,
-          duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
-          curve: CamelliaMotion.springSnappy,
-          child: pill,
+    final pill = DecoratedBox(
+      decoration: BoxDecoration(
+        color: tokens.surfaceElevated.withValues(alpha: dark ? 0.92 : 0.96),
+        borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+        border: Border.all(color: tokens.border, width: 0.85),
+        boxShadow: inline
+            ? const []
+            : [
+                BoxShadow(
+                  color: tokens.shadow,
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+      ),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 3 : 4,
+          vertical: compact ? 2 : 3,
         ),
-      );
-    }
+        child: Row(mainAxisSize: MainAxisSize.min, children: buttons),
+      ),
+    );
 
     return IgnorePointer(
       ignoring: !visible,
       child: AnimatedOpacity(
         opacity: visible ? 1.0 : 0.0,
-        duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
-        curve: CamelliaMotion.springSnappy,
-        child: AnimatedScale(
-          scale: visible ? 1.0 : 0.92,
-          duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
-          curve: CamelliaMotion.springSnappy,
-          child: pill,
-        ),
+        duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+        curve: CamelliaMotion.standard,
+        child: pill,
+      ),
+    );
+  }
+
+  Widget _buildOsAvatarBadge(
+    BuildContext context,
+    Peer peer, {
+    required double size,
+    bool showStatusCorner = false,
+  }) {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final statusColor = peer.online ? glass.statusOnline : glass.statusOffline;
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          CamelliaIcons.platformBadge(
+            peer.platform,
+            size: size,
+            showBackground: true,
+          ),
+          if (_shouldBuildPasswordIcon(peer))
+            Positioned(
+              top: -3,
+              left: -3,
+              child: Container(
+                width: 15,
+                height: 15,
+                decoration: BoxDecoration(
+                  color: tokens.surfaceElevated,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: tokens.border, width: 0.85),
+                ),
+                child: Center(
+                  child: Icon(Icons.key_rounded, size: 9.5, color: accent),
+                ),
+              ),
+            ),
+          if (showStatusCorner)
+            Positioned(
+              right: -2,
+              bottom: -2,
+              child: Container(
+                width: 11,
+                height: 11,
+                decoration: BoxDecoration(
+                  color: tokens.surface,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -312,31 +422,14 @@ class _PeerCardState extends State<_PeerCard>
         : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final theme = Theme.of(context);
     final mutedStyle = theme.textTheme.bodySmall;
-    final idStyle = CamelliaTypography.tabular(theme.textTheme.titleSmall);
+    final idStyle = CamelliaTypography.tabular(
+      theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+    );
     final showNote = _showNote(peer);
-
-    final platformBadge = Stack(
-      clipBehavior: Clip.none,
-      alignment: Alignment.center,
-      children: [
-        CamelliaIcons.platformBadge(
-          peer.platform,
-          size: isPortrait ? 40 : 38,
-          showBackground: true,
-        ),
-        if (_shouldBuildPasswordIcon(peer))
-          Positioned(
-            top: -2,
-            left: -2,
-            child: Icon(
-              Icons.key_rounded,
-              size: 11,
-              color: theme.brightness == Brightness.dark
-                  ? theme.colorScheme.secondary
-                  : theme.colorScheme.primary,
-            ),
-          ),
-      ],
+    final platformBadge = _buildOsAvatarBadge(
+      context,
+      peer,
+      size: isPortrait ? 40 : 38,
     );
 
     if (!isPortrait && peerCardUiType.value == PeerUiType.list) {
@@ -349,7 +442,7 @@ class _PeerCardState extends State<_PeerCard>
               platformBadge,
               const SizedBox(width: 12),
               SizedBox(
-                width: 190,
+                width: 196,
                 child: Row(
                   children: [
                     getOnline(8, peer.online),
@@ -401,6 +494,7 @@ class _PeerCardState extends State<_PeerCard>
       );
     }
 
+    // Tile / Portrait layout
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: isPortrait ? 8 : 10,
@@ -418,7 +512,7 @@ class _PeerCardState extends State<_PeerCard>
               children: [
                 Row(
                   children: [
-                    getOnline(isPortrait ? 4 : 8, peer.online),
+                    getOnline(isPortrait ? 5 : 8, peer.online),
                     Expanded(
                       child: Text(
                         peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
@@ -446,7 +540,7 @@ class _PeerCardState extends State<_PeerCard>
                         ),
                       ),
                     ),
-                    if (showNote)
+                    if (showNote && !isHovered)
                       Expanded(
                         child: Tooltip(
                           message: peer.note,
@@ -467,12 +561,87 @@ class _PeerCardState extends State<_PeerCard>
               ],
             ),
           ),
+          if (!isPortrait && isHovered) ...[
+            _buildQuickActionOverlay(
+              context,
+              peer,
+              true,
+              inline: true,
+              compact: true,
+            ),
+            const SizedBox(width: 2),
+          ],
           isPortrait
               ? checkBoxOrActionMorePortrait(peer)
               : checkBoxOrActionMoreLandscape(peer, isTile: true),
         ],
       ),
     );
+  }
+
+  Widget _buildCardFrame({
+    required BuildContext context,
+    required Peer peer,
+    required bool isHovered,
+    required double radius,
+    required Widget child,
+  }) {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final PeerTabModel peerTabModel = Provider.of(context);
+
+    return Obx(() {
+      final isMultiSelected =
+          peerTabModel.multiSelectionMode &&
+          peerTabModel.isPeerSelected(peer.id);
+      final isSingleSelected =
+          !peerTabModel.multiSelectionMode &&
+          _activeFocusedPeerKey.value == _cardSelectionKey;
+      final highlighted = isMultiSelected || isSingleSelected;
+
+      final bgColor = isMultiSelected
+          ? Color.alphaBlend(
+              accent.withValues(alpha: dark ? 0.14 : 0.08),
+              glass.floatingTint,
+            )
+          : isHovered
+          ? Color.alphaBlend(glass.hoverOverlay, glass.floatingTint)
+          : glass.floatingTint;
+
+      final borderColor = highlighted
+          ? accent.withValues(alpha: dark ? 0.78 : 0.68)
+          : isHovered
+          ? tokens.focusRing.withValues(alpha: dark ? 0.45 : 0.35)
+          : tokens.border;
+
+      return AnimatedContainer(
+        duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+        curve: CamelliaMotion.standard,
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(radius),
+          border: Border.all(
+            color: borderColor,
+            width: highlighted ? 1.25 : 0.85,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: isHovered ? tokens.shadowStrong : tokens.shadow,
+              blurRadius: isHovered ? 16 : 8,
+              spreadRadius: -2,
+              offset: Offset(0, isHovered ? 6 : 2),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      );
+    });
   }
 
   Widget _buildPeerTile(BuildContext context, Peer peer, bool isHovered) {
@@ -486,12 +655,11 @@ class _PeerCardState extends State<_PeerCard>
     final inner = makeChild(stateGlobal.isPortrait.isTrue, peer, isHovered);
     final child = stateGlobal.isPortrait.isTrue
         ? inner
-        : GlassCard(
-            layer: CamelliaGlassLayer.floating,
-            enableBlur: false,
-            elevated: isHovered,
-            borderRadius: BorderRadius.circular(_tileRadius),
-            padding: EdgeInsets.zero,
+        : _buildCardFrame(
+            context: context,
+            peer: peer,
+            isHovered: isHovered,
+            radius: _tileRadius,
             child: inner,
           );
 
@@ -506,8 +674,8 @@ class _PeerCardState extends State<_PeerCard>
           child,
           if (colors.isNotEmpty)
             Positioned(
-              top: 2,
-              right: stateGlobal.isPortrait.isTrue ? 20 : 10,
+              top: 4,
+              right: stateGlobal.isPortrait.isTrue ? 20 : 12,
               child: CustomPaint(
                 painter: TagPainter(radius: 3, colors: colors),
               ),
@@ -524,136 +692,106 @@ class _PeerCardState extends State<_PeerCard>
         ? peer.hostname
         : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final theme = Theme.of(context);
-    final glass = CamelliaGlassTokens.of(context);
-    final isLight = theme.brightness == Brightness.light;
-    final accent = isLight
-        ? theme.colorScheme.primary
-        : theme.colorScheme.secondary;
-    final tint = _getCohesiveCardTint(peer.id, isLight);
+    final tokens = AppVisual.tokens(context);
     final colors = _frontN(
       peer.tags,
       25,
     ).map((e) => gFFI.abModel.getCurrentAbTagColor(e)).toList();
+    final primaryTitle = peer.alias.isEmpty ? formatID(peer.id) : peer.alias;
+    final secondaryId = peer.alias.isNotEmpty ? formatID(peer.id) : '';
 
-    final cardBody = LayoutBuilder(
-      builder: (context, constraints) {
-        final hasBoundedHeight = constraints.hasBoundedHeight;
-        final topSection = DecoratedBox(
-          decoration: BoxDecoration(
-            color: tint,
-            border: Border(
-              bottom: BorderSide(color: glass.specularBottom, width: 0.75),
+    final cardBody = _buildCardFrame(
+      context: context,
+      peer: peer,
+      isHovered: isHovered,
+      radius: _cardRadius,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Top Row: Studio OS Avatar Badge + Tag Dots + Single Overflow Action / Multi-Select Ring
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildOsAvatarBadge(context, peer, size: 40),
+                const Spacer(),
+                if (colors.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, right: 8),
+                    child: CustomPaint(
+                      painter: TagPainter(radius: 3.5, colors: colors),
+                    ),
+                  ),
+                checkBoxOrActionMoreLandscape(peer, isTile: false),
+              ],
             ),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CamelliaIcons.platformBadge(
-                      peer.platform,
-                      size: 46,
-                      showBackground: true,
-                    ),
-                    const SizedBox(height: 6),
-                    Tooltip(
-                      message: name,
-                      waitDuration: const Duration(seconds: 1),
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
-                        ),
+
+            // Middle / Bottom Metadata + Hover Quick-Action Pill Dock
+            Stack(
+              alignment: Alignment.bottomLeft,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          getOnline(7, peer.online),
+                          Expanded(
+                            child: Text(
+                              primaryTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: CamelliaTypography.tabular(
+                                theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -0.1,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    if (_showNote(peer)) ...[
                       const SizedBox(height: 2),
                       Tooltip(
-                        message: peer.note,
+                        message: [
+                          if (secondaryId.isNotEmpty) secondaryId,
+                          if (name.isNotEmpty) name,
+                          if (_showNote(peer)) peer.note,
+                        ].join(' · '),
                         waitDuration: const Duration(seconds: 1),
                         child: Text(
-                          peer.note,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              if (_shouldBuildPasswordIcon(peer))
-                Positioned(
-                  top: 8,
-                  left: 10,
-                  child: Icon(Icons.key_rounded, size: 14, color: accent),
-                ),
-              if (colors.isNotEmpty)
-                Positioned(
-                  top: 6,
-                  right: 12,
-                  child: CustomPaint(
-                    painter: TagPainter(radius: 4, colors: colors),
-                  ),
-                ),
-              // Spring-fade Hover Quick-Action Overlay Bar
-              Positioned(
-                bottom: 8,
-                child: _buildQuickActionOverlay(context, peer, isHovered),
-              ),
-            ],
-          ),
-        );
-
-        return GlassCard(
-          layer: CamelliaGlassLayer.floating,
-          enableBlur: false,
-          elevated: isHovered,
-          borderRadius: BorderRadius.circular(_cardRadius),
-          padding: EdgeInsets.zero,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              hasBoundedHeight
-                  ? Expanded(child: topSection)
-                  : SizedBox(height: 104, child: topSection),
-              SizedBox(
-                height: 44,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Row(
-                    children: [
-                      getOnline(8, peer.online),
-                      Expanded(
-                        child: Text(
-                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
+                          [
+                            if (secondaryId.isNotEmpty) secondaryId,
+                            if (name.isNotEmpty) name,
+                            if (_showNote(peer)) peer.note,
+                          ].join(' · '),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: CamelliaTypography.tabular(
-                            theme.textTheme.titleSmall,
+                            theme.textTheme.bodySmall?.copyWith(
+                              color: tokens.muted,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 4),
-                      checkBoxOrActionMoreLandscape(peer, isTile: false),
                     ],
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+                Align(
+                  alignment: Alignment.bottomRight,
+                  child: _buildQuickActionOverlay(context, peer, isHovered),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
 
     return Tooltip(
@@ -672,15 +810,42 @@ class _PeerCardState extends State<_PeerCard>
     }
   }
 
+  Widget _buildSelectionRing(BuildContext context, bool selected) {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+
+    return AnimatedContainer(
+      duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+      curve: CamelliaMotion.springSnappy,
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: selected ? accent : tokens.surfaceContainer.withValues(alpha: 0.75),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? accent : tokens.border,
+          width: selected ? 1.2 : 1.25,
+        ),
+      ),
+      child: selected
+          ? const Center(
+              child: Icon(CamelliaIcons.check, size: 13, color: Colors.white),
+            )
+          : null,
+    );
+  }
+
   Widget checkBoxOrActionMorePortrait(Peer peer) {
     final PeerTabModel peerTabModel = Provider.of(context);
     final selected = peerTabModel.isPeerSelected(peer.id);
     if (peerTabModel.multiSelectionMode) {
       return Padding(
         padding: const EdgeInsets.all(12),
-        child: selected
-            ? Icon(Icons.check_box, color: Theme.of(context).colorScheme.primary)
-            : const Icon(Icons.check_box_outline_blank),
+        child: _buildSelectionRing(context, selected),
       );
     } else {
       return InkWell(
@@ -691,12 +856,10 @@ class _PeerCardState extends State<_PeerCard>
         splashFactory: NoSplash.splashFactory,
         focusColor: Colors.transparent,
         onTapDown: (e) {
-          final x = e.globalPosition.dx;
-          final y = e.globalPosition.dy;
-          _menuPos = RelativeRect.fromLTRB(x, y, x, y);
+          _lastPointerPos = e.globalPosition;
         },
         onTap: () {
-          _showPeerMenu(peer.id);
+          _showPeerMenu(peer.id, anchor: _lastPointerPos);
         },
         child: const Padding(
           padding: EdgeInsets.all(12),
@@ -710,23 +873,25 @@ class _PeerCardState extends State<_PeerCard>
     final PeerTabModel peerTabModel = Provider.of(context);
     final selected = peerTabModel.isPeerSelected(peer.id);
     if (peerTabModel.multiSelectionMode) {
-      final icon = selected
-          ? Icon(Icons.check_box, color: Theme.of(context).colorScheme.primary)
-          : const Icon(Icons.check_box_outline_blank);
+      final ring = _buildSelectionRing(context, selected);
       final bool last =
           peerTabModel.isShiftDown && peer.id == peerTabModel.lastId;
-      final double right = isTile ? 4 : 0;
+      final double right = isTile ? 4 : 2;
       if (last) {
         return Container(
+          padding: const EdgeInsets.all(2),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(4),
+            shape: BoxShape.circle,
             color:
                 Theme.of(context).colorScheme.primary.withValues(alpha: 0.14),
           ),
-          child: icon,
+          child: ring,
         ).marginOnly(right: right);
       } else {
-        return icon.marginOnly(right: right);
+        return Padding(
+          padding: EdgeInsets.only(right: right, top: isTile ? 0 : 2),
+          child: ring,
+        );
       }
     } else {
       return _actionMore(peer);
@@ -734,13 +899,21 @@ class _PeerCardState extends State<_PeerCard>
   }
 
   Widget _actionMore(Peer peer) => Listener(
+    behavior: HitTestBehavior.opaque,
     onPointerDown: (e) {
-      final x = e.position.dx;
-      final y = e.position.dy;
-      _menuPos = RelativeRect.fromLTRB(x, y, x, y);
+      _lastPointerPos = e.position;
     },
-    onPointerUp: (_) => _showPeerMenu(peer.id),
-    child: build_more(context),
+    onPointerUp: (e) {
+      if ((e.position - _lastPointerPos).distance <= 18.0) {
+        _showPeerMenu(peer.id, anchor: e.position);
+      }
+    },
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {},
+      onDoubleTap: () {},
+      child: build_more(context),
+    ),
   );
 
   bool _shouldBuildPasswordIcon(Peer peer) {
@@ -749,13 +922,17 @@ class _PeerCardState extends State<_PeerCard>
     return peer.password.isNotEmpty;
   }
 
-  void _showPeerMenu(String id) async {
+  Future<void> _showPeerMenu(String id, {Offset? anchor}) async {
+    final pos = _resolveMenuRect(anchor ?? _lastPointerPos);
+    final items = await super.widget.popupMenuEntryBuilder(context);
+    if (!mounted || items.isEmpty) return;
     await mod_menu.showMenu(
       context: context,
-      position: _menuPos,
-      items: await super.widget.popupMenuEntryBuilder(context),
+      position: pos,
+      items: items,
       elevation: 8,
     );
+    await _refreshFavoriteState();
   }
 
   @override
@@ -769,6 +946,7 @@ class _QuickCardActionIcon extends StatefulWidget {
     required this.onTap,
     this.accentColor,
     this.emphasized = false,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -776,6 +954,7 @@ class _QuickCardActionIcon extends StatefulWidget {
   final VoidCallback onTap;
   final Color? accentColor;
   final bool emphasized;
+  final bool compact;
 
   @override
   State<_QuickCardActionIcon> createState() => _QuickCardActionIconState();
@@ -790,6 +969,7 @@ class _QuickCardActionIconState extends State<_QuickCardActionIcon> {
     final theme = Theme.of(context);
     final glass = CamelliaGlassTokens.of(context);
     final reduceMotion = CamelliaMotion.reduceMotion(context);
+    final dim = widget.compact ? 25.0 : 27.0;
 
     final bg = widget.emphasized
         ? theme.colorScheme.primary
@@ -822,14 +1002,20 @@ class _QuickCardActionIconState extends State<_QuickCardActionIcon> {
             curve: CamelliaMotion.springSnappy,
             child: AnimatedContainer(
               duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
-              width: 28,
-              height: 28,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
+              width: dim,
+              height: dim,
+              margin: const EdgeInsets.symmetric(horizontal: 1.5),
               decoration: BoxDecoration(
                 color: bg,
                 borderRadius: BorderRadius.circular(CamelliaRadius.pill),
               ),
-              child: Center(child: Icon(widget.icon, size: 15, color: fg)),
+              child: Center(
+                child: Icon(
+                  widget.icon,
+                  size: widget.compact ? 14 : 15,
+                  color: fg,
+                ),
+              ),
             ),
           ),
         ),
@@ -1171,14 +1357,7 @@ abstract class BasePeerCard extends StatelessWidget {
           showToast(translate('Successful'));
         } else {
           if (tab.index == PeerTabIndex.ab.index) {
-            final alertCtx = globalKey.currentContext;
-            final alertColor = alertCtx != null
-                ? CamelliaGlassTokens.of(alertCtx).statusAlert
-                : CamelliaColors.statusAlertLight;
-            BotToast.showText(
-              contentColor: alertColor,
-              text: translate('Failed'),
-            );
+            showToast(translate('Failed'), tone: AppTone.danger);
           }
         }
       },
@@ -1482,6 +1661,12 @@ class AddressBookPeerCard extends BasePeerCard {
     if (isWindows) {
       menuItems.add(_createShortCutAction(peer.id));
     }
+    final List favs = (await bind.mainGetFav()).toList();
+    if (!favs.contains(peer.id)) {
+      menuItems.add(_addFavAction(peer.id));
+    } else {
+      menuItems.add(_rmFavAction(peer.id, () async {}));
+    }
     if (gFFI.abModel.current.canWrite()) {
       menuItems.add(MenuEntryDivider());
       if (isMobile || isDesktop || isWebDesktop) {
@@ -1639,6 +1824,12 @@ class MyGroupPeerCard extends BasePeerCard {
     }
     if (isWindows) {
       menuItems.add(_createShortCutAction(peer.id));
+    }
+    final List favs = (await bind.mainGetFav()).toList();
+    if (!favs.contains(peer.id)) {
+      menuItems.add(_addFavAction(peer.id));
+    } else {
+      menuItems.add(_rmFavAction(peer.id, () async {}));
     }
     if (gFFI.userModel.userName.isNotEmpty) {
       menuItems.add(_addToAb(peer));

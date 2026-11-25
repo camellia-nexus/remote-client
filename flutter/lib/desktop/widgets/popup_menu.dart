@@ -3,6 +3,7 @@ import 'dart:core';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../../common.dart' show AppVisual;
 import '../../ui/camellia_design.dart';
 import '../../ui/glass_components.dart';
 import './material_mod_popup_menu.dart' as mod_menu;
@@ -517,22 +518,46 @@ abstract class MenuEntrySwitchBase<T> extends MenuEntryBase<T> {
                 ),
                 const SizedBox(width: 8),
                 IgnorePointer(
-                  child: Transform.scale(
-                    scale: MenuConfig.iconScale,
-                    child: Obx(() {
-                      if (switchType == SwitchType.sswitch) {
-                        return Switch.adaptive(
+                  child: Obx(() {
+                    if (switchType == SwitchType.sswitch) {
+                      return Transform.scale(
+                        scale: MenuConfig.iconScale,
+                        child: Switch.adaptive(
                           value: curOption.value,
                           activeTrackColor: scheme.primary,
                           onChanged: isEnabled ? (_) {} : null,
-                        );
-                      }
-                      return Checkbox(
-                        value: curOption.value,
-                        onChanged: isEnabled ? (_) {} : null,
+                        ),
                       );
-                    }),
-                  ),
+                    }
+                    final tokens = AppVisual.tokens(context);
+                    final checked = curOption.value;
+                    final accent = conf.resolveAccent(context);
+                    return AnimatedContainer(
+                      duration: CamelliaMotion.resolve(
+                        context,
+                        CamelliaMotion.feedback,
+                      ),
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: checked ? accent : Colors.transparent,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                          color: checked ? accent : tokens.border,
+                          width: checked ? 1.0 : 1.15,
+                        ),
+                      ),
+                      child: checked
+                          ? const Center(
+                              child: Icon(
+                                CamelliaIcons.check,
+                                size: 13,
+                                color: Colors.white,
+                              ),
+                            )
+                          : null,
+                    );
+                  }),
                 ),
               ],
             ),

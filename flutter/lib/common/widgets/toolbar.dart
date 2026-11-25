@@ -240,6 +240,12 @@ void showWaylandKeyboardInputWarningDialog({
         closeDialog();
       }
 
+      final tokens =
+          Theme.of(context).extension<AppDesignTokens>() ??
+          AppVisual.tokens(context);
+      final accent = Theme.of(context).brightness == Brightness.dark
+          ? Theme.of(context).colorScheme.secondary
+          : Theme.of(context).colorScheme.primary;
       return CustomAlertDialog(
         title: ModernDialogHeader.warning(
           title: translate('wayland-keyboard-input-disabled-tip'),
@@ -277,31 +283,64 @@ void showWaylandKeyboardInputWarningDialog({
                 ],
               ).marginOnly(bottom: 10),
             ],
-            CheckboxListTile(
-              value: remember,
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              title: Text(translate('remember-wayland-keyboard-choice-tip')),
-              onChanged: consentInProgress
+            InkWell(
+              borderRadius: BorderRadius.circular(CamelliaRadius.control),
+              onTap: consentInProgress
                   ? null
-                  : (v) {
-                      safeSetState(() => remember = v == true);
-                    },
+                  : () => safeSetState(() => remember = !remember),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedContainer(
+                      duration: CamelliaMotion.resolve(
+                        context,
+                        CamelliaMotion.hover,
+                      ),
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: remember ? accent : Colors.transparent,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                          color: remember ? accent : tokens.border,
+                          width: 1.1,
+                        ),
+                      ),
+                      child: remember
+                          ? const Icon(
+                              CamelliaIcons.check,
+                              size: 13,
+                              color: Colors.white,
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 9),
+                    Flexible(
+                      child: Text(
+                        translate('remember-wayland-keyboard-choice-tip'),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
         actions: [
-          dialogButton(
-            'Cancel',
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
             onPressed: consentInProgress ? null : cancel,
-            isOutline: true,
+            child: Text(translate('Cancel')),
           ),
-          dialogButton(
-            'OK',
+          GlassButton(
+            variant: GlassButtonVariant.primary,
             onPressed: consentInProgress
                 ? null
                 : () => unawaited(enableAndContinue()),
+            child: Text(translate('OK')),
           ),
         ],
         onCancel: consentInProgress ? null : cancel,
@@ -1172,16 +1211,22 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
   // mute
   if (isDefaultConn && perms['audio'] != false) {
     final option = 'disable-audio';
+    final peerMuteState = PeerBoolOption.find(id, option);
     final value = bind.sessionGetToggleOptionSync(
       sessionId: sessionId,
       arg: option,
     );
+    peerMuteState.value = value;
     v.add(
       TToggleMenu(
         value: value,
-        onChanged: (value) {
+        onChanged: (value) async {
           if (value == null) return;
-          bind.sessionToggleOption(sessionId: sessionId, value: option);
+          await bind.sessionToggleOption(sessionId: sessionId, value: option);
+          peerMuteState.value = bind.sessionGetToggleOptionSync(
+            sessionId: sessionId,
+            arg: option,
+          );
         },
         child: Text(translate('Mute')),
       ),

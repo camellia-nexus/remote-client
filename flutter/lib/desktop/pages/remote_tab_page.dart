@@ -12,24 +12,14 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/remote_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/remote_toolbar.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
-import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart'
-    as mod_menu;
-import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
-import 'package:bot_toast/bot_toast.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../models/platform_model.dart';
-
-class _MenuTheme {
-  static const Color blueColor = MyTheme.button;
-  // kMinInteractiveDimension
-  static const double height = 20.0;
-  static const double dividerHeight = 12.0;
-}
 
 class ConnectionTabPage extends StatefulWidget {
   final Map<String, dynamic> params;
@@ -45,8 +35,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
     DesktopTabController(tabType: DesktopTabType.remoteScreen),
   );
   final contentKey = UniqueKey();
-  static const IconData selectedIcon = Icons.desktop_windows_sharp;
-  static const IconData unselectedIcon = Icons.desktop_windows_outlined;
+  static const IconData selectedIcon = CamelliaIcons.screen;
+  static const IconData unselectedIcon = CamelliaIcons.screen;
 
   String? peerId;
   bool _isScreenRectSet = false;
@@ -147,6 +137,9 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
 
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
     final child = Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: DesktopTab(
@@ -170,22 +163,23 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
             const AddButton(),
           ],
         ),
-        selectedBorderColor: MyTheme.accent,
+        selectedBorderColor: Theme.of(context).colorScheme.primary,
         pageViewBuilder: (pageView) => pageView,
         labelGetter: DesktopTab.tablabelGetter,
         tabBuilder: (key, icon, label, themeConf) => Obx(() {
           final connectionType = ConnectionTypeState.find(key);
           if (!connectionType.isValid()) {
             return Row(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [icon, label],
             );
           } else {
-            bool secure =
+            final secure =
                 connectionType.secure.value == ConnectionType.strSecure;
-            bool direct =
+            final direct =
                 connectionType.direct.value == ConnectionType.strDirect;
-            String msgConn = getConnectionText(
+            final msgConn = getConnectionText(
               secure,
               direct,
               connectionType.stream_type.value,
@@ -196,61 +190,26 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
               fingerprint = 'N/A';
             }
             if (fingerprint.length > 5 * 8) {
-              var first = fingerprint.substring(0, 39);
-              var second = fingerprint.substring(40);
+              final first = fingerprint.substring(0, 39);
+              final second = fingerprint.substring(40);
               msgFingerprint += '$first\n$second';
             } else {
               msgFingerprint += fingerprint;
             }
 
             final tab = Row(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 icon,
                 Tooltip(
                   message: '$msgConn\n$msgFingerprint',
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 26),
-                    margin: const EdgeInsets.symmetric(horizontal: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    decoration: BoxDecoration(
-                      color:
-                          (secure
-                                  ? CamelliaColors.aqua
-                                  : Theme.of(context).colorScheme.error)
-                              .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(
-                        CamelliaRadius.status,
-                      ),
-                      border: Border.all(
-                        color:
-                            (secure
-                                    ? CamelliaColors.aqua
-                                    : Theme.of(context).colorScheme.error)
-                                .withValues(alpha: 0.42),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          secure
-                              ? Icons.shield_rounded
-                              : Icons.gpp_maybe_rounded,
-                          size: 14,
-                          color: secure
-                              ? CamelliaColors.aquaStrong
-                              : Theme.of(context).colorScheme.error,
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          '${translate(secure ? 'Secure' : 'Insecure')} · ${translate(direct ? 'Direct' : 'Relay')}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                      ],
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: CamelliaIcons.securityBadge(
+                      secure: secure,
+                      direct: direct,
+                      size: 15,
                     ),
                   ),
                 ),
@@ -266,15 +225,19 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
                 if (e.kind != ui.PointerDeviceKind.mouse) {
                   return;
                 }
-                final remotePage =
-                    tabController.state.value.tabs
-                            .firstWhere((tab) => tab.key == key)
-                            .page
-                        as RemotePage;
+                final matchedTab = tabController.state.value.tabs
+                    .firstWhereOrNull((tab) => tab.key == key);
+                if (matchedTab == null || matchedTab.page is! RemotePage) {
+                  return;
+                }
+                final remotePage = matchedTab.page as RemotePage;
                 if (remotePage.ffi.ffiModel.pi.isSet.isTrue && e.buttons == 2) {
-                  showRightMenu((CancelFunc cancelFunc) {
-                    return _tabMenuBuilder(key, cancelFunc);
-                  }, target: e.position);
+                  showFrostedContextMenu(
+                    context: context,
+                    globalPosition: e.position,
+                    itemsBuilder: (closeMenu) =>
+                        _buildTabContextMenuItems(key, closeMenu),
+                  );
                 }
               },
               child: tab,
@@ -291,7 +254,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
               () => Container(
                 decoration: BoxDecoration(
                   border: Border.all(
-                    color: MyTheme.color(context).border!,
+                    color: tokens.border,
                     width: stateGlobal.windowBorderWidth.value,
                   ),
                 ),
@@ -305,7 +268,6 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
             () => SubWindowDragToResizeArea(
               key: contentKey,
               child: tabWidget,
-              // Specially configured for a better resize area and remote control.
               childPadding: kDragToResizeAreaPadding,
               resizeEdgeSize: stateGlobal.resizeEdgeSize.value,
               enableResizeEdges: subWindowManagerEnableResizeEdges,
@@ -314,104 +276,115 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           );
   }
 
-  // Note: Some dup code to ../widgets/remote_toolbar
-  Widget _tabMenuBuilder(String key, CancelFunc cancelFunc) {
-    final List<MenuEntryBase<String>> menu = [];
-    const EdgeInsets padding = EdgeInsets.only(left: 8.0, right: 5.0);
-    final remotePage =
-        tabController.state.value.tabs.firstWhere((tab) => tab.key == key).page
-            as RemotePage;
+  List<Widget> _buildTabContextMenuItems(String key, VoidCallback closeMenu) {
+    final matched = tabController.state.value.tabs.firstWhereOrNull(
+      (tab) => tab.key == key,
+    );
+    if (matched == null || matched.page is! RemotePage) {
+      return const [];
+    }
+    final remotePage = matched.page as RemotePage;
     final ffi = remotePage.ffi;
     final pi = ffi.ffiModel.pi;
     final perms = ffi.ffiModel.permissions;
     final sessionId = ffi.sessionId;
     final toolbarState = remotePage.toolbarState;
-    menu.addAll([
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Obx(
-          () => Text(
-            translate(
-              toolbarState.hide.isTrue ? 'Show Toolbar' : 'Hide Toolbar',
-            ),
-            style: style,
+    final items = <Widget>[
+      Obx(
+        () => FrostedMenuItem(
+          label: translate(
+            toolbarState.hide.isTrue ? 'Show Toolbar' : 'Hide Toolbar',
           ),
+          icon: toolbarState.hide.isTrue
+              ? CamelliaIcons.eye
+              : CamelliaIcons.eyeOff,
+          onTap: () {
+            closeMenu();
+            toolbarState.switchHide(sessionId);
+          },
         ),
-        proc: () {
-          toolbarState.switchHide(sessionId);
-          cancelFunc();
-        },
-        padding: padding,
       ),
-    ]);
+    ];
 
     if (tabController.state.value.tabs.length > 1) {
-      final splitAction = MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) =>
-            Text(translate('Move tab to new window'), style: style),
-        proc: () async {
-          await DesktopMultiWindow.invokeMethod(
-            kMainWindowId,
-            kWindowEventMoveTabToNewWindow,
-            '${windowId()},$key,$sessionId,RemoteDesktop',
-          );
-          cancelFunc();
-        },
-        padding: padding,
+      items.add(
+        FrostedMenuItem(
+          label: translate('Move tab to new window'),
+          icon: Icons.open_in_new_rounded,
+          onTap: () async {
+            closeMenu();
+            await DesktopMultiWindow.invokeMethod(
+              kMainWindowId,
+              kWindowEventMoveTabToNewWindow,
+              '${windowId()},$key,$sessionId,RemoteDesktop',
+            );
+          },
+        ),
       );
-      menu.insert(1, splitAction);
     }
 
     if (perms['restart'] != false &&
         (pi.platform == kPeerPlatformLinux ||
             pi.platform == kPeerPlatformWindows ||
             pi.platform == kPeerPlatformMacOS)) {
-      menu.add(
-        MenuEntryButton<String>(
-          childBuilder: (TextStyle? style) =>
-              Text(translate('Restart remote device'), style: style),
-          proc: () => showRestartRemoteDevice(
-            pi,
-            peerId ?? '',
-            sessionId,
-            ffi.dialogManager,
-          ),
-          padding: padding,
-          dismissOnClicked: true,
-          dismissCallback: cancelFunc,
+      items.add(
+        FrostedMenuItem(
+          label: translate('Restart remote device'),
+          icon: Icons.restart_alt_rounded,
+          onTap: () {
+            closeMenu();
+            showRestartRemoteDevice(
+              pi,
+              peerId ?? key,
+              sessionId,
+              ffi.dialogManager,
+            );
+          },
         ),
       );
     }
 
     if (perms['keyboard'] != false && !ffi.ffiModel.viewOnly) {
-      menu.add(
-        RemoteMenuEntry.insertLock(sessionId, padding, dismissFunc: cancelFunc),
+      items.add(
+        FrostedMenuItem(
+          label: translate('Insert Lock'),
+          icon: CamelliaIcons.lock,
+          onTap: () {
+            closeMenu();
+            bind.sessionLockScreen(sessionId: sessionId);
+          },
+        ),
       );
-
       if (pi.platform == kPeerPlatformLinux || pi.sasEnabled) {
-        menu.add(
-          RemoteMenuEntry.insertCtrlAltDel(
-            sessionId,
-            padding,
-            dismissFunc: cancelFunc,
+        items.add(
+          FrostedMenuItem(
+            label: translate('Insert Ctrl + Alt + Del'),
+            icon: Icons.keyboard_command_key_rounded,
+            onTap: () {
+              closeMenu();
+              bind.sessionCtrlAltDel(sessionId: sessionId);
+            },
           ),
         );
       }
     }
 
-    menu.addAll([
-      MenuEntryDivider<String>(),
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) =>
-            Text(translate('Copy Fingerprint'), style: style),
-        proc: () => onCopyFingerprint(FingerprintState.find(key).value),
-        padding: padding,
-        dismissOnClicked: true,
-        dismissCallback: cancelFunc,
+    items.addAll([
+      const FrostedMenuDivider(),
+      FrostedMenuItem(
+        label: translate('Copy Fingerprint'),
+        icon: Icons.fingerprint_rounded,
+        onTap: () {
+          closeMenu();
+          onCopyFingerprint(FingerprintState.find(key).value);
+        },
       ),
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) =>
-            Text(translate('Close'), style: style),
-        proc: () async {
+      FrostedMenuItem(
+        label: translate('Close'),
+        icon: CamelliaIcons.close,
+        destructive: true,
+        onTap: () async {
+          closeMenu();
           if (await desktopTryShowTabAuditDialogCloseCancelled(
             id: key,
             tabController: tabController,
@@ -419,39 +392,25 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
             return;
           }
           tabController.closeBy(key);
-          cancelFunc();
         },
-        padding: padding,
       ),
     ]);
-
-    return mod_menu.PopupMenu<String>(
-      items: menu
-          .map(
-            (entry) => entry.build(
-              context,
-              const MenuConfig(
-                commonColor: _MenuTheme.blueColor,
-                height: _MenuTheme.height,
-                dividerHeight: _MenuTheme.dividerHeight,
-              ),
-            ),
-          )
-          .expand((i) => i)
-          .toList(),
-    );
+    return items;
   }
 
   void onRemoveId(String id) async {
     if (tabController.state.value.tabs.isEmpty) {
-      // Keep calling until the window status is hidden.
-      //
-      // Workaround for Windows:
-      // If you click other buttons and close in msgbox within a very short period of time, the close may fail.
-      // `await WindowController.fromWindowId(windowId()).close();`.
       Future<void> loopCloseWindow() async {
         int c = 0;
-        final windowController = WindowController.fromWindowId(windowId());
+        final wId = windowId();
+        try {
+          await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+            "id": wId,
+          });
+        } catch (e) {
+          debugPrint("Failed to notify main window on remote window close: $e");
+        }
+        final windowController = WindowController.fromWindowId(wId);
         try {
           await windowController.setPreventClose(false);
         } catch (e) {
@@ -490,25 +449,26 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       )) {
         return false;
       }
+      tabController.clear();
+      return true;
     }
     if (connLength <= 0) {
       tabController.clear();
       return true;
-    } else {
-      final bool res;
-      if (!option2bool(
-        kOptionEnableConfirmClosingTabs,
-        bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
-      )) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog();
-      }
-      if (res) {
-        tabController.clear();
-      }
-      return res;
     }
+    final bool res;
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      res = true;
+    } else {
+      res = await closeConfirmDialog(isSessionWindow: true);
+    }
+    if (res) {
+      tabController.clear();
+    }
+    return res;
   }
 
   _update_remote_count() =>
@@ -520,7 +480,6 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
     );
 
     dynamic returnValue;
-    // for simplify, just replace connectionId
     if (call.method == kWindowEventNewRemoteDesktop) {
       final args = jsonDecode(call.arguments);
       final id = args['id'];
@@ -582,7 +541,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       );
       args['password'] = null;
     } else if (call.method == kWindowDisableGrabKeyboard) {
-      // ???
+      // no-op
     } else if (call.method == "onDestroy") {
       tabController.clear();
     } else if (call.method == kWindowActionRebuild) {
@@ -613,7 +572,6 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           .toList()
           .join(';');
     } else if (call.method == kWindowEventGetCachedSessionData) {
-      // Ready to show new window and close old tab.
       final args = jsonDecode(call.arguments);
       final id = args['id'];
       final close = args['close'];
@@ -687,7 +645,6 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
 }
 
 /// A widget that displays a hint in the tab bar when relative mouse mode is active.
-/// This helps users remember how to exit relative mouse mode.
 class _RelativeMouseModeHint extends StatelessWidget {
   final DesktopTabController tabController;
 
@@ -697,48 +654,47 @@ class _RelativeMouseModeHint extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // Check if there are any tabs
       if (tabController.state.value.tabs.isEmpty) {
         return const SizedBox.shrink();
       }
-
-      // Get current selected tab's RemotePage
       final selectedTabInfo = tabController.state.value.selectedTabInfo;
       if (selectedTabInfo.page is! RemotePage) {
         return const SizedBox.shrink();
       }
-
       final remotePage = selectedTabInfo.page as RemotePage;
       final String peerId = remotePage.id;
-
-      // Use global state to check relative mouse mode (synced from InputModel).
-      // This avoids timing issues with FFI registration.
       final isRelativeMouseMode =
           stateGlobal.relativeMouseModeState[peerId] ?? false;
-
       if (!isRelativeMouseMode) {
         return const SizedBox.shrink();
       }
 
       final glass = CamelliaGlassTokens.of(context);
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+        margin: const EdgeInsets.only(right: 6),
         decoration: BoxDecoration(
-          color: glass.statusHighLatency.withValues(alpha: 0.16),
-          borderRadius: BorderRadius.circular(CamelliaRadius.control),
-          border: Border.all(color: glass.statusHighLatency.withValues(alpha: 0.42)),
+          color: glass.statusHighLatency.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(CamelliaRadius.control - 2),
+          border: Border.all(
+            color: glass.statusHighLatency.withValues(alpha: 0.36),
+            width: 0.85,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.mouse, size: 14, color: glass.statusHighLatency),
-            const SizedBox(width: 4),
+            Icon(CamelliaIcons.mouse, size: 13, color: glass.statusHighLatency),
+            const SizedBox(width: 5),
             Text(
               translate(
                 'rel-mouse-exit-{${isMacOS ? "Cmd+G" : "Ctrl+Alt"}}-tip',
               ),
-              style: TextStyle(fontSize: 11, color: glass.statusHighLatency),
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: glass.statusHighLatency,
+              ),
             ),
           ],
         ),

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
 
 import '../common.dart';
@@ -31,11 +32,11 @@ class PeerTabModel with ChangeNotifier {
     'Accessible devices',
   ];
   static const List<IconData> icons = [
-    Icons.access_time_filled,
-    Icons.star,
-    Icons.explore,
-    IconFont.addressBook,
-    IconFont.deviceGroupFill,
+    Icons.schedule_rounded,
+    Icons.star_rounded,
+    Icons.lan_rounded,
+    CamelliaIcons.addressBook,
+    CamelliaIcons.deviceGroup,
   ];
   List<bool> isEnabled = List.from([
     true,

@@ -18,8 +18,9 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
-import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
+import '../../ui/camellia_design.dart';
+import '../../ui/glass_components.dart';
 
 final SimpleWrapper<bool> _firstEnterImage = SimpleWrapper(false);
 
@@ -84,6 +85,8 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   final _cursorOverImage = false.obs;
   final _uniqueKey = UniqueKey();
   bool _layoutUpdatePending = false;
+  bool _postImageDismissScheduled = false;
+  bool _postImageDismissed = false;
 
   var _blockableOverlayState = BlockableOverlayState();
 
@@ -113,10 +116,6 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     }
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
-      showKBLayoutTypeChooserIfNeeded(
-        _ffi.ffiModel.pi.platform,
-        _ffi.dialogManager,
-      );
       _ffi.recordingModel.updateStatus(
         bind.sessionGetIsRecording(sessionId: _ffi.sessionId),
       );
@@ -360,6 +359,20 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                       initialEntries: [OverlayEntry(builder: remoteToolbar)],
                     )
                   : remoteToolbar(context),
+              Obx(() {
+                final ready =
+                    _ffi.ffiModel.pi.isSet.isTrue &&
+                    _ffi.ffiModel.waitForFirstImage.isFalse &&
+                    !widget.toolbarState.hide.value;
+                if (!ready) return const Offstage();
+                return Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: _CameraControlsPill(ffi: _ffi),
+                  ),
+                );
+              }),
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
           ),
@@ -374,16 +387,23 @@ class _ViewCameraPageState extends State<ViewCameraPage>
             _ffi.ffiModel.pi.isSet.isTrue &&
             _ffi.ffiModel.waitForFirstImage.isFalse;
         if (imageReady) {
-          // If the privacy mode(disable physical displays) is switched,
-          // we should not dismiss the dialog immediately.
-          if (DateTime.now().difference(togglePrivacyModeTime) >
-              const Duration(milliseconds: 3000)) {
-            // `dismissAll()` is to ensure that the state is clean.
-            // It's ok to call dismissAll() here.
-            _ffi.dialogManager.dismissAll();
-            // Recreate the block state to refresh the state.
-            _blockableOverlayState = BlockableOverlayState();
-            _blockableOverlayState.applyFfi(_ffi);
+          if (!_postImageDismissed && !_postImageDismissScheduled) {
+            _postImageDismissScheduled = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _postImageDismissScheduled = false;
+              if (!mounted) return;
+              if (DateTime.now().difference(togglePrivacyModeTime) >
+                  const Duration(milliseconds: 3000)) {
+                _ffi.dialogManager.dismissAll();
+                setState(() {
+                  _postImageDismissed = true;
+                  _blockableOverlayState = BlockableOverlayState()
+                    ..applyFfi(_ffi);
+                });
+              } else {
+                _postImageDismissed = true;
+              }
+            });
           }
           // Block the whole `bodyWidget()` when dialog shows.
           return BlockableOverlay(
@@ -391,6 +411,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
             state: _blockableOverlayState,
           );
         } else {
+          _postImageDismissed = false;
           // `_blockableOverlayState` is not recreated here.
           // The toolbar's block state won't work properly when reconnecting, but that's okay.
           return bodyWidget();
@@ -800,5 +821,114 @@ class _ImagePaintState extends State<ImagePaint> {
     } else {
       return child;
     }
+  }
+}
+
+class _CameraControlsPill extends StatelessWidget {
+  const _CameraControlsPill({required this.ffi});
+
+  final FFI ffi;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final pi = ffi.ffiModel.pi;
+    final ffiModel = Provider.of<FfiModel>(context);
+    final rect = ffiModel.rect;
+    final resLabel = rect != null && rect.width > 0 && rect.height > 0
+        ? '${rect.width.toInt()}×${rect.height.toInt()}'
+        : '';
+    return Obx(() {
+      final count = pi.displaysCount.value;
+      final currentIdx = pi.currentDisplay;
+      final fps =
+          int.tryParse(ffi.qualityMonitorModel.data.fps?.trim() ?? '') ?? 0;
+      return GlassSurface(
+        layer: CamelliaGlassLayer.modal,
+        elevated: true,
+        strokeWidth: 0.85,
+        borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: glass.statusOnline,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 7),
+            Icon(
+              CamelliaIcons.camera,
+              size: 15,
+              color: theme.colorScheme.onSurface,
+            ),
+            const SizedBox(width: 6),
+            if (count > 1)
+              InkWell(
+                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                onTap: () {
+                  final next = (currentIdx + 1) % count;
+                  bind.sessionSwitchDisplay(
+                    isDesktop: true,
+                    sessionId: ffi.sessionId,
+                    value: [next],
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${translate('View Camera')} ${currentIdx + 1}/$count',
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.labelSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      const Icon(Icons.swap_horiz_rounded, size: 14),
+                    ],
+                  ),
+                ),
+              )
+            else
+              Text(
+                translate('View Camera'),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            if (resLabel.isNotEmpty) ...[
+              const SizedBox(width: 10),
+              GlassBadge(
+                label: resLabel,
+                tone: GlassBadgeTone.neutral,
+                tabularNums: true,
+                compact: true,
+              ),
+            ],
+            if (fps > 0) ...[
+              const SizedBox(width: 6),
+              GlassBadge(
+                label: '$fps FPS',
+                tone: GlassBadgeTone.online,
+                tabularNums: true,
+                compact: true,
+              ),
+            ],
+          ],
+        ),
+      );
+    });
   }
 }

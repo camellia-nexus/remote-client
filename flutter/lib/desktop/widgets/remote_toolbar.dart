@@ -560,7 +560,13 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         return const SizedBox.shrink();
       }
       if (hide.value) {
-        return const SizedBox.shrink();
+        return RemoteToolbarOverlaySurface(
+          edge: _ToolbarEdge.top,
+          fraction: _fraction.value,
+          toolbar: _HiddenToolbarRevealStrip(
+            onRestore: () => widget.state.switchHide(widget.ffi.sessionId),
+          ),
+        );
       }
       final edge = _edge.value;
       final isHorizontal = _isHorizontalEdge(edge);
@@ -856,6 +862,14 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
           adaptive(
             RemoteCommandBarTier.collaboration,
             (inOverflow) => _PrivacyModeMenu(
+              id: widget.id,
+              ffi: widget.ffi,
+              inOverflow: inOverflow,
+            ),
+          );
+          adaptive(
+            RemoteCommandBarTier.collaboration,
+            (inOverflow) => _AudioMuteMenu(
               id: widget.id,
               ffi: widget.ffi,
               inOverflow: inOverflow,
@@ -2115,46 +2129,6 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         Divider(),
         toggles(),
       ];
-      // privacy mode
-      final privacyModeState = PrivacyModeState.find(id);
-      if (ffi.connType == ConnType.defaultConn &&
-          (pi.features.privacyMode || privacyModeState.isNotEmpty) &&
-          (ffiModel.keyboard || privacyModeState.isNotEmpty)) {
-        final privacyModeList = toolbarPrivacyMode(
-          privacyModeState,
-          context,
-          id,
-          ffi,
-        );
-        if (privacyModeList.length == 1) {
-          menuChildren.add(
-            CkbMenuButton(
-              value: privacyModeList[0].value,
-              onChanged: privacyModeList[0].onChanged,
-              child: privacyModeList[0].child,
-              ffi: ffi,
-            ),
-          );
-        } else if (privacyModeList.length > 1) {
-          menuChildren.addAll([
-            Divider(),
-            _SubmenuButton(
-              ffi: widget.ffi,
-              child: Text(translate('Privacy mode')),
-              menuChildren: privacyModeList
-                  .map(
-                    (e) => CkbMenuButton(
-                      value: e.value,
-                      onChanged: e.onChanged,
-                      child: e.child,
-                      ffi: ffi,
-                    ),
-                  )
-                  .toList(),
-            ),
-          ]);
-        }
-      }
       if (ffi.connType == ConnType.defaultConn) {
         menuChildren.add(widget.pluginItem);
       }
@@ -2661,7 +2635,7 @@ class _ResolutionsMenu extends StatefulWidget {
   State<_ResolutionsMenu> createState() => _ResolutionsMenuState();
 }
 
-const double _kCustomResolutionEditingWidth = 42;
+const double _kCustomResolutionEditingWidth = 68;
 const _kCustomResolutionValue = 'custom';
 
 class _ResolutionsMenuState extends State<_ResolutionsMenu> {
@@ -2928,16 +2902,25 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
         onChanged: (String? value) => _onChanged(value),
         ffi: widget.ffi,
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text('${translate('resolution_custom_tip')} '),
             SizedBox(
               width: _kCustomResolutionEditingWidth,
-              child: _resolutionInput(_customWidth),
+              child: _resolutionInput(context, _customWidth),
             ),
-            Text(' x '),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '×',
+                style: CamelliaTypography.tabular(
+                  Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
             SizedBox(
               width: _kCustomResolutionEditingWidth,
-              child: _resolutionInput(_customHeight),
+              child: _resolutionInput(context, _customHeight),
             ),
           ],
         ),
@@ -2945,21 +2928,40 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
     );
   }
 
-  Widget _resolutionInput(TextEditingController controller) {
-    return TextField(
-      decoration: InputDecoration(
-        border: InputBorder.none,
-        isDense: true,
-        contentPadding: EdgeInsets.fromLTRB(3, 3, 3, 3),
+  Widget _resolutionInput(
+    BuildContext context,
+    TextEditingController controller,
+  ) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: tokens.surfaceContainer.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: tokens.border, width: 0.85),
       ),
-      keyboardType: TextInputType.number,
-      inputFormatters: <TextInputFormatter>[
-        FilteringTextInputFormatter.digitsOnly,
-        LengthLimitingTextInputFormatter(4),
-        FilteringTextInputFormatter.allow(RegExp(r'[0-9]')),
-      ],
-      controller: controller,
-    ).workaroundFreezeLinuxMint();
+      child: TextField(
+        style: CamelliaTypography.tabular(
+          Theme.of(context).textTheme.bodySmall?.copyWith(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        ),
+        keyboardType: TextInputType.number,
+        inputFormatters: <TextInputFormatter>[
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(4),
+        ],
+        controller: controller,
+      ).workaroundFreezeLinuxMint(),
+    );
   }
 
   List<Widget> _supportedResolutionMenuButtons() => resolutions
@@ -3145,10 +3147,7 @@ class _KeyboardMenu extends StatelessWidget {
             continue;
           }
 
-          var text = translate(mode.menu);
-          if (mode.key == kKeyTranslateMode) {
-            text = '$text beta';
-          }
+          final text = translate(mode.menu);
           list.add(
             RdoMenuButton<String>(
               child: Text(text),
@@ -4400,6 +4399,153 @@ class _MinimizedMonitorSwitchButton extends StatelessWidget {
             ),
           ),
         ),
+      );
+    });
+  }
+}
+
+class _HiddenToolbarRevealStrip extends StatefulWidget {
+  const _HiddenToolbarRevealStrip({required this.onRestore});
+
+  final VoidCallback onRestore;
+
+  @override
+  State<_HiddenToolbarRevealStrip> createState() =>
+      _HiddenToolbarRevealStripState();
+}
+
+class _HiddenToolbarRevealStripState extends State<_HiddenToolbarRevealStrip> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onRestore,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: AnimatedContainer(
+            duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
+            curve: CamelliaMotion.standard,
+            height: _hovered ? 26 : 4,
+            padding: EdgeInsets.symmetric(horizontal: _hovered ? 12 : 0),
+            constraints: BoxConstraints(minWidth: _hovered ? 112 : 76),
+            decoration: BoxDecoration(
+              color: _hovered
+                  ? tokens.surfaceElevated.withValues(alpha: 0.94)
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.24),
+              borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+              border: _hovered
+                  ? Border.all(color: tokens.border, width: 0.85)
+                  : null,
+            ),
+            child: _hovered
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        CamelliaIcons.eye,
+                        size: 14,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        translate('Show Toolbar'),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                    ],
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioMuteMenu extends StatefulWidget {
+  const _AudioMuteMenu({
+    required this.id,
+    required this.ffi,
+    this.inOverflow = false,
+  });
+
+  final String id;
+  final FFI ffi;
+  final bool inOverflow;
+
+  @override
+  State<_AudioMuteMenu> createState() => _AudioMuteMenuState();
+}
+
+class _AudioMuteMenuState extends State<_AudioMuteMenu> {
+  static const _kOptionDisableAudio = 'disable-audio';
+  late final RxBool _muted = PeerBoolOption.find(
+    widget.id,
+    _kOptionDisableAudio,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _muted.value = bind.sessionGetToggleOptionSync(
+        sessionId: widget.ffi.sessionId,
+        arg: _kOptionDisableAudio,
+      );
+    });
+  }
+
+  Future<void> _toggleMute() async {
+    await bind.sessionToggleOption(
+      sessionId: widget.ffi.sessionId,
+      value: _kOptionDisableAudio,
+    );
+    if (!mounted) return;
+    _muted.value = bind.sessionGetToggleOptionSync(
+      sessionId: widget.ffi.sessionId,
+      arg: _kOptionDisableAudio,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ffiModel = Provider.of<FfiModel>(context);
+    if (ffiModel.permissions['audio'] == false) {
+      return const Offstage();
+    }
+    return Obx(() {
+      final isMuted = _muted.value;
+      final glass = CamelliaGlassTokens.of(context);
+      final tint = isMuted
+          ? glass.statusAlert
+          : _ToolbarTheme.mutedColor(context);
+      final hoverTint = isMuted
+          ? glass.statusAlert
+          : _ToolbarTheme.hoverMutedColor(context);
+      return _IconMenuButton(
+        icon: CamelliaVectorIcon(
+          isMuted ? CamelliaGlyph.audioMute : CamelliaGlyph.audioOn,
+          size: 18,
+          color: tint,
+        ),
+        tooltip: isMuted ? 'Unmute' : 'Mute',
+        inOverflow: widget.inOverflow,
+        active: isMuted,
+        color: tint,
+        hoverColor: hoverTint,
+        onPressed: _toggleMute,
       );
     });
   }

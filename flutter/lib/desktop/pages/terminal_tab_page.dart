@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:camellia_remote_app/common/widgets/dialog.dart';
 import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
+import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:camellia_remote_app/models/model.dart';
@@ -16,9 +18,6 @@ import 'package:get/get.dart';
 import '../../models/platform_model.dart';
 import 'terminal_page.dart';
 import 'terminal_connection_manager.dart';
-import '../widgets/material_mod_popup_menu.dart' as mod_menu;
-import '../widgets/popup_menu.dart';
-import 'package:bot_toast/bot_toast.dart';
 
 class TerminalTabPage extends StatefulWidget {
   final Map<String, dynamic> params;
@@ -32,8 +31,8 @@ class TerminalTabPage extends StatefulWidget {
 class _TerminalTabPageState extends State<TerminalTabPage> {
   DesktopTabController get tabController => Get.find<DesktopTabController>();
 
-  static const IconData selectedIcon = Icons.terminal;
-  static const IconData unselectedIcon = Icons.terminal_outlined;
+  static const IconData selectedIcon = CamelliaIcons.terminal;
+  static const IconData unselectedIcon = CamelliaIcons.terminal;
   int _nextTerminalId = 1;
   // Lightweight idempotency guard for async close operations
   final Set<String> _closingTabs = {};
@@ -43,9 +42,11 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
   _TerminalTabPageState(Map<String, dynamic> params) {
     Get.put(DesktopTabController(tabType: DesktopTabType.terminal));
     tabController.onSelected = (id) {
+      final parsed = _parseTabKey(id);
+      final titleId = parsed?.$1 ?? id;
       WindowController.fromWindowId(
         windowId(),
-      ).setTitle(getWindowNameWithId(id));
+      ).setTitle(getWindowNameWithId(titleId));
     };
     tabController.onRemoved = (_, id) => onRemoveId(id);
     tabController.onCloseWindow = _closeWindowFromConnection;
@@ -102,19 +103,39 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     );
   }
 
-  /// Unified tab close handler for all close paths (button, shortcut, programmatic).
-  /// Shows audit dialog, cleans up session if not persistent, then removes the UI tab.
+  /// Resolves the active [FFI] instance for a terminal tab safely via
+  /// [TerminalConnectionManager] or the tab's [TerminalPage] without assuming
+  /// a bare `terminal_$peerId` Get tag (which previously crashed on right-click).
+  FFI? _resolveFfiForTabKey(String tabKey) {
+    final matchingTab = tabController.state.value.tabs.firstWhereOrNull(
+      (t) => t.key == tabKey,
+    );
+    bool isAdmin = false;
+    if (matchingTab != null && matchingTab.page is TerminalPage) {
+      final page = matchingTab.page as TerminalPage;
+      isAdmin = page.isTerminalRunAsAdmin;
+      try {
+        return page.ffi;
+      } catch (_) {}
+    }
+    final parsed = _parseTabKey(tabKey);
+    if (parsed == null) return null;
+    final (peerId, _) = parsed;
+    return TerminalConnectionManager.getExistingConnection(
+          peerId,
+          isTerminalRunAsAdmin: isAdmin,
+        ) ??
+        TerminalConnectionManager.getExistingConnection(
+          peerId,
+          isTerminalRunAsAdmin: !isAdmin,
+        );
+  }
+
   Future<void> _closeTab(String tabKey) async {
-    // Idempotency guard: skip if already closing this tab
     if (_closingTabs.contains(tabKey)) return;
     _closingTabs.add(tabKey);
 
     try {
-      // Snapshot peerTabCount BEFORE any await to avoid race with concurrent
-      // _closeAllTabs clearing tabController (which would make the live count
-      // drop to 0 and incorrectly trigger session persistence).
-      // Note: the snapshot may become stale if other individual tabs are closed
-      // during the audit dialog, but this is an acceptable trade-off.
       int? snapshotPeerTabCount;
       final parsed = _parseTabKey(tabKey);
       if (parsed != null) {
@@ -132,8 +153,6 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         return;
       }
 
-      // Close terminal session if not in persistent mode.
-      // Wrapped separately so session cleanup failure never blocks UI tab removal.
       try {
         await _closeTerminalSessionIfNeeded(
           tabKey,
@@ -142,7 +161,6 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       } catch (e) {
         debugPrint('[TerminalTabPage] Session cleanup failed for $tabKey: $e');
       }
-      // Always close the tab from UI, regardless of session cleanup result
       tabController.closeBy(tabKey);
     } catch (e) {
       debugPrint('[TerminalTabPage] Error closing tab $tabKey: $e');
@@ -151,24 +169,25 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     }
   }
 
-  /// Close all tabs with session cleanup.
-  /// Used for window-level close operations (onDestroy, handleWindowCloseButton).
-  /// UI tabs are removed immediately; session cleanup runs in parallel with a
-  /// bounded timeout so window close is not blocked indefinitely.
   Future<void> _closeAllTabs() async {
     _windowClosing = true;
+    final tabPages = <String, bool>{};
+    for (final tab in tabController.state.value.tabs) {
+      if (tab.page is TerminalPage) {
+        tabPages[tab.key] = (tab.page as TerminalPage).isTerminalRunAsAdmin;
+      }
+    }
     final tabKeys = tabController.state.value.tabs.map((t) => t.key).toList();
-    // Remove all UI tabs immediately (same instant behavior as the old tabController.clear())
-    // Keep the cleanup target lookup below synchronous before its first await:
-    // it relies on the current frame still retaining each TerminalPage's FFI/model.
     tabController.clear();
-    // Run session cleanup in parallel with bounded timeout (closeTerminal() has internal 3s timeout).
-    // Skip tabs already being closed by a concurrent _closeTab() to avoid duplicate FFI calls.
     final futures = tabKeys
         .where((tabKey) => !_closingTabs.contains(tabKey))
         .map((tabKey) async {
           try {
-            await _closeTerminalSessionIfNeeded(tabKey, persistAll: true);
+            await _closeTerminalSessionIfNeeded(
+              tabKey,
+              persistAll: true,
+              knownAdminMode: tabPages[tabKey],
+            );
           } catch (e) {
             debugPrint(
               '[TerminalTabPage] Session cleanup failed for $tabKey: $e',
@@ -189,23 +208,12 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     }
   }
 
-  /// Close the terminal session on server side based on persistent mode.
-  ///
-  /// [persistAll] controls behavior when persistent mode is enabled:
-  /// - `true` (window close): persist all sessions, don't close any.
-  /// - `false` (tab close): only persist the last session for the peer,
-  ///   close others so only the most recent disconnected session survives.
-  ///
-  /// Note: if [_windowClosing] is true, persistAll is forced to true so that
-  /// in-flight _closeTab() calls don't accidentally close sessions that the
-  /// window-close flow intends to preserve.
   Future<void> _closeTerminalSessionIfNeeded(
     String tabKey, {
     bool persistAll = false,
     int? peerTabCount,
+    bool? knownAdminMode,
   }) async {
-    // If window close is in progress, override to persist all sessions
-    // even if this call originated from an individual tab close.
     if (_windowClosing) {
       persistAll = true;
     }
@@ -213,7 +221,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     if (parsed == null) return;
     final (peerId, terminalId) = parsed;
 
-    bool isTerminalRunAsAdmin = false;
+    bool isTerminalRunAsAdmin = knownAdminMode ?? false;
     final matchingTabs = tabController.state.value.tabs.where(
       (t) => t.key == tabKey,
     );
@@ -222,10 +230,15 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
           (matchingTabs.first.page as TerminalPage).isTerminalRunAsAdmin;
     }
 
-    final ffi = TerminalConnectionManager.getExistingConnection(
-      peerId,
-      isTerminalRunAsAdmin: isTerminalRunAsAdmin,
-    );
+    final ffi =
+        TerminalConnectionManager.getExistingConnection(
+          peerId,
+          isTerminalRunAsAdmin: isTerminalRunAsAdmin,
+        ) ??
+        TerminalConnectionManager.getExistingConnection(
+          peerId,
+          isTerminalRunAsAdmin: !isTerminalRunAsAdmin,
+        );
     if (ffi == null) return;
 
     final isPersistent = bind.sessionGetToggleOptionSync(
@@ -235,11 +248,8 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
 
     if (isPersistent) {
       if (persistAll) {
-        // Window close: persist all sessions
         return;
       }
-      // Tab close: only persist if this is the last tab for this peer.
-      // Use the snapshot value if provided (avoids race with concurrent tab removal).
       final effectivePeerTabCount =
           peerTabCount ??
           tabController.state.value.tabs.where((t) {
@@ -247,22 +257,16 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
             return p != null && p.$1 == peerId;
           }).length;
       if (effectivePeerTabCount <= 1) {
-        // Last tab for this peer — persist the session
         return;
       }
-      // Not the last tab — fall through to close the session
     }
 
     final terminalModel = ffi.terminalModels[terminalId];
     if (terminalModel != null) {
-      // closeTerminal() has internal 3s timeout, no need for external timeout
       await terminalModel.closeTerminal();
     }
   }
 
-  /// Parse tabKey (format: "peerId_terminalId") into its components.
-  /// Note: peerId may contain underscores, so we use lastIndexOf('_').
-  /// Returns null if tabKey format is invalid.
   (String peerId, int terminalId)? _parseTabKey(String tabKey) {
     final lastUnderscore = tabKey.lastIndexOf('_');
     if (lastUnderscore <= 0) {
@@ -279,71 +283,59 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     return (peerId, terminalId);
   }
 
-  Widget _tabMenuBuilder(String peerId, CancelFunc cancelFunc) {
-    final List<MenuEntryBase<String>> menu = [];
-    const EdgeInsets padding = EdgeInsets.only(left: 8.0, right: 5.0);
-
-    // New tab menu item
-    menu.add(
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) =>
-            Text(translate('New tab'), style: style),
-        proc: () {
-          _addNewTerminal(peerId);
-          cancelFunc();
-          // Also try to close any BotToast overlays
-          BotToast.cleanAll();
-        },
-        padding: padding,
-      ),
-    );
-
-    menu.add(MenuEntryDivider());
-
-    menu.add(
-      MenuEntrySwitch<String>(
-        switchType: SwitchType.scheckbox,
-        text: translate('Keep terminal sessions on disconnect'),
-        getter: () async {
-          final ffi = Get.find<FFI>(tag: 'terminal_$peerId');
-          return bind.sessionGetToggleOptionSync(
+  List<Widget> _buildTabMenuItems(String tabKey, VoidCallback closeMenu) {
+    final parsed = _parseTabKey(tabKey);
+    if (parsed == null) return const [];
+    final (peerId, _) = parsed;
+    final ffi = _resolveFfiForTabKey(tabKey);
+    final isPersistent = ffi != null
+        ? bind.sessionGetToggleOptionSync(
             sessionId: ffi.sessionId,
             arg: kOptionTerminalPersistent,
-          );
-        },
-        setter: (bool v) async {
-          final ffi = Get.find<FFI>(tag: 'terminal_$peerId');
-          await bind.sessionToggleOption(
-            sessionId: ffi.sessionId,
-            value: kOptionTerminalPersistent,
-          );
-        },
-        padding: padding,
-      ),
-    );
-
-    return mod_menu.PopupMenu<String>(
-      items: menu
-          .map(
-            (e) => e.build(
-              context,
-              const MenuConfig(
-                commonColor: CustomPopupMenuTheme.commonColor,
-                height: CustomPopupMenuTheme.height,
-                dividerHeight: CustomPopupMenuTheme.dividerHeight,
-              ),
-            ),
           )
-          .expand((i) => i)
-          .toList(),
-    );
+        : false;
+
+    return [
+      FrostedMenuItem(
+        label: translate('New tab'),
+        icon: CamelliaIcons.add,
+        shortcut: isMacOS ? '⌘T' : 'Ctrl+Shift+T',
+        onTap: () {
+          closeMenu();
+          _addNewTerminal(peerId);
+        },
+      ),
+      if (ffi != null) ...[
+        const FrostedMenuDivider(),
+        FrostedMenuToggleItem(
+          label: translate('Keep terminal sessions on disconnect'),
+          icon: CamelliaIcons.terminal,
+          value: isPersistent,
+          onChanged: (_) async {
+            await bind.sessionToggleOption(
+              sessionId: ffi.sessionId,
+              value: kOptionTerminalPersistent,
+            );
+          },
+        ),
+      ],
+      const FrostedMenuDivider(),
+      FrostedMenuItem(
+        label: translate('Close'),
+        icon: CamelliaIcons.close,
+        destructive: true,
+        onTap: () {
+          closeMenu();
+          _closeTab(tabKey);
+        },
+      ),
+    ];
   }
 
   @override
   void initState() {
     super.initState();
 
-    // Add keyboard shortcut handler
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
@@ -354,7 +346,6 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         final args = jsonDecode(call.arguments);
         final id = args['id'];
         windowOnTop(windowId());
-        // Allow multiple terminals for the same connection
         final terminalId = args['terminalId'] ?? _nextTerminalId++;
         final isTerminalRunAsAdmin = args['isTerminalRunAsAdmin'] ?? false;
         tabController.add(
@@ -368,10 +359,11 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
             isTerminalRunAsAdmin: isTerminalRunAsAdmin,
           ),
         );
+        args['password'] = null;
+        args['connToken'] = null;
       } else if (call.method == kWindowEventRestoreTerminalSessions) {
         _restoreSessions(call.arguments);
       } else if (call.method == "onDestroy") {
-        // Clean up sessions before window destruction (bounded wait)
         await _closeAllTabs();
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
@@ -379,28 +371,29 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         if (tabController.state.value.tabs.isEmpty) {
           return false;
         }
-        final currentTab = tabController.state.value.selectedTabInfo;
         String? targetPeerId;
         bool targetIsAdmin = false;
         if (call.arguments is String) {
           targetPeerId = call.arguments as String;
         } else if (call.arguments is Map) {
-          targetPeerId = call.arguments['id'];
-          targetIsAdmin = call.arguments['isTerminalRunAsAdmin'] ?? false;
+          targetPeerId = call.arguments['id']?.toString();
+          targetIsAdmin = call.arguments['isTerminalRunAsAdmin'] == true;
         }
         if (targetPeerId == null) return false;
-        // Use lastIndexOf to handle peerIds containing underscores
-        final lastUnderscore = currentTab.key.lastIndexOf('_');
-        if (lastUnderscore > 0 &&
-            currentTab.key.substring(0, lastUnderscore) == targetPeerId) {
-          if (currentTab.page is TerminalPage) {
-            final page = currentTab.page as TerminalPage;
-            if (page.isTerminalRunAsAdmin != targetIsAdmin) {
-              return false; // Isolate privilege modes
+        for (int i = 0; i < tabController.state.value.tabs.length; i++) {
+          final tab = tabController.state.value.tabs[i];
+          final parsed = _parseTabKey(tab.key);
+          if (parsed != null && parsed.$1 == targetPeerId) {
+            if (tab.page is TerminalPage) {
+              final page = tab.page as TerminalPage;
+              if (page.isTerminalRunAsAdmin != targetIsAdmin) {
+                continue;
+              }
             }
+            tabController.jumpTo(i);
+            windowOnTop(windowId());
+            return true;
           }
-          windowOnTop(windowId());
-          return true;
         }
         return false;
       }
@@ -441,57 +434,48 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
 
   bool _handleKeyEvent(KeyEvent event) {
     if (event is KeyDownEvent) {
-      // Use Cmd+T on macOS, Ctrl+Shift+T on other platforms
       if (event.logicalKey == LogicalKeyboardKey.keyT) {
         if (isMacOS &&
             HardwareKeyboard.instance.isMetaPressed &&
             !HardwareKeyboard.instance.isShiftPressed) {
-          // macOS: Cmd+T (standard for new tab)
           _addNewTerminalForCurrentPeer();
           return true;
         } else if (!isMacOS &&
             HardwareKeyboard.instance.isControlPressed &&
             HardwareKeyboard.instance.isShiftPressed) {
-          // Other platforms: Ctrl+Shift+T (to avoid conflict with Ctrl+T in terminal)
           _addNewTerminalForCurrentPeer();
           return true;
         }
       }
 
-      // Use Cmd+W on macOS, Ctrl+Shift+W on other platforms
       if (event.logicalKey == LogicalKeyboardKey.keyW) {
         if (isMacOS &&
             HardwareKeyboard.instance.isMetaPressed &&
             !HardwareKeyboard.instance.isShiftPressed) {
-          // macOS: Cmd+W (standard for close tab)
-          final currentTab = tabController.state.value.selectedTabInfo;
           if (tabController.state.value.tabs.length > 1) {
+            final currentTab = tabController.state.value.selectedTabInfo;
             _closeTab(currentTab.key);
             return true;
           }
         } else if (!isMacOS &&
             HardwareKeyboard.instance.isControlPressed &&
             HardwareKeyboard.instance.isShiftPressed) {
-          // Other platforms: Ctrl+Shift+W (to avoid conflict with Ctrl+W word delete)
-          final currentTab = tabController.state.value.selectedTabInfo;
           if (tabController.state.value.tabs.length > 1) {
+            final currentTab = tabController.state.value.selectedTabInfo;
             _closeTab(currentTab.key);
             return true;
           }
         }
       }
 
-      // Use Alt+Left/Right for tab navigation (avoids conflicts)
       if (HardwareKeyboard.instance.isAltPressed) {
         if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-          // Previous tab
           final currentIndex = tabController.state.value.selected;
           if (currentIndex > 0) {
             tabController.jumpTo(currentIndex - 1);
           }
           return true;
         } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-          // Next tab
           final currentIndex = tabController.state.value.selected;
           if (currentIndex < tabController.length - 1) {
             tabController.jumpTo(currentIndex + 1);
@@ -500,7 +484,6 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         }
       }
 
-      // Check for Cmd/Ctrl + Number (switch to specific tab)
       final numberKeys = [
         LogicalKeyboardKey.digit1,
         LogicalKeyboardKey.digit2,
@@ -528,12 +511,11 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
   }
 
   void _addNewTerminal(String peerId, {int? terminalId}) {
-    // Find first tab for this peer to get connection parameters
-    final firstTab = tabController.state.value.tabs.firstWhere((tab) {
+    final firstTab = tabController.state.value.tabs.firstWhereOrNull((tab) {
       final last = tab.key.lastIndexOf('_');
       return last > 0 && tab.key.substring(0, last) == peerId;
     });
-    if (firstTab.page is TerminalPage) {
+    if (firstTab != null && firstTab.page is TerminalPage) {
       final page = firstTab.page as TerminalPage;
       final newTerminalId = terminalId ?? _nextTerminalId++;
       if (terminalId != null && terminalId >= _nextTerminalId) {
@@ -554,6 +536,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
   }
 
   void _addNewTerminalForCurrentPeer({int? terminalId}) {
+    if (tabController.state.value.tabs.isEmpty) return;
     final currentTab = tabController.state.value.selectedTabInfo;
     final parsed = _parseTabKey(currentTab.key);
     if (parsed == null) return;
@@ -563,19 +546,37 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
 
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
     final child = Scaffold(
-      backgroundColor: Theme.of(context).cardColor,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: DesktopTab(
         controller: tabController,
         onWindowCloseButton: handleWindowCloseButton,
         tail: _buildAddButton(),
-        selectedBorderColor: MyTheme.accent,
-        labelGetter: DesktopTab.tablabelGetter,
-        tabMenuBuilder: (key) {
-          final parsed = _parseTabKey(key);
-          if (parsed == null) return Container();
-          final (peerId, _) = parsed;
-          return _tabMenuBuilder(peerId, () {});
+        selectedBorderColor: Theme.of(context).colorScheme.primary,
+        labelGetter: (label) => RxString(label),
+        tabBuilder: (key, icon, label, themeConf) {
+          return Listener(
+            onPointerDown: (e) {
+              if (e.kind == ui.PointerDeviceKind.mouse && e.buttons == 2) {
+                showFrostedContextMenu(
+                  context: context,
+                  globalPosition: e.position,
+                  minWidth: 220,
+                  maxWidth: 300,
+                  itemsBuilder: (closeMenu) =>
+                      _buildTabMenuItems(key, closeMenu),
+                );
+              }
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [icon, label],
+            ),
+          );
         },
       ),
     );
@@ -585,7 +586,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
             context,
             Container(
               decoration: BoxDecoration(
-                border: Border.all(color: MyTheme.color(context).border!),
+                border: Border.all(color: tokens.border, width: 0.85),
               ),
               child: child,
             ),
@@ -600,15 +601,35 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
           );
   }
 
-  void onRemoveId(String id) {
+  void onRemoveId(String id) async {
     if (tabController.state.value.tabs.isEmpty) {
-      WindowController.fromWindowId(windowId()).close();
+      final wId = windowId();
+      try {
+        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+          "id": wId,
+        });
+      } catch (_) {}
+      final wc = WindowController.fromWindowId(wId);
+      try {
+        await wc.setPreventClose(false);
+      } catch (_) {}
+      await wc.close();
     }
   }
 
   Future<void> _closeWindowFromConnection() async {
     await _closeAllTabs();
-    await WindowController.fromWindowId(windowId()).close();
+    final wId = windowId();
+    try {
+      await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+        "id": wId,
+      });
+    } catch (_) {}
+    final wc = WindowController.fromWindowId(wId);
+    try {
+      await wc.setPreventClose(false);
+    } catch (_) {}
+    await wc.close();
   }
 
   int windowId() {
@@ -618,10 +639,9 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
   Widget _buildAddButton() {
     return ActionIcon(
       message: 'New tab',
-      icon: IconFont.add,
-      onTap: () {
-        _addNewTerminalForCurrentPeer();
-      },
+      icon: CamelliaIcons.add,
+      iconSize: 17,
+      onTap: _addNewTerminalForCurrentPeer,
       isClose: false,
     );
   }
@@ -635,25 +655,26 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       )) {
         return false;
       }
+      await _closeAllTabs();
+      return true;
     }
     if (connLength <= 0) {
       await _closeAllTabs();
       return true;
-    } else {
-      final bool res;
-      if (!option2bool(
-        kOptionEnableConfirmClosingTabs,
-        bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
-      )) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog();
-      }
-      if (res) {
-        await _closeAllTabs();
-      }
-      return res;
     }
+    final bool res;
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      res = true;
+    } else {
+      res = await closeConfirmDialog(isSessionWindow: true);
+    }
+    if (res) {
+      await _closeAllTabs();
+    }
+    return res;
   }
 }
 

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/address_book.dart';
@@ -13,7 +12,6 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
 import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
-import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
 import 'package:camellia_remote_app/models/ab_model.dart';
 import 'package:camellia_remote_app/models/peer_model.dart';
 import 'package:camellia_remote_app/models/peer_tab_model.dart';
@@ -71,7 +69,8 @@ class _PeerTabPageState extends State<PeerTabPage>
       ({dynamic hint}) => gFFI.groupModel.pull(force: hint == null),
     ),
   ];
-  RelativeRect? mobileTabContextMenuPos;
+  Offset? mobileTabContextMenuPos;
+  final FocusNode _searchFocusNode = FocusNode(debugLabel: 'peer-search');
   bool _searchFocused = false;
   bool _compactSearchOpen = false;
   int? _loadedTab;
@@ -83,6 +82,51 @@ class _PeerTabPageState extends State<PeerTabPage>
   void initState() {
     super.initState();
     _loadLocalOptions();
+    HardwareKeyboard.instance.addHandler(_handleGlobalFindShortcut);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalFindShortcut);
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  bool _handleGlobalFindShortcut(KeyEvent event) {
+    if (!mounted || event is! KeyDownEvent) return false;
+    if (event.logicalKey != LogicalKeyboardKey.keyF) return false;
+    final modifierPressed =
+        HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+    if (!modifierPressed ||
+        HardwareKeyboard.instance.isAltPressed ||
+        HardwareKeyboard.instance.isShiftPressed) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (gFFI.dialogManager.activeDialogCount > 0) return false;
+
+    _focusDeviceSearch();
+    return true;
+  }
+
+  void _focusDeviceSearch() {
+    if (!mounted) return;
+    if (!_compactSearchOpen) {
+      setState(() => _compactSearchOpen = true);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final text = peerSearchTextController.text;
+      if (text.isNotEmpty) {
+        peerSearchTextController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: text.length,
+        );
+      }
+    });
   }
 
   void _ensureTabLoaded(int tabIndex) {
@@ -150,32 +194,40 @@ class _PeerTabPageState extends State<PeerTabPage>
   Widget build(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
     _ensureTabLoaded(model.currentTab);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final contentWidth = constraints.maxWidth;
-        return Column(
-          textBaseline: TextBaseline.ideographic,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            visibleContextMenuListener(_buildCategoryPillBar(context)),
-            const SizedBox(height: 10),
-            AnimatedSwitcher(
-              duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
-              child: model.multiSelectionMode
-                  ? ConstrainedBox(
-                      key: const ValueKey('peer-multi-selection'),
-                      constraints: const BoxConstraints(minHeight: 44),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: createMultiSelectionBar(model),
-                      ),
-                    )
-                  : _buildActionBar(context, contentWidth),
-            ),
-            _createPeersView(),
-          ],
-        );
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            _focusDeviceSearch,
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            _focusDeviceSearch,
       },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final contentWidth = constraints.maxWidth;
+          return Column(
+            textBaseline: TextBaseline.ideographic,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              visibleContextMenuListener(_buildCategoryPillBar(context)),
+              const SizedBox(height: 10),
+              AnimatedSwitcher(
+                duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
+                child: model.multiSelectionMode
+                    ? ConstrainedBox(
+                        key: const ValueKey('peer-multi-selection'),
+                        constraints: const BoxConstraints(minHeight: 44),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: createMultiSelectionBar(model),
+                        ),
+                      )
+                    : _buildActionBar(context, contentWidth),
+              ),
+              _createPeersView(),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -261,6 +313,7 @@ class _PeerTabPageState extends State<PeerTabPage>
                 ? (width - 48).clamp(0, width).toDouble()
                 : deviceSearchWidth(width, focused: _searchFocused),
             child: PeerSearchBar(
+              focusNode: _searchFocusNode,
               onFocusChanged: (focused) {
                 if (_searchFocused != focused && mounted) {
                   setState(() => _searchFocused = focused);
@@ -346,85 +399,23 @@ class _PeerTabPageState extends State<PeerTabPage>
     );
   }
 
-  void mobileShowTabVisibilityMenu() {
-    final model = gFFI.peerTabModel;
-    final items = List<PopupMenuItem>.empty(growable: true);
-    for (int i = 0; i < PeerTabModel.maxTabCount; i++) {
-      if (!model.isEnabled[i]) continue;
-      items.add(
-        PopupMenuItem(
-          height: kMinInteractiveDimension * 0.8,
-          onTap: isOptVisiableFixed
-              ? null
-              : () => model.setTabVisible(i, !model.isVisibleEnabled[i]),
-          enabled: !isOptVisiableFixed,
-          child: Row(
-            children: [
-              Checkbox(
-                value: model.isVisibleEnabled[i],
-                onChanged: isOptVisiableFixed
-                    ? null
-                    : (_) {
-                        model.setTabVisible(i, !model.isVisibleEnabled[i]);
-                        if (Navigator.canPop(context)) {
-                          Navigator.pop(context);
-                        }
-                      },
-              ),
-              Expanded(child: Text(model.tabTooltip(i))),
-            ],
-          ),
-        ),
-      );
-    }
-    if (mobileTabContextMenuPos != null) {
-      showMenu(
-        context: context,
-        position: mobileTabContextMenuPos!,
-        items: items,
-      );
-    }
-  }
+  Future<void> _showTabVisibilityMenu(Offset globalPos) async {
+    final model = Provider.of<PeerTabModel>(context, listen: false);
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    final overlaySize = overlay?.size ?? MediaQuery.sizeOf(context);
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(globalPos.dx, globalPos.dy, 0, 0),
+      Offset.zero & overlaySize,
+    );
 
-  Widget visibleContextMenuListener(Widget child) {
-    if (!(isDesktop || isWebDesktop)) {
-      return GestureDetector(
-        onLongPressDown: (e) {
-          final x = e.globalPosition.dx;
-          final y = e.globalPosition.dy;
-          mobileTabContextMenuPos = RelativeRect.fromLTRB(x, y, x, y);
-        },
-        onLongPressUp: () {
-          mobileShowTabVisibilityMenu();
-        },
-        child: child,
-      );
-    } else {
-      return Listener(
-        onPointerDown: (e) {
-          if (e.kind != ui.PointerDeviceKind.mouse) {
-            return;
-          }
-          if (e.buttons == 2) {
-            showRightMenu((CancelFunc cancelFunc) {
-              return visibleContextMenu(cancelFunc);
-            }, target: e.position);
-          }
-        },
-        child: child,
-      );
-    }
-  }
-
-  Widget visibleContextMenu(CancelFunc cancelFunc) {
-    final model = Provider.of<PeerTabModel>(context);
-    final menu = List<MenuEntrySwitchSync>.empty(growable: true);
+    final menu = <MenuEntrySwitchSync<String>>[];
     for (int i = 0; i < model.orders.length; i++) {
       final int tabIndex = model.orders[i];
       if (tabIndex < 0 || tabIndex >= PeerTabModel.maxTabCount) continue;
       if (!model.isEnabled[tabIndex]) continue;
       menu.add(
-        MenuEntrySwitchSync(
+        MenuEntrySwitchSync<String>(
           switchType: SwitchType.scheckbox,
           text: model.tabTooltip(tabIndex),
           currentValue: model.isVisibleEnabled[tabIndex],
@@ -435,21 +426,46 @@ class _PeerTabPageState extends State<PeerTabPage>
         ),
       );
     }
-    return mod_menu.PopupMenu(
-      items: menu
-          .map(
-            (entry) => entry.build(
-              context,
-              MenuConfig(
-                commonColor: Theme.of(context).colorScheme.primary,
-                height: 20.0,
-                dividerHeight: 12.0,
-              ),
-            ),
-          )
-          .expand((i) => i)
-          .toList(),
+    if (menu.isEmpty) return;
+
+    final conf = MenuConfig(
+      commonColor: Theme.of(context).colorScheme.primary,
+      height: 36.0,
+      dividerHeight: 8.0,
     );
+    await mod_menu.showMenu<String>(
+      context: context,
+      position: position,
+      items: menu.expand((entry) => entry.build(context, conf)).toList(),
+    );
+  }
+
+  Widget visibleContextMenuListener(Widget child) {
+    if (!(isDesktop || isWebDesktop)) {
+      return GestureDetector(
+        onLongPressDown: (e) {
+          mobileTabContextMenuPos = e.globalPosition;
+        },
+        onLongPressUp: () {
+          if (mobileTabContextMenuPos != null) {
+            _showTabVisibilityMenu(mobileTabContextMenuPos!);
+          }
+        },
+        child: child,
+      );
+    } else {
+      return Listener(
+        onPointerDown: (e) {
+          if (e.kind != ui.PointerDeviceKind.mouse) {
+            return;
+          }
+          if (e.buttons == 2) {
+            _showTabVisibilityMenu(e.position);
+          }
+        },
+        child: child,
+      );
+    }
   }
 
   Widget createMultiSelectionBar(PeerTabModel model) {
@@ -808,7 +824,17 @@ class _GlassCategoryPillTabState extends State<_GlassCategoryPillTab> {
                 decoration: BoxDecoration(
                   color: bg,
                   borderRadius: radius,
-                  boxShadow: _focused
+                  border: Border.all(
+                    color: widget.selected
+                        ? activeAccent.withValues(alpha: dark ? 0.42 : 0.28)
+                        : AppVisual.tokens(context).border.withValues(
+                            alpha: 0.78,
+                          ),
+                    width: 0.85,
+                  ),
+                  boxShadow: (_focused &&
+                          FocusManager.instance.highlightMode ==
+                              FocusHighlightMode.traditional)
                       ? [
                           BoxShadow(
                             color: glass.focusGlow
@@ -819,31 +845,23 @@ class _GlassCategoryPillTabState extends State<_GlassCategoryPillTab> {
                         ]
                       : const [],
                 ),
-                child: CustomPaint(
-                  foregroundPainter: SpecularEdgePainter(
-                    borderRadius: radius,
-                    topColor: Colors.transparent,
-                    bottomColor: Colors.transparent,
-                    strokeWidth: 0.0,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(widget.icon, size: 16, color: fg),
-                      const SizedBox(width: 7),
-                      Text(
-                        widget.label,
-                        maxLines: 1,
-                        softWrap: false,
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: fg,
-                          fontWeight: widget.selected
-                              ? FontWeight.w700
-                              : FontWeight.w500,
-                        ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(widget.icon, size: 16, color: fg),
+                    const SizedBox(width: 7),
+                    Text(
+                      widget.label,
+                      maxLines: 1,
+                      softWrap: false,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: fg,
+                        fontWeight: widget.selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -855,8 +873,9 @@ class _GlassCategoryPillTabState extends State<_GlassCategoryPillTab> {
 }
 
 class PeerSearchBar extends StatefulWidget {
-  const PeerSearchBar({super.key, this.onFocusChanged});
+  const PeerSearchBar({super.key, this.focusNode, this.onFocusChanged});
 
+  final FocusNode? focusNode;
   final ValueChanged<bool>? onFocusChanged;
 
   @override
@@ -864,18 +883,37 @@ class PeerSearchBar extends StatefulWidget {
 }
 
 class _PeerSearchBarState extends State<PeerSearchBar> {
-  final FocusNode _focusNode = FocusNode(debugLabel: 'peer-search');
+  FocusNode? _internalFocusNode;
+
+  FocusNode get _effectiveFocusNode =>
+      widget.focusNode ??
+      (_internalFocusNode ??= FocusNode(debugLabel: 'peer-search'));
 
   @override
   void initState() {
     super.initState();
-    _focusNode.addListener(_handleFocusChanged);
+    _effectiveFocusNode.addListener(_handleFocusChanged);
     peerSearchTextController.addListener(_handleTextChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant PeerSearchBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      (oldWidget.focusNode ?? _internalFocusNode)?.removeListener(
+        _handleFocusChanged,
+      );
+      if (widget.focusNode != null && _internalFocusNode != null) {
+        _internalFocusNode!.dispose();
+        _internalFocusNode = null;
+      }
+      _effectiveFocusNode.addListener(_handleFocusChanged);
+    }
   }
 
   void _handleFocusChanged() {
     if (!mounted) return;
-    widget.onFocusChanged?.call(_focusNode.hasFocus);
+    widget.onFocusChanged?.call(_effectiveFocusNode.hasFocus);
   }
 
   void _handleTextChanged() {
@@ -884,9 +922,9 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
 
   @override
   void dispose() {
-    _focusNode.removeListener(_handleFocusChanged);
+    _effectiveFocusNode.removeListener(_handleFocusChanged);
     peerSearchTextController.removeListener(_handleTextChanged);
-    _focusNode.dispose();
+    _internalFocusNode?.dispose();
     super.dispose();
   }
 
@@ -894,7 +932,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
   Widget build(BuildContext context) {
     return GlassInput(
       controller: peerSearchTextController,
-      focusNode: _focusNode,
+      focusNode: _effectiveFocusNode,
       minHeight: 40,
       prefixIcon: CamelliaIcons.search,
       hintText: translate('Search ID'),
@@ -903,14 +941,14 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
       onChanged: (searchText) => peerSearchText.value = searchText,
       onClear: () {
         peerSearchText.value = '';
-        _focusNode.requestFocus();
+        _effectiveFocusNode.requestFocus();
       },
     ).workaroundFreezeLinuxMint();
   }
 }
 
-/// 1-click frosted [GlassSegmentedControl] (`Grid | List`) replacing the
-/// legacy 2-click `PopupMenuButton` view switcher.
+/// 1-click frosted [GlassSegmentedControl] (`Grid | Tile | List`) exposing all
+/// three peer workspace layouts cleanly.
 class PeerViewDropdown extends StatefulWidget {
   const PeerViewDropdown({super.key});
 
@@ -932,9 +970,7 @@ class _PeerViewDropdownState extends State<PeerViewDropdown> {
   Widget build(BuildContext context) {
     final fixed = isOptionFixed(kOptionPeerCardUiType);
     return Obx(() {
-      final active = peerCardUiType.value == PeerUiType.list
-          ? PeerUiType.list
-          : PeerUiType.grid;
+      final active = peerCardUiType.value;
       return IgnorePointer(
         ignoring: fixed,
         child: Opacity(
@@ -949,6 +985,11 @@ class _PeerViewDropdownState extends State<PeerViewDropdown> {
                 value: PeerUiType.grid,
                 icon: Icons.grid_view_rounded,
                 tooltip: translate('Big tiles'),
+              ),
+              GlassSegmentItem<PeerUiType>(
+                value: PeerUiType.tile,
+                icon: Icons.view_module_rounded,
+                tooltip: translate('Small tiles'),
               ),
               GlassSegmentItem<PeerUiType>(
                 value: PeerUiType.list,

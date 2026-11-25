@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -1173,6 +1172,12 @@ class FfiModel with ChangeNotifier {
         _cancelPendingMonitorRestore();
         bind.sessionReconnect(sessionId: sessionId, forceRelay: false);
         clearPermissions();
+        showToast(
+          translate('Remote device is restarting, reconnecting...'),
+          timeout: const Duration(seconds: 4),
+          icon: Icons.restart_alt_rounded,
+          tone: AppTone.info,
+        );
         // Retry once more after the silent window so restart reconnect attempts
         // are spaced by the empirical short cadence instead of only updating UI.
         _restartReconnectDelayTimer = Timer(
@@ -1262,11 +1267,16 @@ class FfiModel with ChangeNotifier {
     final durMsc = evt['dur_msec'] ?? 2000;
     final duration = Duration(milliseconds: durMsc);
     if ((text).isEmpty) {
-      BotToast.showLoading(
-        duration: duration,
-        clickClose: true,
-        allowClick: true,
-      );
+      final ffi = parent.target;
+      if (ffi != null && !ffi.closed) {
+        ffi.dialogManager.showLoading(translate('Connecting...'));
+      } else {
+        showToast(
+          translate('Waiting'),
+          timeout: duration,
+          tone: AppTone.info,
+        );
+      }
     } else {
       if (type.contains('error')) {
         showToast(
@@ -1478,26 +1488,47 @@ class FfiModel with ChangeNotifier {
       }
 
       return CustomAlertDialog(
-        title: null,
-        content: msgboxContent(type, title, text2),
-        actions: [
-          dialogButton('Close', onPressed: onClose, isOutline: true),
-          if (type == 'relay-hint')
-            dialogButton(
-              'Connect via relay',
-              onPressed: () => reconnect(dialogManager, sessionId, true),
-              tone: AppTone.success,
-              isOutline: true,
+        title: ModernDialogHeader.warning(
+          title: translate(title.isNotEmpty ? title : 'Connection Warning'),
+          subtitle: peerId.isNotEmpty ? peerId : null,
+          icon: Icons.alt_route_rounded,
+          onClose: onClose,
+        ),
+        content: SelectionArea(
+          child: Text(
+            text2,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              height: 1.45,
             ),
-          dialogButton(
-            'Retry',
+          ),
+        ),
+        actions: [
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            onPressed: onClose,
+            child: Text(translate('Close')),
+          ),
+          if (type == 'relay-hint')
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              icon: const Icon(Icons.alt_route_rounded, size: 16),
+              onPressed: () => reconnect(dialogManager, sessionId, true),
+              child: Text(translate('Connect via relay')),
+            ),
+          GlassButton(
+            variant: type == 'relay-hint2'
+                ? GlassButtonVariant.secondary
+                : GlassButtonVariant.primary,
+            icon: const Icon(Icons.refresh_rounded, size: 16),
             onPressed: () => reconnect(dialogManager, sessionId, false),
+            child: Text(translate('Retry')),
           ),
           if (type == 'relay-hint2')
-            dialogButton(
-              'Connect via relay',
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              icon: const Icon(Icons.alt_route_rounded, size: 16),
               onPressed: () => reconnect(dialogManager, sessionId, true),
-              tone: AppTone.success,
+              child: Text(translate('Connect via relay')),
             ),
         ],
         onCancel: onClose,
@@ -1517,13 +1548,10 @@ class FfiModel with ChangeNotifier {
     }
 
     if (waitForFirstImage.isFalse) return;
-    dialogManager.show(
-      (setState, close, context) => CustomAlertDialog(
-        title: null,
-        content: SelectionArea(child: msgboxContent(type, title, text)),
-        actions: [dialogButton("Cancel", onPressed: onClose, isOutline: true)],
-        onCancel: onClose,
-      ),
+    dialogManager.dismissAll();
+    dialogManager.showLoading(
+      translate('Negotiating video stream...'),
+      onCancel: onClose,
       tag: '$sessionId-waiting-for-image',
     );
     waitForImageDialogShow.value = true;

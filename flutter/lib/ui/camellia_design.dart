@@ -4,6 +4,30 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 
+/// Global scroll behavior eliminating mechanical elliptical overscroll glow
+/// (`GlowingOverscrollIndicator`) while enabling smooth trackpad/mouse/touch scrolling.
+class CamelliaScrollBehavior extends MaterialScrollBehavior {
+  const CamelliaScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => const <PointerDeviceKind>{
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.invertedStylus,
+    PointerDeviceKind.trackpad,
+  };
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+}
+
 enum CamelliaLanguage { english, simplifiedChinese, traditionalChinese }
 
 enum CamelliaThemeStyle {
@@ -21,8 +45,17 @@ enum CamelliaThemeStyle {
 }
 
 abstract final class CamelliaTypography {
+  static const englishFamily = 'Inter';
   static const simplifiedFamily = 'CamelliaSansSC';
   static const traditionalFamily = 'CamelliaSansTC';
+
+  static const latinUiFallbacks = <String>[
+    '.SF Pro Text',
+    'Inter',
+    'Segoe UI Variable Text',
+    'Segoe UI',
+    'Roboto',
+  ];
 
   static const systemFontFallbacks = <String>[
     'PingFang SC',
@@ -58,10 +91,11 @@ abstract final class CamelliaTypography {
     return CamelliaLanguage.simplifiedChinese;
   }
 
-  static String family(CamelliaLanguage language) =>
-      language == CamelliaLanguage.traditionalChinese
-      ? traditionalFamily
-      : simplifiedFamily;
+  static String family(CamelliaLanguage language) => switch (language) {
+    CamelliaLanguage.english => englishFamily,
+    CamelliaLanguage.simplifiedChinese => simplifiedFamily,
+    CamelliaLanguage.traditionalChinese => traditionalFamily,
+  };
 
   /// Enforces tabular numerals (`tabular-nums`) for device IDs, passcodes,
   /// live telemetry (ms / FPS / Mbps), and file transfer progress counters.
@@ -633,25 +667,28 @@ abstract final class CamelliaTheme {
         sidebarTint: midnight
             ? CamelliaColors.midnightCanvas
             : dark
-            ? const Color(0xC8090D14)
-            : const Color(0xC0F1F5F9),
+            ? const Color(0xDC0A0F18)
+            : const Color(0xD8F1F5F9),
         floatingTint: midnight
             ? CamelliaColors.midnightSurface
             : dark
-            ? const Color(0xD00D1522)
-            : const Color(0xC8FFFFFF),
+            ? const Color(0xE60F1724)
+            : const Color(0xEBFFFFFF),
         modalTint: midnight
             ? CamelliaColors.midnightRaised
             : dark
-            ? const Color(0xE00F1928)
-            : const Color(0xF2FFFFFF),
+            ? const Color(0xF2141E2E)
+            : const Color(0xF7FFFFFF),
         specularTop: dark
-            ? const Color(0x8010B981)
-            : const Color(0x80059669),
+            ? const Color(0x3334D399)
+            : const Color(0xD9FFFFFF),
         specularBottom: dark
-            ? const Color(0x5506B6D4)
-            : const Color(0x500284C7),
-        focusGlow: const Color(0x8010B981),
+            ? const Color(0x1894A3B8)
+            : const Color(0x59CBD5E1),
+        hoverOverlay: dark
+            ? const Color(0x1410B981)
+            : const Color(0x10059669),
+        focusGlow: const Color(0x6610B981),
       );
     } else if (themeStyle == CamelliaThemeStyle.nordicTitanium) {
       glassTokens = baseGlass.copyWith(
@@ -659,25 +696,28 @@ abstract final class CamelliaTheme {
         sidebarTint: midnight
             ? CamelliaColors.midnightCanvas
             : dark
-            ? const Color(0xC818181C)
-            : const Color(0xB8F4F4F6),
+            ? const Color(0xDC18181B)
+            : const Color(0xD8F4F4F6),
         floatingTint: midnight
             ? CamelliaColors.midnightSurface
             : dark
-            ? const Color(0xD0202026)
-            : const Color(0xC8FFFFFF),
+            ? const Color(0xE6202025)
+            : const Color(0xEBFFFFFF),
         modalTint: midnight
             ? CamelliaColors.midnightRaised
             : dark
-            ? const Color(0xE026262E)
-            : const Color(0xF2FFFFFF),
+            ? const Color(0xF227272D)
+            : const Color(0xF7FFFFFF),
         specularTop: dark
-            ? const Color(0x80F59E0B)
-            : const Color(0x80D97706),
+            ? const Color(0x36FFFFFF)
+            : const Color(0xEBFFFFFF),
         specularBottom: dark
-            ? const Color(0x55E2E8F0)
-            : const Color(0x50D4D4D8),
-        focusGlow: const Color(0x80F59E0B),
+            ? const Color(0x16A8A29E)
+            : const Color(0x5CD4D4D8),
+        hoverOverlay: dark
+            ? const Color(0x16F59E0B)
+            : const Color(0x10D97706),
+        focusGlow: const Color(0x66F59E0B),
       );
     } else {
       glassTokens = baseGlass.copyWith(
@@ -728,6 +768,12 @@ abstract final class CamelliaTheme {
         );
     final isCjk = fontFamily == CamelliaTypography.simplifiedFamily ||
         fontFamily == CamelliaTypography.traditionalFamily;
+    final effectiveFallbacks = fontFamily == CamelliaTypography.englishFamily
+        ? <String>[
+            ...CamelliaTypography.latinUiFallbacks,
+            ...fontFamilyFallback,
+          ]
+        : fontFamilyFallback;
     TextStyle style(
       double size,
       FontWeight weight, {
@@ -741,7 +787,7 @@ abstract final class CamelliaTheme {
           : weight;
       return TextStyle(
         fontFamily: fontFamily,
-        fontFamilyFallback: fontFamilyFallback,
+        fontFamilyFallback: effectiveFallbacks,
         fontSize: size,
         fontWeight: adjustedWeight,
         height: height,
@@ -783,7 +829,7 @@ abstract final class CamelliaTheme {
       useMaterial3: true,
       brightness: brightness,
       fontFamily: fontFamily,
-      fontFamilyFallback: fontFamilyFallback,
+      fontFamilyFallback: effectiveFallbacks,
       colorScheme: scheme,
       scaffoldBackgroundColor: canvas,
       canvasColor: canvas,
@@ -1187,193 +1233,92 @@ class _MinimalistPatternPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
     final rect = Offset.zero & size;
 
     if (isMidnight) {
       canvas.drawRect(rect, Paint()..color = CamelliaColors.midnightCanvas);
-      final gridPaint = Paint()
-        ..color = const Color(0xFF818CF8).withValues(alpha: 0.025)
-        ..strokeWidth = 0.5;
-      for (double x = 0; x < size.width; x += 64.0) {
-        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-      }
-      for (double y = 0; y < size.height; y += 64.0) {
-        canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-      }
       return;
     }
 
-    final accent1 = style == CamelliaThemeStyle.obsidianCyber
-        ? (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
-        : style == CamelliaThemeStyle.nordicTitanium
-        ? (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
-        : (dark ? CamelliaColors.indigo : CamelliaColors.azure);
+    final primaryGlow = switch (style) {
+      CamelliaThemeStyle.obsidianCyber => dark
+          ? const Color(0xFF10B981)
+          : const Color(0xFF059669),
+      CamelliaThemeStyle.nordicTitanium => dark
+          ? const Color(0xFFF59E0B)
+          : const Color(0xFFD97706),
+      CamelliaThemeStyle.auroraFrost => dark
+          ? CamelliaColors.indigoDark
+          : CamelliaColors.indigo,
+    };
 
-    final accent2 = style == CamelliaThemeStyle.obsidianCyber
-        ? (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
-        : style == CamelliaThemeStyle.nordicTitanium
-        ? (dark ? const Color(0xFFD97706) : const Color(0xFFD97706))
-        : (dark ? CamelliaColors.azure : CamelliaColors.indigo);
+    final secondaryGlow = switch (style) {
+      CamelliaThemeStyle.obsidianCyber => dark
+          ? const Color(0xFF06B6D4)
+          : const Color(0xFF0284C7),
+      CamelliaThemeStyle.nordicTitanium => dark
+          ? const Color(0xFFE7E5E4)
+          : const Color(0xFFA8A29E),
+      CamelliaThemeStyle.auroraFrost => dark
+          ? CamelliaColors.azure
+          : CamelliaColors.aqua,
+    };
 
+    // Calibrated studio surface wash — pure architectural tone, zero noisy grids or stripes.
     final basePaint = Paint()
       ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
         colors: [
-          baseColor,
           Color.alphaBlend(
-            accent1.withValues(alpha: dark ? 0.12 : 0.05),
-            baseColor,
-          ),
-          Color.alphaBlend(
-            accent2.withValues(alpha: dark ? 0.08 : 0.03),
+            primaryGlow.withValues(alpha: dark ? 0.045 : 0.022),
             baseColor,
           ),
           baseColor,
+          Color.alphaBlend(
+            secondaryGlow.withValues(alpha: dark ? 0.025 : 0.014),
+            baseColor,
+          ),
         ],
-        stops: const [0, 0.40, 0.75, 1],
+        stops: const [0.0, 0.48, 1.0],
       ).createShader(rect);
     canvas.drawRect(rect, basePaint);
 
-    final maxDim = size.longestSide.clamp(320.0, 1800.0);
-
-    if (style == CamelliaThemeStyle.obsidianCyber) {
-      // Obsidian Cyber: precision engineering telemetry radar grid + glowing telemetry nodes + crosshairs
-      final glowPaint = Paint()
+    // Subtle top-center studio key-light luminance (Linear / Raycast style).
+    final maxDim = size.longestSide.clamp(360.0, 1800.0);
+    final topLightCenter = Offset(size.width * 0.42, -maxDim * 0.18);
+    final topLightRadius = maxDim * 0.72;
+    canvas.drawCircle(
+      topLightCenter,
+      topLightRadius,
+      Paint()
         ..shader = RadialGradient(
-          center: const Alignment(0, -0.4),
-          radius: 1.1,
           colors: [
-            (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
-                .withValues(alpha: dark ? 0.15 : 0.09),
-            Colors.transparent,
+            primaryGlow.withValues(alpha: dark ? 0.085 : 0.042),
+            primaryGlow.withValues(alpha: 0.0),
           ],
-        ).createShader(rect);
-      canvas.drawRect(rect, glowPaint);
+        ).createShader(
+          Rect.fromCircle(center: topLightCenter, radius: topLightRadius),
+        ),
+    );
 
-      final gridPaint = Paint()
-        ..color = (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
-            .withValues(alpha: dark ? 0.22 : 0.14)
-        ..strokeWidth = 0.85;
-      for (double x = 0; x < size.width; x += 48.0) {
-        canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-      }
-      for (double y = 0; y < size.height; y += 48.0) {
-        canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-      }
-
-      // High-tech intersection telemetry nodes
-      final nodePaint = Paint()
-        ..color = (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
-            .withValues(alpha: dark ? 0.48 : 0.32)
-        ..strokeWidth = 2.5
-        ..strokeCap = StrokeCap.round;
-      final nodes = <Offset>[];
-      for (double x = 48; x < size.width; x += 96.0) {
-        for (double y = 48; y < size.height; y += 96.0) {
-          nodes.add(Offset(x, y));
-        }
-      }
-      canvas.drawPoints(PointMode.points, nodes, nodePaint);
-
-      final crosshairPaint = Paint()
-        ..color = (dark ? const Color(0xFF06B6D4) : const Color(0xFF0284C7))
-            .withValues(alpha: dark ? 0.60 : 0.42)
-        ..strokeWidth = 1.4;
-      void drawCrosshair(double cx, double cy) {
-        canvas.drawLine(Offset(cx - 12, cy), Offset(cx + 12, cy), crosshairPaint);
-        canvas.drawLine(Offset(cx, cy - 12), Offset(cx, cy + 12), crosshairPaint);
-      }
-      drawCrosshair(32, 32);
-      if (size.width > 200) drawCrosshair(size.width - 32, 32);
-      if (size.height > 200) drawCrosshair(32, size.height - 32);
-      if (size.width > 200 && size.height > 200) {
-        drawCrosshair(size.width - 32, size.height - 32);
-      }
-
-      final scanLinePaint = Paint()
-        ..color = (dark ? const Color(0xFF10B981) : const Color(0xFF059669))
-            .withValues(alpha: dark ? 0.36 : 0.24)
-        ..strokeWidth = 1.2;
-      canvas.drawLine(const Offset(0, 48), Offset(size.width, 48), scanLinePaint);
-    } else if (style == CamelliaThemeStyle.nordicTitanium) {
-      // Nordic Titanium: brushed titanium micro-grooves + warm ambient top spotlight + diagonal metallic sheen
-      final groovePaint = Paint()
-        ..color = (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
-            .withValues(alpha: dark ? 0.18 : 0.12)
-        ..strokeWidth = 0.8;
-      for (double y = 0; y < size.height; y += 8.0) {
-        canvas.drawLine(Offset(0, y), Offset(size.width, y), groovePaint);
-      }
-
-      final conePaint = Paint()
+    // Subtle secondary ambient depth wash in the opposite lower quadrant.
+    final cornerCenter = Offset(size.width * 0.88, size.height * 0.92);
+    final cornerRadius = maxDim * 0.52;
+    canvas.drawCircle(
+      cornerCenter,
+      cornerRadius,
+      Paint()
         ..shader = RadialGradient(
-          center: const Alignment(0, -1.0),
-          radius: 1.3,
           colors: [
-            (dark ? const Color(0xFFF59E0B) : const Color(0xFFB45309))
-                .withValues(alpha: dark ? 0.34 : 0.22),
-            Colors.transparent,
+            secondaryGlow.withValues(alpha: dark ? 0.052 : 0.026),
+            secondaryGlow.withValues(alpha: 0.0),
           ],
-        ).createShader(rect);
-      canvas.drawRect(rect, conePaint);
-
-      // Diagonal champagne titanium metallic sheen
-      final sheenPaint = Paint()
-        ..shader = LinearGradient(
-          begin: const Alignment(-1.0, -1.0),
-          end: const Alignment(1.0, 1.0),
-          colors: [
-            Colors.transparent,
-            (dark ? const Color(0xFFFEF3C7) : const Color(0xFFD97706))
-                .withValues(alpha: dark ? 0.15 : 0.10),
-            Colors.transparent,
-          ],
-          stops: const [0.35, 0.50, 0.65],
-        ).createShader(rect);
-      canvas.drawRect(rect, sheenPaint);
-    } else {
-      // Aurora Frost: ambient radial glow orbs + subtle micro-dot matrix
-      void paintOrb(Offset center, double radius, Color color, double alpha) {
-        final orbPaint = Paint()
-          ..shader = RadialGradient(
-            colors: [color.withValues(alpha: alpha), color.withValues(alpha: 0)],
-          ).createShader(Rect.fromCircle(center: center, radius: radius));
-        canvas.drawCircle(center, radius, orbPaint);
-      }
-
-      paintOrb(
-        Offset(size.width * 0.14, size.height * 0.12),
-        maxDim * 0.44,
-        CamelliaColors.indigo,
-        dark ? 0.13 : 0.07,
-      );
-      paintOrb(
-        Offset(size.width * 0.86, size.height * 0.18),
-        maxDim * 0.38,
-        CamelliaColors.azure,
-        dark ? 0.10 : 0.055,
-      );
-      paintOrb(
-        Offset(size.width * 0.72, size.height * 0.88),
-        maxDim * 0.40,
-        CamelliaColors.aqua,
-        dark ? 0.07 : 0.045,
-      );
-
-      final dotPaint = Paint()
-        ..color = (dark ? CamelliaColors.orchid : CamelliaColors.indigo)
-            .withValues(alpha: dark ? 0.035 : 0.025)
-        ..strokeWidth = 1.5
-        ..strokeCap = StrokeCap.round;
-      final points = <Offset>[];
-      for (double x = 16; x < size.width; x += 32.0) {
-        for (double y = 16; y < size.height; y += 32.0) {
-          points.add(Offset(x, y));
-        }
-      }
-      canvas.drawPoints(PointMode.points, points, dotPaint);
-    }
+        ).createShader(
+          Rect.fromCircle(center: cornerCenter, radius: cornerRadius),
+        ),
+    );
   }
 
   @override
@@ -1518,13 +1463,17 @@ class CamelliaSection extends StatelessWidget {
                                 Padding(
                                   padding: const EdgeInsets.only(right: 10),
                                   child: Container(
-                                    width: 3.5,
-                                    height: 18,
+                                    width: 8,
+                                    height: 8,
                                     decoration: BoxDecoration(
                                       color: accent,
-                                      borderRadius: BorderRadius.circular(
-                                        CamelliaRadius.status,
-                                      ),
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: accent!.withValues(alpha: 0.32),
+                                          blurRadius: 6,
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),

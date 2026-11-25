@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../ui/camellia_design.dart';
+
 class MenuButton extends StatefulWidget {
   final GestureTapCallback? onPressed;
   final Color color;
@@ -27,38 +29,47 @@ class MenuButton extends StatefulWidget {
 
 class _MenuButtonState extends State<MenuButton> {
   bool _isHover = false;
-  final double _borderRadius = 8.0;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: widget.padding,
-      child: Tooltip(
-        waitDuration: Duration(milliseconds: 300),
-        message: widget.tooltip,
-        child: Material(
-          type: MaterialType.transparency,
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(_borderRadius),
-              color: _isHover ? widget.hoverColor : widget.color,
-            ),
-            child: InkWell(
-              hoverColor: widget.hoverColor,
-              onHover: (val) {
-                setState(() {
-                  _isHover = val;
-                });
-              },
-              borderRadius: BorderRadius.circular(_borderRadius),
-              splashColor: widget.splashColor,
-              enableFeedback: widget.enableFeedback,
-              onTap: widget.onPressed,
-              child: widget.child,
-            ),
-          ),
+    final radius = BorderRadius.circular(CamelliaRadius.control);
+    final button = Material(
+      type: MaterialType.transparency,
+      child: AnimatedContainer(
+        duration: CamelliaMotion.resolve(context, CamelliaMotion.hover),
+        curve: CamelliaMotion.standard,
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          color: _isHover ? widget.hoverColor : widget.color,
+        ),
+        child: InkWell(
+          hoverColor: widget.hoverColor,
+          highlightColor: Colors.transparent,
+          splashColor: widget.splashColor ?? Colors.transparent,
+          splashFactory: NoSplash.splashFactory,
+          onHover: (val) {
+            if (mounted && _isHover != val) {
+              setState(() => _isHover = val);
+            }
+          },
+          borderRadius: radius,
+          enableFeedback: widget.enableFeedback,
+          onTap: widget.onPressed,
+          child: widget.child,
         ),
       ),
+    );
+
+    final tip = widget.tooltip;
+    return Padding(
+      padding: widget.padding,
+      child: (tip != null && tip.isNotEmpty)
+          ? Tooltip(
+              waitDuration: const Duration(milliseconds: 350),
+              message: tip,
+              child: button,
+            )
+          : button,
     );
   }
 }

@@ -2,7 +2,7 @@ import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:flutter/material.dart';
 
-import '../../common.dart' show translate;
+import '../../common.dart' show AppVisual, translate;
 import '../../models/address_book_mutations.dart';
 
 /// Recovery is independent of cached content and connection actions. Closing a
@@ -52,6 +52,7 @@ class AddressBookOperationPanel extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final accent = storageError.isNotEmpty
         ? glass.statusAlert
@@ -77,19 +78,19 @@ class AddressBookOperationPanel extends StatelessWidget {
                 children: [
                   GlassBadge(
                     label: storageError.isNotEmpty
-                        ? 'Storage Error'
+                        ? translate('Storage Error')
                         : pending.isNotEmpty
-                        ? 'Pending Reconciliation'
+                        ? translate('Pending Reconciliation')
                         : busy
-                        ? 'Syncing'
-                        : 'Status',
+                        ? translate('Syncing')
+                        : translate('Status'),
                     tone: storageError.isNotEmpty
                         ? GlassBadgeTone.danger
                         : pending.isNotEmpty
                         ? GlassBadgeTone.warning
                         : GlassBadgeTone.brand,
                     showDot: true,
-                    pulse: busy,
+                    pulse: false,
                     compact: true,
                   ),
                 ],
@@ -97,19 +98,23 @@ class AddressBookOperationPanel extends StatelessWidget {
               const SizedBox(height: 8),
               if (busy)
                 Text(
-                  'Address book operation in progress. Writes are disabled.',
+                  translate(
+                    'Address book operation in progress. Writes are disabled.',
+                  ),
                   style: theme.textTheme.bodySmall,
                 ),
               if (!ready && !busy && storageError.isEmpty)
                 Text(
-                  'Check operation storage before editing the address book.',
+                  translate(
+                    'Check operation storage before editing the address book.',
+                  ),
                   style: theme.textTheme.bodySmall,
                 ),
               if (storageError.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    storageError,
+                    translate(storageError),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: glass.statusAlert,
                       fontWeight: FontWeight.w600,
@@ -119,14 +124,19 @@ class AddressBookOperationPanel extends StatelessWidget {
               if (status.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(status, style: theme.textTheme.bodySmall),
+                  child: Text(
+                    translate(status),
+                    style: theme.textTheme.bodySmall,
+                  ),
                 ),
               if (pending.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    'An unresolved operation blocks new writes. Viewing and connecting remain available. '
-                    'Look up its receipt using the original account and server; do not repeat the write.',
+                    translate(
+                      'An unresolved operation blocks new writes. Viewing and connecting remain available. '
+                      'Look up its receipt using the original account and server; do not repeat the write.',
+                    ),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -134,20 +144,23 @@ class AddressBookOperationPanel extends StatelessWidget {
                 ),
               for (final operation in pending) ...[
                 const SizedBox(height: 8),
-                GlassSurface(
-                  layer: CamelliaGlassLayer.floating,
-                  showShadow: false,
-                  enableBlur: false,
-                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                    border: Border.all(color: tokens.border, width: 0.85),
                   ),
-                  child: SelectableText(
-                    operation.operationId,
-                    style: CamelliaTypography.tabular(
-                      theme.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: SelectableText(
+                      operation.operationId,
+                      style: CamelliaTypography.tabular(
+                        theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
@@ -207,13 +220,14 @@ class _ReconcileOperationDialogState extends State<_ReconcileOperationDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
       child: GlassModalShell(
         maxWidth: 480,
         title: Text(
-          'Manual operation reconciliation',
+          translate('Manual operation reconciliation'),
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.w700,
           ),
@@ -223,45 +237,55 @@ class _ReconcileOperationDialogState extends State<_ReconcileOperationDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'First verify the original operation and resulting state on the original server and account. '
-              'A missing receipt, expired retention, or failed connection does not prove that nothing changed. '
-              'Clearing this record allows new writes and never retries the original operation.',
+              translate(
+                'First verify the original operation and resulting state on the original server and account. '
+                'A missing receipt, expired retention, or failed connection does not prove that nothing changed. '
+                'Clearing this record allows new writes and never retries the original operation.',
+              ),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 12),
-            GlassSurface(
-              layer: CamelliaGlassLayer.floating,
-              showShadow: false,
-              enableBlur: false,
-              borderRadius: BorderRadius.circular(CamelliaRadius.control),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              child: SelectableText(
-                widget.operation.operationId,
-                style: CamelliaTypography.tabular(
-                  theme.textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: tokens.surfaceContainer.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                border: Border.all(color: tokens.border, width: 0.85),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: SelectableText(
+                  widget.operation.operationId,
+                  style: CamelliaTypography.tabular(
+                    theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              key: const ValueKey('reconcile-operation-id'),
+            GlassInput(
+              textFieldKey: const ValueKey('reconcile-operation-id'),
               controller: _controller,
-              style: CamelliaTypography.tabular(theme.textTheme.bodyMedium),
-              decoration: const InputDecoration(
-                labelText: 'Enter the complete operation ID',
-              ),
+              tabularNums: true,
+              labelText: translate('Enter the complete operation ID'),
+              hintText: widget.operation.operationId,
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
             CheckboxListTile(
               key: const ValueKey('reconcile-verified'),
               contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
               title: Text(
-                'I verified the original state and resolved this operation manually.',
+                translate(
+                  'I verified the original state and resolved this operation manually.',
+                ),
                 style: theme.textTheme.bodySmall,
               ),
               value: _verified,
@@ -272,7 +296,7 @@ class _ReconcileOperationDialogState extends State<_ReconcileOperationDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(translate('Cancel')),
           ),
           TextButton(
             key: const ValueKey('reconcile-confirm'),

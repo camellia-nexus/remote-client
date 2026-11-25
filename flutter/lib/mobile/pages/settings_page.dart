@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/widgets/setting_widgets.dart';
 import 'package:camellia_remote_app/common/widgets/settings_components.dart';
@@ -31,7 +32,7 @@ class SettingsPage extends StatefulWidget implements PageShape {
   String get title => translate("Settings");
 
   @override
-  Icon get icon => const Icon(Icons.tune_outlined);
+  Icon get icon => const Icon(CamelliaIcons.settings);
 
   @override
   List<Widget> get appBarActions =>
@@ -41,54 +42,58 @@ class SettingsPage extends StatefulWidget implements PageShape {
   State<SettingsPage> createState() => _SettingsState();
 }
 
-const url = 'https://github.com/camellia-computing/remote-client';
+const url = 'https://github.com/camellia-nexus/remote-client';
+const _privacyUrl =
+    'https://github.com/camellia-nexus/remote-client/blob/main/docs/privacy.md';
 
-SettingsThemeData _camelliaSettingsTheme(Brightness brightness) {
+SettingsThemeData _camelliaSettingsTheme(
+  BuildContext context,
+  Brightness brightness,
+) {
   final dark = brightness == Brightness.dark;
   final midnight =
       dark && MyTheme.getThemePreference() == CamelliaThemePreference.midnight;
-  final glass = midnight
-      ? CamelliaGlassTokens.midnight
-      : dark
-      ? CamelliaGlassTokens.dark
-      : CamelliaGlassTokens.light;
-  final surface = glass.floatingTint;
+  final style = MyTheme.getThemeStyle();
+  final tokens = AppDesignTokens.resolve(
+    style,
+    brightness,
+    oledMidnight: midnight,
+  );
+  final glass = CamelliaGlassTokens.of(context);
+  final accent = switch (style) {
+    CamelliaThemeStyle.obsidianCyber =>
+      dark ? const Color(0xFF34D399) : const Color(0xFF059669),
+    CamelliaThemeStyle.nordicTitanium =>
+      dark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+    CamelliaThemeStyle.auroraFrost =>
+      dark ? CamelliaColors.orchid : CamelliaColors.indigo,
+  };
   final text = midnight
       ? CamelliaColors.midnightText
       : dark
       ? CamelliaColors.darkText
       : CamelliaColors.lightText;
-  final muted = midnight
-      ? CamelliaColors.midnightMuted
-      : dark
-      ? CamelliaColors.darkMuted
-      : CamelliaColors.lightMuted;
-  final border = midnight
-      ? CamelliaColors.midnightBorder
-      : dark
-      ? CamelliaColors.darkBorder
-      : CamelliaColors.lightBorder;
-  final accent = dark ? CamelliaColors.indigoDark : CamelliaColors.indigo;
+
   return SettingsThemeData(
     settingsListBackground: Colors.transparent,
-    settingsSectionBackground: surface,
-    dividerColor: border.withValues(alpha: 0.55),
-    tileHighlightColor: accent.withValues(alpha: dark ? 0.18 : 0.09),
+    settingsSectionBackground: glass.floatingTint,
+    dividerColor: tokens.border.withValues(alpha: 0.65),
+    tileHighlightColor: accent.withValues(alpha: dark ? 0.16 : 0.08),
     titleTextColor: accent,
     leadingIconsColor: accent,
-    trailingTextColor: muted,
-    tileDescriptionTextColor: muted,
+    trailingTextColor: tokens.muted,
+    tileDescriptionTextColor: tokens.muted,
     settingsTileTextColor: text,
-    inactiveTitleColor: muted.withValues(alpha: 0.65),
-    inactiveSubtitleColor: muted.withValues(alpha: 0.55),
-    inactiveSwitchColor: muted.withValues(alpha: 0.35),
+    inactiveTitleColor: tokens.muted.withValues(alpha: 0.62),
+    inactiveSubtitleColor: tokens.muted.withValues(alpha: 0.52),
+    inactiveSwitchColor: tokens.muted.withValues(alpha: 0.34),
     titleTextStyle: const TextStyle(
-      fontSize: 13,
-      fontWeight: FontWeight.w800,
+      fontSize: 12.5,
+      fontWeight: FontWeight.w700,
       letterSpacing: 0.2,
     ),
     tileTextStyle: const TextStyle(
-      fontSize: 15,
+      fontSize: 14.5,
       fontWeight: FontWeight.w600,
       letterSpacing: 0,
     ),
@@ -120,13 +125,12 @@ KeepScreenOn optionToKeepScreenOn(String value) {
 }
 
 class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
-  final _hasIgnoreBattery =
-      false; //androidVersion >= 26; // remove because not work on every device
+  final _hasIgnoreBattery = false;
   var _ignoreBatteryOpt = false;
   var _enableStartOnBoot = false;
   var _showTerminalExtraKeys = false;
   var _floatingWindowDisabled = false;
-  var _keepScreenOn = KeepScreenOn.duringControlled; // relay on floating window
+  var _keepScreenOn = KeepScreenOn.duringControlled;
   var _enableAbr = false;
   var _denyLANDiscovery = false;
   var _onlyWhiteList = false;
@@ -245,7 +249,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         update = true;
       }
 
-      // start on boot depends on ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS and SYSTEM_ALERT_WINDOW
       var enableStartOnBoot = await gFFI.invokeMethod(
         AndroidChannel.kGetStartOnBootOpt,
       );
@@ -376,11 +379,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final enable2fa = bind.mainHasValid2FaSync();
     final List<AbstractSettingsTile> tfaTiles = [
       SettingsTile.switchTile(
+        leading: const Icon(CamelliaIcons.shield),
         title: Text(translate('enable-2fa-title')),
         initialValue: enable2fa,
         onToggle: (v) async {
-          update() async {
-            setState(() {});
+          void update() {
+            if (mounted) setState(() {});
           }
 
           if (v == false) {
@@ -398,11 +402,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       ),
       if (enable2fa)
         SettingsTile.switchTile(
+          leading: const Icon(Icons.smart_toy_outlined),
           title: Text(translate('Telegram bot')),
           initialValue: bind.mainHasValidBotSync(),
           onToggle: (v) async {
-            update() async {
-              setState(() {});
+            void update() {
+              if (mounted) setState(() {});
             }
 
             if (v == false) {
@@ -420,6 +425,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
       if (enable2fa)
         SettingsTile.switchTile(
+          leading: const Icon(Icons.verified_user_outlined),
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -444,22 +450,23 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
       if (enable2fa && _enableTrustedDevices)
         SettingsTile(
+          leading: const Icon(Icons.devices_rounded),
           title: Text(translate('Manage trusted devices')),
-          trailing: Icon(Icons.arrow_forward_ios),
+          trailing: const Icon(Icons.chevron_right_rounded),
           onPressed: (context) {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) {
-                  return _ManageTrustedDevices();
-                },
+                builder: (context) => const _ManageTrustedDevices(),
               ),
             );
           },
         ),
     ];
+
     final List<AbstractSettingsTile> shareScreenTiles = [
       SettingsTile.switchTile(
+        leading: const Icon(Icons.wifi_off_rounded),
         title: Text(translate('Deny LAN discovery')),
         initialValue: _denyLANDiscovery,
         onToggle: isOptionFixed(kOptionEnableLanDiscovery)
@@ -479,6 +486,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               },
       ),
       SettingsTile.switchTile(
+        leading: const Icon(Icons.checklist_rtl_rounded),
         title: Row(
           children: [
             Expanded(child: Text(translate('Use IP Whitelisting'))),
@@ -493,9 +501,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
         initialValue: _onlyWhiteList,
         onToggle: (_) async {
-          update() async {
+          void update() {
             final onlyWhiteList = whitelistNotEmpty();
-            if (onlyWhiteList != _onlyWhiteList) {
+            if (onlyWhiteList != _onlyWhiteList && mounted) {
               setState(() {
                 _onlyWhiteList = onlyWhiteList;
               });
@@ -506,6 +514,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         },
       ),
       SettingsTile.switchTile(
+        leading: const Icon(Icons.speed_rounded),
         title: Text(translate('Adaptive bitrate')),
         initialValue: _enableAbr,
         onToggle: isOptionFixed(kOptionEnableAbr)
@@ -519,6 +528,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               },
       ),
       SettingsTile.switchTile(
+        leading: const Icon(CamelliaIcons.record),
         title: Text(translate('Enable recording session')),
         initialValue: _enableRecordSession,
         onToggle: isOptionFixed(kOptionEnableRecordSession)
@@ -534,6 +544,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               },
       ),
       SettingsTile.switchTile(
+        leading: const Icon(Icons.lan_outlined),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -547,7 +558,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                     offstage: !_enableDirectIPAccess,
                     child: Text(
                       '${translate("Local Address")}: $_localIP${_directAccessPort.isEmpty ? "" : ":$_directAccessPort"}',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: CamelliaTypography.tabular(
+                        Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                   ),
                 ],
@@ -555,9 +568,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             ),
             Offstage(
               offstage: !_enableDirectIPAccess,
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                icon: Icon(Icons.edit, size: 20),
+              child: GlassIconButton(
+                icon: CamelliaIcons.edit,
+                size: 32,
+                iconSize: 16,
                 onPressed: isOptionFixed(kOptionDirectAccessPort)
                     ? null
                     : () async {
@@ -593,6 +607,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               },
       ),
       SettingsTile.switchTile(
+        leading: const Icon(Icons.timer_off_outlined),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -606,7 +621,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                     offstage: !_allowAutoDisconnect,
                     child: Text(
                       '${_autoDisconnectTimeout.isEmpty ? '10' : _autoDisconnectTimeout} min',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: CamelliaTypography.tabular(
+                        Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                   ),
                 ],
@@ -614,9 +631,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             ),
             Offstage(
               offstage: !_allowAutoDisconnect,
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                icon: Icon(Icons.edit, size: 20),
+              child: GlassIconButton(
+                icon: CamelliaIcons.edit,
+                size: 32,
+                iconSize: 16,
                 onPressed: isOptionFixed(kOptionAutoDisconnectTimeout)
                     ? null
                     : () async {
@@ -654,6 +672,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               },
       ),
     ];
+
     if (_hasIgnoreBattery) {
       enhancementsTiles.insert(
         0,
@@ -662,11 +681,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Keep Camellia Remote background service'),
-              Text(
-                '* ${translate('Ignore Battery Optimizations')}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+              Text(translate('Ignore Battery Optimizations')),
             ],
           ),
           onToggle: (v) async {
@@ -677,7 +692,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             } else {
               final res = await gFFI.dialogManager.show<bool>(
                 (setState, close, context) => CustomAlertDialog(
-                  title: Text(translate("Open System Setting")),
+                  title: ModernDialogHeader.warning(
+                    title: translate("Open System Setting"),
+                    onClose: () => close(),
+                  ),
                   content: Text(
                     translate("android_open_battery_optimizations_tip"),
                   ),
@@ -704,8 +722,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
       );
     }
+
     enhancementsTiles.add(
       SettingsTile.switchTile(
+        leading: const Icon(Icons.power_settings_new_rounded),
         initialValue: _enableStartOnBoot,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -719,7 +739,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
         onToggle: (toValue) async {
           if (toValue) {
-            // 1. request kIgnoreBatteryOptimizations
             if (!await AndroidPermissionManager.check(
               kRequestIgnoreBatteryOptimizations,
             )) {
@@ -729,18 +748,13 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 return;
               }
             }
-
-            // 2. request kSystemAlertWindow
             if (!await AndroidPermissionManager.check(kSystemAlertWindow)) {
               if (!await AndroidPermissionManager.request(kSystemAlertWindow)) {
                 return;
               }
             }
-
-            // (Optional) 3. request input permission
           }
           setState(() => _enableStartOnBoot = toValue);
-
           gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, toValue);
         },
       ),
@@ -748,11 +762,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
     enhancementsTiles.add(
       SettingsTile.switchTile(
+        leading: const Icon(CamelliaIcons.terminal),
         initialValue: _showTerminalExtraKeys,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [Text(translate('Show terminal extra keys'))],
-        ),
+        title: Text(translate('Show terminal extra keys')),
         onToggle: (bool v) async {
           await mainSetLocalBoolOption(kOptionEnableShowTerminalExtraKeys, v);
           final newValue = mainGetLocalBoolOptionSync(
@@ -765,7 +777,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       ),
     );
 
-    onFloatingWindowChanged(bool toValue) async {
+    Future<void> onFloatingWindowChanged(bool toValue) async {
       if (toValue) {
         if (!await AndroidPermissionManager.check(kSystemAlertWindow)) {
           if (!await AndroidPermissionManager.request(kSystemAlertWindow)) {
@@ -784,6 +796,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
     enhancementsTiles.add(
       SettingsTile.switchTile(
+        leading: const Icon(Icons.picture_in_picture_alt_rounded),
         initialValue: !_floatingWindowDisabled,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -804,6 +817,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     enhancementsTiles.add(
       _getPopupDialogRadioEntry(
         title: 'Keep screen on',
+        leadingIcon: Icons.lightbulb_outline_rounded,
         list: [
           _RadioEntry('Never', _keepScreenOnToOption(KeepScreenOn.never)),
           _RadioEntry(
@@ -839,415 +853,480 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final disabledSettings = bind.isDisableSettings();
     final hideSecuritySettings =
         bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) == 'Y';
-    final settings = SettingsList(
-      lightTheme: _camelliaSettingsTheme(Brightness.light),
-      darkTheme: _camelliaSettingsTheme(Brightness.dark),
-      contentPadding: const EdgeInsets.fromLTRB(12, 8, 12, 32),
-      sections: [
-        customClientSection,
-        if (!bind.isDisableAccount())
-          SettingsSection(
-            title: Text(translate('Account')),
-            tiles: [
-              SettingsTile(
-                title: Obx(() {
-                  final user = gFFI.userModel;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        user.userName.value.isEmpty
-                            ? translate('Login')
-                            : user.displayNameOrUserName,
-                      ),
-                      if (user.userName.value.isNotEmpty) ...[
-                        const SizedBox(height: 2),
+
+    final settings = ValueListenableBuilder<CamelliaThemeStyle>(
+      valueListenable: MyTheme.themeStyleNotifier,
+      builder: (context, _, _) => SettingsList(
+        lightTheme: _camelliaSettingsTheme(context, Brightness.light),
+        darkTheme: _camelliaSettingsTheme(context, Brightness.dark),
+        contentPadding: const EdgeInsets.fromLTRB(16, 10, 16, 32),
+        sections: [
+          customClientSection,
+          if (!bind.isDisableAccount())
+            SettingsSection(
+              title: Text(translate('Account')),
+              tiles: [
+                SettingsTile(
+                  title: Obx(() {
+                    final user = gFFI.userModel;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          user.email.value.trim().isNotEmpty
-                              ? user.email.value.trim()
-                              : '@${user.userName.value}',
-                          style: Theme.of(context).textTheme.bodySmall,
+                          user.userName.value.isEmpty
+                              ? translate('Login')
+                              : user.displayNameOrUserName,
                         ),
+                        if (user.userName.value.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            user.email.value.trim().isNotEmpty
+                                ? user.email.value.trim()
+                                : '@${user.userName.value}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ],
-                    ],
-                  );
-                }),
-                leading: Obx(() {
-                  final avatar = bind.mainResolveAvatarUrl(
-                    avatar: gFFI.userModel.avatar.value,
-                  );
-                  return buildAvatarWidget(
-                        avatar: avatar,
-                        size: 28,
-                        borderRadius: null,
-                        fallback: Icon(Icons.person),
-                      ) ??
-                      Icon(Icons.person);
-                }),
-                onPressed: (context) {
-                  if (gFFI.userModel.userName.value.isEmpty) {
-                    loginDialog();
-                  } else {
-                    logOutConfirmDialog();
-                  }
-                },
-              ),
-            ],
-          ),
-        SettingsSection(
-          title: Text(translate("Settings")),
-          tiles: [
-            if (!disabledSettings && !_hideNetwork && !_hideServer)
-              SettingsTile(
-                title: Text(translate('ID/Relay Server')),
-                leading: Icon(Icons.cloud),
-                onPressed: (context) {
-                  showServerSettings(gFFI.dialogManager, (callback) async {
-                    _isUsingPublicServer = await bind.mainIsUsingPublicServer();
-                    setState(callback);
-                  });
-                },
-              ),
-            if (!_hideNetwork && !_hideProxy)
-              SettingsTile(
-                title: Text(translate('Socks5/Http(s) Proxy')),
-                leading: Icon(Icons.network_ping),
-                onPressed: (context) {
-                  changeSocks5Proxy();
-                },
-              ),
-            if (isAndroid && !bind.isOutgoingOnly())
-              SettingsTile(
-                title: Text(translate('Deploy')),
-                leading: Icon(Icons.cloud_upload),
-                onPressed: (context) {
-                  showDeployDialog();
-                },
-              ),
-            if (!disabledSettings && !_hideNetwork && !_hideWebSocket)
-              SettingsTile.switchTile(
-                title: Text(translate('Use WebSocket')),
-                initialValue: _allowWebSocket,
-                onToggle: isOptionFixed(kOptionAllowWebSocket)
-                    ? null
-                    : (v) async {
-                        await mainSetBoolOption(kOptionAllowWebSocket, v);
-                        final newValue = await mainGetBoolOption(
-                          kOptionAllowWebSocket,
-                        );
-                        setState(() {
-                          _allowWebSocket = newValue;
-                        });
-                      },
-              ),
-            if (isAndroid && !outgoingOnly && !_isUsingPublicServer)
-              SettingsTile.switchTile(
-                title: Text(translate('Disable UDP')),
-                initialValue: _disableUdp,
-                onToggle: isOptionFixed(kOptionDisableUdp)
-                    ? null
-                    : (v) async {
-                        await bind.mainSetOption(
-                          key: kOptionDisableUdp,
-                          value: v ? 'Y' : 'N',
-                        );
-                        final newValue =
-                            bind.mainGetOptionSync(key: kOptionDisableUdp) ==
-                            'Y';
-                        setState(() {
-                          _disableUdp = newValue;
-                        });
-                      },
-              ),
-            if (!incomingOnly)
-              SettingsTile.switchTile(
-                title: Text(translate('Enable UDP hole punching')),
-                initialValue: _enableUdpPunch,
-                onToggle: (v) async {
-                  await mainSetLocalBoolOption(kOptionEnableUdpPunch, v);
-                  final newValue = mainGetLocalBoolOptionSync(
-                    kOptionEnableUdpPunch,
-                  );
-                  setState(() {
-                    _enableUdpPunch = newValue;
-                  });
-                },
-              ),
-            if (!incomingOnly)
-              SettingsTile.switchTile(
-                title: Text(translate('Enable IPv6 P2P connection')),
-                initialValue: _enableIpv6Punch,
-                onToggle: (v) async {
-                  await mainSetLocalBoolOption(kOptionEnableIpv6Punch, v);
-                  final newValue = mainGetLocalBoolOptionSync(
-                    kOptionEnableIpv6Punch,
-                  );
-                  setState(() {
-                    _enableIpv6Punch = newValue;
-                  });
-                },
-              ),
-            SettingsTile(
-              title: Text(translate('Language')),
-              leading: const Icon(Icons.translate_rounded),
-              onPressed: (context) {
-                showLanguageSettings(gFFI.dialogManager, sheetContext: context);
-              },
-            ),
-            SettingsTile(
-              title: Text(translate('Theme')),
-              value: ValueListenableBuilder<CamelliaThemePreference>(
-                valueListenable: MyTheme.themeNotifier,
-                builder: (context, pref, _) {
-                  final label = switch (pref) {
-                    CamelliaThemePreference.light => translate('Light'),
-                    CamelliaThemePreference.dark => translate('Dark'),
-                    CamelliaThemePreference.midnight => translate(
-                      'OLED Midnight',
-                    ),
-                    CamelliaThemePreference.system => translate(
-                      'Follow System',
-                    ),
-                  };
-                  return Text(label);
-                },
-              ),
-              leading: ValueListenableBuilder<CamelliaThemePreference>(
-                valueListenable: MyTheme.themeNotifier,
-                builder: (context, pref, _) {
-                  final icon = switch (pref) {
-                    CamelliaThemePreference.light => Icons.light_mode_rounded,
-                    CamelliaThemePreference.dark => Icons.dark_mode_rounded,
-                    CamelliaThemePreference.midnight =>
-                      Icons.nights_stay_rounded,
-                    CamelliaThemePreference.system =>
-                      Icons.brightness_auto_rounded,
-                  };
-                  return Icon(icon);
-                },
-              ),
-              onPressed: (context) {
-                showThemeSettings(gFFI.dialogManager, sheetContext: context);
-              },
-            ),
-            if (!bind.isDisableAccount())
-              SettingsTile.switchTile(
-                title: Text(translate('note-at-conn-end-tip')),
-                initialValue: _allowAskForNoteAtEndOfConnection,
-                onToggle: (v) async {
-                  if (v && !gFFI.userModel.isLogin) {
-                    final res = await loginDialog();
-                    if (res != true) return;
-                  }
-                  await mainSetLocalBoolOption(
-                    kOptionAllowAskForNoteAtEndOfConnection,
-                    v,
-                  );
-                  final newValue = mainGetLocalBoolOptionSync(
-                    kOptionAllowAskForNoteAtEndOfConnection,
-                  );
-                  setState(() {
-                    _allowAskForNoteAtEndOfConnection = newValue;
-                  });
-                },
-              ),
-            if (!incomingOnly)
-              SettingsTile.switchTile(
-                title: Text(
-                  translate('keep-awake-during-outgoing-sessions-label'),
+                    );
+                  }),
+                  leading: Obx(() {
+                    final avatar = bind.mainResolveAvatarUrl(
+                      avatar: gFFI.userModel.avatar.value,
+                    );
+                    return buildAvatarWidget(
+                          avatar: avatar,
+                          size: 28,
+                          borderRadius: null,
+                          fallback: const Icon(Icons.person_outline_rounded),
+                        ) ??
+                        const Icon(Icons.person_outline_rounded);
+                  }),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onPressed: (context) {
+                    if (gFFI.userModel.userName.value.isEmpty) {
+                      loginDialog();
+                    } else {
+                      logOutConfirmDialog();
+                    }
+                  },
                 ),
-                initialValue: _preventSleepWhileConnected,
-                onToggle: (v) async {
-                  await mainSetLocalBoolOption(
-                    kOptionKeepAwakeDuringOutgoingSessions,
-                    v,
-                  );
-                  setState(() {
-                    _preventSleepWhileConnected = v;
-                  });
+              ],
+            ),
+          SettingsSection(
+            title: Text(translate('General')),
+            tiles: [
+              SettingsTile(
+                title: Text(translate('Theme')),
+                value: ValueListenableBuilder<CamelliaThemePreference>(
+                  valueListenable: MyTheme.themeNotifier,
+                  builder: (context, pref, _) {
+                    final label = switch (pref) {
+                      CamelliaThemePreference.light => translate('Light'),
+                      CamelliaThemePreference.dark => translate('Dark'),
+                      CamelliaThemePreference.midnight => translate(
+                        'OLED Midnight',
+                      ),
+                      CamelliaThemePreference.system => translate(
+                        'Follow System',
+                      ),
+                    };
+                    return Text(label);
+                  },
+                ),
+                leading: ValueListenableBuilder<CamelliaThemePreference>(
+                  valueListenable: MyTheme.themeNotifier,
+                  builder: (context, pref, _) {
+                    final icon = switch (pref) {
+                      CamelliaThemePreference.light => Icons.light_mode_rounded,
+                      CamelliaThemePreference.dark => Icons.dark_mode_rounded,
+                      CamelliaThemePreference.midnight =>
+                        Icons.nights_stay_rounded,
+                      CamelliaThemePreference.system =>
+                        Icons.brightness_auto_rounded,
+                    };
+                    return Icon(icon);
+                  },
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onPressed: (context) {
+                  showThemeSettings(gFFI.dialogManager, sheetContext: context);
                 },
               ),
-          ],
-        ),
-        if (isAndroid)
-          SettingsSection(
-            title: Text(translate('Hardware Codec')),
-            tiles: [
-              SettingsTile.switchTile(
-                title: Text(translate('Enable hardware codec')),
-                initialValue: _enableHardwareCodec,
-                onToggle: isOptionFixed(kOptionEnableHwcodec)
-                    ? null
-                    : (v) async {
-                        await mainSetBoolOption(kOptionEnableHwcodec, v);
-                        final newValue = await mainGetBoolOption(
-                          kOptionEnableHwcodec,
-                        );
-                        setState(() {
-                          _enableHardwareCodec = newValue;
-                        });
-                      },
+              SettingsTile(
+                title: Text(translate('Theme Style')),
+                value: ValueListenableBuilder<CamelliaThemeStyle>(
+                  valueListenable: MyTheme.themeStyleNotifier,
+                  builder: (context, style, _) {
+                    final label = switch (style) {
+                      CamelliaThemeStyle.auroraFrost => translate(
+                        'Aurora Frost',
+                      ),
+                      CamelliaThemeStyle.obsidianCyber => translate(
+                        'Obsidian Cyber',
+                      ),
+                      CamelliaThemeStyle.nordicTitanium => translate(
+                        'Nordic Titanium',
+                      ),
+                    };
+                    return Text(label);
+                  },
+                ),
+                leading: const Icon(Icons.palette_outlined),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onPressed: (context) {
+                  showThemeStyleSettings(context);
+                },
               ),
+              SettingsTile(
+                title: Text(translate('Language')),
+                leading: const Icon(Icons.translate_rounded),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onPressed: (context) {
+                  showLanguageSettings(
+                    gFFI.dialogManager,
+                    sheetContext: context,
+                  );
+                },
+              ),
+              if (!bind.isDisableAccount())
+                SettingsTile.switchTile(
+                  leading: const Icon(Icons.edit_note_rounded),
+                  title: Text(translate('note-at-conn-end-tip')),
+                  initialValue: _allowAskForNoteAtEndOfConnection,
+                  onToggle: (v) async {
+                    if (v && !gFFI.userModel.isLogin) {
+                      final res = await loginDialog();
+                      if (res != true) return;
+                    }
+                    await mainSetLocalBoolOption(
+                      kOptionAllowAskForNoteAtEndOfConnection,
+                      v,
+                    );
+                    final newValue = mainGetLocalBoolOptionSync(
+                      kOptionAllowAskForNoteAtEndOfConnection,
+                    );
+                    setState(() {
+                      _allowAskForNoteAtEndOfConnection = newValue;
+                    });
+                  },
+                ),
+              if (!incomingOnly)
+                SettingsTile.switchTile(
+                  leading: const Icon(Icons.bedtime_off_rounded),
+                  title: Text(
+                    translate('keep-awake-during-outgoing-sessions-label'),
+                  ),
+                  initialValue: _preventSleepWhileConnected,
+                  onToggle: (v) async {
+                    await mainSetLocalBoolOption(
+                      kOptionKeepAwakeDuringOutgoingSessions,
+                      v,
+                    );
+                    setState(() {
+                      _preventSleepWhileConnected = v;
+                    });
+                  },
+                ),
             ],
           ),
-        if (isAndroid)
           SettingsSection(
-            title: Text(translate("Recording")),
+            title: Text(translate("Network")),
             tiles: [
-              if (!outgoingOnly)
+              if (!disabledSettings && !_hideNetwork && !_hideServer)
+                SettingsTile(
+                  title: Text(translate('ID/Relay Server')),
+                  leading: const Icon(Icons.dns_rounded),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onPressed: (context) {
+                    showServerSettings(gFFI.dialogManager, (callback) async {
+                      _isUsingPublicServer =
+                          await bind.mainIsUsingPublicServer();
+                      if (mounted) setState(callback);
+                    });
+                  },
+                ),
+              if (!_hideNetwork && !_hideProxy)
+                SettingsTile(
+                  title: Text(translate('Socks5/Http(s) Proxy')),
+                  leading: const Icon(CamelliaIcons.tunnel),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onPressed: (context) {
+                    changeSocks5Proxy();
+                  },
+                ),
+              if (isAndroid && !bind.isOutgoingOnly())
+                SettingsTile(
+                  title: Text(translate('Deploy')),
+                  leading: const Icon(CamelliaIcons.shield),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onPressed: (context) {
+                    showDeployDialog();
+                  },
+                ),
+              if (!disabledSettings && !_hideNetwork && !_hideWebSocket)
                 SettingsTile.switchTile(
-                  title: Text(
-                    translate('Automatically record incoming sessions'),
-                  ),
-                  initialValue: _autoRecordIncomingSession,
-                  onToggle: isOptionFixed(kOptionAllowAutoRecordIncoming)
+                  leading: const Icon(Icons.swap_calls_rounded),
+                  title: Text(translate('Use WebSocket')),
+                  initialValue: _allowWebSocket,
+                  onToggle: isOptionFixed(kOptionAllowWebSocket)
                       ? null
                       : (v) async {
-                          await bind.mainSetOption(
-                            key: kOptionAllowAutoRecordIncoming,
-                            value: bool2option(
-                              kOptionAllowAutoRecordIncoming,
-                              v,
-                            ),
-                          );
-                          final newValue = option2bool(
-                            kOptionAllowAutoRecordIncoming,
-                            await bind.mainGetOption(
-                              key: kOptionAllowAutoRecordIncoming,
-                            ),
+                          await mainSetBoolOption(kOptionAllowWebSocket, v);
+                          final newValue = await mainGetBoolOption(
+                            kOptionAllowWebSocket,
                           );
                           setState(() {
-                            _autoRecordIncomingSession = newValue;
+                            _allowWebSocket = newValue;
                           });
                         },
                 ),
-              if (!outgoingOnly)
+              if (isAndroid && !outgoingOnly && !_isUsingPublicServer)
                 SettingsTile.switchTile(
-                  title: Text(
-                    translate('Upload incoming session recordings to server'),
-                  ),
-                  initialValue: _uploadRecordingsToServer,
-                  onToggle: isOptionFixed(kOptionUploadRecordingsToServer)
+                  leading: const Icon(Icons.portable_wifi_off_rounded),
+                  title: Text(translate('Disable UDP')),
+                  initialValue: _disableUdp,
+                  onToggle: isOptionFixed(kOptionDisableUdp)
                       ? null
                       : (v) async {
-                          await mainSetBoolOption(
-                            kOptionUploadRecordingsToServer,
-                            v,
+                          await bind.mainSetOption(
+                            key: kOptionDisableUdp,
+                            value: v ? 'Y' : 'N',
                           );
-                          final newValue = await mainGetBoolOption(
-                            kOptionUploadRecordingsToServer,
-                          );
+                          final newValue =
+                              bind.mainGetOptionSync(key: kOptionDisableUdp) ==
+                              'Y';
                           setState(() {
-                            _uploadRecordingsToServer = newValue;
+                            _disableUdp = newValue;
                           });
                         },
                 ),
               if (!incomingOnly)
                 SettingsTile.switchTile(
-                  title: Text(
-                    translate('Automatically record outgoing sessions'),
-                  ),
-                  initialValue: _autoRecordOutgoingSession,
-                  onToggle: isOptionFixed(kOptionAllowAutoRecordOutgoing)
+                  leading: const Icon(Icons.bolt_rounded),
+                  title: Text(translate('Enable UDP hole punching')),
+                  initialValue: _enableUdpPunch,
+                  onToggle: (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableUdpPunch, v);
+                    final newValue = mainGetLocalBoolOptionSync(
+                      kOptionEnableUdpPunch,
+                    );
+                    setState(() {
+                      _enableUdpPunch = newValue;
+                    });
+                  },
+                ),
+              if (!incomingOnly)
+                SettingsTile.switchTile(
+                  leading: const Icon(Icons.public_rounded),
+                  title: Text(translate('Enable IPv6 P2P connection')),
+                  initialValue: _enableIpv6Punch,
+                  onToggle: (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableIpv6Punch, v);
+                    final newValue = mainGetLocalBoolOptionSync(
+                      kOptionEnableIpv6Punch,
+                    );
+                    setState(() {
+                      _enableIpv6Punch = newValue;
+                    });
+                  },
+                ),
+            ],
+          ),
+          if (!bind.isIncomingOnly()) defaultDisplaySection(),
+          if (isAndroid)
+            SettingsSection(
+              title: Text(translate('Hardware Codec')),
+              tiles: [
+                SettingsTile.switchTile(
+                  leading: const Icon(Icons.memory_rounded),
+                  title: Text(translate('Enable hardware codec')),
+                  initialValue: _enableHardwareCodec,
+                  onToggle: isOptionFixed(kOptionEnableHwcodec)
                       ? null
                       : (v) async {
-                          await bind.mainSetLocalOption(
-                            key: kOptionAllowAutoRecordOutgoing,
-                            value: bool2option(
-                              kOptionAllowAutoRecordOutgoing,
-                              v,
-                            ),
-                          );
-                          final newValue = option2bool(
-                            kOptionAllowAutoRecordOutgoing,
-                            bind.mainGetLocalOption(
-                              key: kOptionAllowAutoRecordOutgoing,
-                            ),
+                          await mainSetBoolOption(kOptionEnableHwcodec, v);
+                          final newValue = await mainGetBoolOption(
+                            kOptionEnableHwcodec,
                           );
                           setState(() {
-                            _autoRecordOutgoingSession = newValue;
+                            _enableHardwareCodec = newValue;
                           });
                         },
                 ),
+              ],
+            ),
+          if (isAndroid)
+            SettingsSection(
+              title: Text(translate("Recording")),
+              tiles: [
+                if (!outgoingOnly)
+                  SettingsTile.switchTile(
+                    leading: const Icon(CamelliaIcons.record),
+                    title: Text(
+                      translate('Automatically record incoming sessions'),
+                    ),
+                    initialValue: _autoRecordIncomingSession,
+                    onToggle: isOptionFixed(kOptionAllowAutoRecordIncoming)
+                        ? null
+                        : (v) async {
+                            await bind.mainSetOption(
+                              key: kOptionAllowAutoRecordIncoming,
+                              value: bool2option(
+                                kOptionAllowAutoRecordIncoming,
+                                v,
+                              ),
+                            );
+                            final newValue = option2bool(
+                              kOptionAllowAutoRecordIncoming,
+                              await bind.mainGetOption(
+                                key: kOptionAllowAutoRecordIncoming,
+                              ),
+                            );
+                            setState(() {
+                              _autoRecordIncomingSession = newValue;
+                            });
+                          },
+                  ),
+                if (!outgoingOnly)
+                  SettingsTile.switchTile(
+                    leading: const Icon(CamelliaIcons.upload),
+                    title: Text(
+                      translate('Upload incoming session recordings to server'),
+                    ),
+                    initialValue: _uploadRecordingsToServer,
+                    onToggle: isOptionFixed(kOptionUploadRecordingsToServer)
+                        ? null
+                        : (v) async {
+                            await mainSetBoolOption(
+                              kOptionUploadRecordingsToServer,
+                              v,
+                            );
+                            final newValue = await mainGetBoolOption(
+                              kOptionUploadRecordingsToServer,
+                            );
+                            setState(() {
+                              _uploadRecordingsToServer = newValue;
+                            });
+                          },
+                  ),
+                if (!incomingOnly)
+                  SettingsTile.switchTile(
+                    leading: const Icon(CamelliaIcons.record),
+                    title: Text(
+                      translate('Automatically record outgoing sessions'),
+                    ),
+                    initialValue: _autoRecordOutgoingSession,
+                    onToggle: isOptionFixed(kOptionAllowAutoRecordOutgoing)
+                        ? null
+                        : (v) async {
+                            await bind.mainSetLocalOption(
+                              key: kOptionAllowAutoRecordOutgoing,
+                              value: bool2option(
+                                kOptionAllowAutoRecordOutgoing,
+                                v,
+                              ),
+                            );
+                            final newValue = option2bool(
+                              kOptionAllowAutoRecordOutgoing,
+                              bind.mainGetLocalOption(
+                                key: kOptionAllowAutoRecordOutgoing,
+                              ),
+                            );
+                            setState(() {
+                              _autoRecordOutgoingSession = newValue;
+                            });
+                          },
+                  ),
+                SettingsTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: Text(translate("Directory")),
+                  description: Text(bind.mainVideoSaveDirectory(root: false)),
+                ),
+              ],
+            ),
+          if (isAndroid &&
+              !disabledSettings &&
+              !outgoingOnly &&
+              !hideSecuritySettings)
+            SettingsSection(title: Text(translate('2FA')), tiles: tfaTiles),
+          if (isAndroid &&
+              !disabledSettings &&
+              !outgoingOnly &&
+              !hideSecuritySettings)
+            SettingsSection(
+              title: Text(translate("Share screen")),
+              tiles: shareScreenTiles,
+            ),
+          if (isAndroid &&
+              !disabledSettings &&
+              !outgoingOnly &&
+              !hideSecuritySettings)
+            SettingsSection(
+              title: Text(translate("Enhancements")),
+              tiles: enhancementsTiles,
+            ),
+          SettingsSection(
+            title: Text(translate("About")),
+            tiles: [
               SettingsTile(
-                title: Text(translate("Directory")),
-                description: Text(bind.mainVideoSaveDirectory(root: false)),
+                onPressed: (context) async {
+                  await launchUrl(Uri.parse(url));
+                },
+                title: Text(
+                  translate("Version: ") + version,
+                  style: CamelliaTypography.tabular(
+                    Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                description: const Text('github.com/camellia-nexus/remote-client'),
+                leading: const Icon(Icons.info_outline_rounded),
+                trailing: const Icon(Icons.open_in_new_rounded, size: 17),
+              ),
+              SettingsTile(
+                title: Text(translate("Build Date")),
+                value: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    _buildDate,
+                    style: CamelliaTypography.tabular(
+                      Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+                leading: const Icon(Icons.schedule_rounded),
+              ),
+              if (isAndroid)
+                SettingsTile(
+                  onPressed: (context) => onCopyFingerprint(_fingerprint),
+                  title: Text(translate("Fingerprint")),
+                  description: Text(
+                    _fingerprint,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: CamelliaTypography.tabular(
+                      Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                  leading: const Icon(Icons.fingerprint_rounded),
+                  trailing: const Icon(CamelliaIcons.copy, size: 16),
+                ),
+              SettingsTile(
+                title: Text(translate("Privacy Statement")),
+                onPressed: (context) => launchUrlString(_privacyUrl),
+                leading: const Icon(CamelliaIcons.shield),
+                trailing: const Icon(Icons.open_in_new_rounded, size: 17),
               ),
             ],
           ),
-        if (isAndroid &&
-            !disabledSettings &&
-            !outgoingOnly &&
-            !hideSecuritySettings)
-          SettingsSection(title: Text('2FA'), tiles: tfaTiles),
-        if (isAndroid &&
-            !disabledSettings &&
-            !outgoingOnly &&
-            !hideSecuritySettings)
-          SettingsSection(
-            title: Text(translate("Share screen")),
-            tiles: shareScreenTiles,
-          ),
-        if (!bind.isIncomingOnly()) defaultDisplaySection(),
-        if (isAndroid &&
-            !disabledSettings &&
-            !outgoingOnly &&
-            !hideSecuritySettings)
-          SettingsSection(
-            title: Text(translate("Enhancements")),
-            tiles: enhancementsTiles,
-          ),
-        SettingsSection(
-          title: Text(translate("About")),
-          tiles: [
-            SettingsTile(
-              onPressed: (context) async {
-                await launchUrl(Uri.parse(url));
-              },
-              title: Text(translate("Version: ") + version),
-              value: Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'github.com/camellia-computing/remote-client',
-                  style: TextStyle(decoration: TextDecoration.underline),
-                ),
-              ),
-              leading: Icon(Icons.info),
-            ),
-            SettingsTile(
-              title: Text(translate("Build Date")),
-              value: Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text(_buildDate),
-              ),
-              leading: Icon(Icons.query_builder),
-            ),
-            if (isAndroid)
-              SettingsTile(
-                onPressed: (context) => onCopyFingerprint(_fingerprint),
-                title: Text(translate("Fingerprint")),
-                value: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(_fingerprint),
-                ),
-                leading: Icon(Icons.fingerprint),
-              ),
-            SettingsTile(
-              title: Text(translate("Privacy Statement")),
-              onPressed: (context) => launchUrlString(
-                'https://github.com/camellia-computing/remote-client/blob/main/docs/privacy.md',
-              ),
-              leading: Icon(Icons.privacy_tip),
-            ),
-          ],
-        ),
-      ],
+        ],
+      ),
     );
     return CamelliaBackdrop(child: settings);
   }
 
   Future<bool> canStartOnBoot() async {
-    // start on boot depends on ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS and SYSTEM_ALERT_WINDOW
     if (_hasIgnoreBattery && !_ignoreBatteryOpt) {
       return false;
     }
@@ -1263,15 +1342,13 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       tiles: [
         SettingsTile(
           title: Text(translate('Display Settings')),
-          leading: Icon(Icons.desktop_windows_outlined),
-          trailing: Icon(Icons.arrow_forward_ios),
+          leading: const Icon(CamelliaIcons.display),
+          trailing: const Icon(Icons.chevron_right_rounded),
           onPressed: (context) {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) {
-                  return _DisplayPage();
-                },
+                builder: (context) => const _DisplayPage(),
               ),
             );
           },
@@ -1279,6 +1356,109 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       ],
     );
   }
+}
+
+Future<void> showThemeStyleSettings(BuildContext sheetContext) async {
+  var currentStyle = MyTheme.getThemeStyle();
+  await showGlassBottomSheet<void>(
+    context: sheetContext,
+    title: translate('Theme Style'),
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setSheetState) {
+        final theme = Theme.of(ctx);
+        final dark = theme.brightness == Brightness.dark;
+        final tokens =
+            theme.extension<AppDesignTokens>() ?? MyTheme.tokens(ctx);
+        final accent = dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
+        final styles = <(CamelliaThemeStyle, String, String, IconData)>[
+          (
+            CamelliaThemeStyle.auroraFrost,
+            translate('Aurora Frost'),
+            translate('Modern Liquid Glass'),
+            Icons.auto_awesome_rounded,
+          ),
+          (
+            CamelliaThemeStyle.obsidianCyber,
+            translate('Obsidian Cyber'),
+            translate('Aerospace Cyberpunk'),
+            Icons.bolt_rounded,
+          ),
+          (
+            CamelliaThemeStyle.nordicTitanium,
+            translate('Nordic Titanium'),
+            translate('Minimalist Brushed Metal'),
+            Icons.layers_rounded,
+          ),
+        ];
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final entry in styles)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: currentStyle == entry.$1
+                          ? accent.withValues(alpha: dark ? 0.18 : 0.10)
+                          : tokens.surfaceContainer.withValues(
+                              alpha: dark ? 0.65 : 0.80,
+                            ),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: currentStyle == entry.$1
+                            ? accent.withValues(alpha: 0.60)
+                            : tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(
+                        entry.$4,
+                        color: currentStyle == entry.$1 ? accent : tokens.muted,
+                      ),
+                      title: Text(
+                        entry.$2,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: currentStyle == entry.$1
+                              ? FontWeight.w700
+                              : FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        entry.$3,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: tokens.muted,
+                        ),
+                      ),
+                      trailing: Icon(
+                        CamelliaIcons.check,
+                        size: 18,
+                        color: currentStyle == entry.$1
+                            ? accent
+                            : Colors.transparent,
+                      ),
+                      onTap: () async {
+                        setSheetState(() => currentStyle = entry.$1);
+                        await MyTheme.changeThemeStyle(entry.$1);
+                        if (ctx.mounted) Navigator.of(ctx).pop();
+                      },
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
 }
 
 void showLanguageSettings(
@@ -1345,6 +1525,7 @@ void showLanguageSettings(
               maxHeight: MediaQuery.sizeOf(ctx).height * 0.62,
             ),
             child: ListView(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
               shrinkWrap: true,
               children: [
                 getRadio<String>(
@@ -1385,8 +1566,8 @@ void showLanguageSettings(
         }
       }
 
-      setLang(v) async {
-        if (lang != v) {
+      void setLang(String? v) async {
+        if (v != null && lang != v) {
           setState(() {
             lang = v;
           });
@@ -1402,9 +1583,9 @@ void showLanguageSettings(
         content: Column(
           children:
               [
-                getRadio(
+                getRadio<String>(
                   Text(translate('Default')),
-                  defaultOptionLang,
+                  defaultOptionLang.toString(),
                   lang,
                   isOptFixed ? null : setLang,
                 ),
@@ -1413,7 +1594,7 @@ void showLanguageSettings(
               validLangs.map((e) {
                 final key = e[0].toString();
                 final name = e[1].toString();
-                return getRadio(
+                return getRadio<String>(
                   Text(translate(name)),
                   key,
                   lang,
@@ -1443,7 +1624,10 @@ void showThemeSettings(
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final theme = Theme.of(ctx);
-          final accent = theme.brightness == Brightness.dark
+          final dark = theme.brightness == Brightness.dark;
+          final tokens =
+              theme.extension<AppDesignTokens>() ?? MyTheme.tokens(ctx);
+          final accent = dark
               ? theme.colorScheme.secondary
               : theme.colorScheme.primary;
           final options = [
@@ -1468,51 +1652,63 @@ void showThemeSettings(
               Icons.nights_stay_rounded,
             ),
           ];
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: options.map((entry) {
-              final selected = themePref == entry.$1;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: GlassSurface(
-                  layer: CamelliaGlassLayer.floating,
-                  showShadow: false,
-                  enableBlur: false,
-                  tintColor: selected ? accent.withValues(alpha: 0.16) : null,
-                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                  child: ListTile(
-                    dense: true,
-                    enabled: !isOptFixed,
-                    leading: Icon(
-                      entry.$3,
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: options.map((entry) {
+                final selected = themePref == entry.$1;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
                       color: selected
-                          ? accent
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    title: Text(
-                      entry.$2,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
+                          ? accent.withValues(alpha: dark ? 0.18 : 0.10)
+                          : tokens.surfaceContainer.withValues(
+                              alpha: dark ? 0.65 : 0.80,
+                            ),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: selected
+                            ? accent.withValues(alpha: 0.60)
+                            : tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
                       ),
                     ),
-                    trailing: Icon(
-                      CamelliaIcons.check,
-                      size: 18,
-                      color: selected ? accent : Colors.transparent,
+                    child: ListTile(
+                      dense: true,
+                      enabled: !isOptFixed,
+                      leading: Icon(
+                        entry.$3,
+                        color: selected ? accent : tokens.muted,
+                      ),
+                      title: Text(
+                        entry.$2,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      trailing: Icon(
+                        CamelliaIcons.check,
+                        size: 18,
+                        color: selected ? accent : Colors.transparent,
+                      ),
+                      onTap: isOptFixed
+                          ? null
+                          : () {
+                              setSheetState(() => themePref = entry.$1);
+                              MyTheme.changeThemePreference(entry.$1);
+                              Navigator.of(ctx).pop();
+                            },
                     ),
-                    onTap: isOptFixed
-                        ? null
-                        : () {
-                            setSheetState(() => themePref = entry.$1);
-                            MyTheme.changeThemePreference(entry.$1);
-                            Navigator.of(ctx).pop();
-                          },
                   ),
-                ),
-              );
-            }).toList(),
+                );
+              }).toList(),
+            ),
           );
         },
       ),
@@ -1585,29 +1781,42 @@ void showAbout(OverlayDialogManager dialogManager) {
   dialogManager.show(
     (setState, close, context) {
       return CustomAlertDialog(
-        title: Text(translate('About Camellia Remote')),
+        title: ModernDialogHeader(
+          icon: Icons.info_outline_rounded,
+          title: translate('About Camellia Remote'),
+          onClose: close,
+        ),
         content: Wrap(
           direction: Axis.vertical,
           spacing: 12,
           children: [
-            Text('${translate('Version')}: $version'),
+            Text(
+              '${translate('Version')}: $version',
+              style: CamelliaTypography.tabular(
+                Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
             InkWell(
               onTap: () async {
-                const url =
-                    'https://github.com/camellia-computing/remote-client';
                 await launchUrl(Uri.parse(url));
               },
-              child: Padding(
+              child: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  'github.com/camellia-computing/remote-client',
+                  'github.com/camellia-nexus/remote-client',
                   style: TextStyle(decoration: TextDecoration.underline),
                 ),
               ),
             ),
           ],
         ),
-        actions: [],
+        actions: [
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            onPressed: close,
+            child: Text(translate('Close')),
+          ),
+        ],
       );
     },
     clickMaskDismiss: true,
@@ -1620,12 +1829,15 @@ class ScanButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(Icons.qr_code_scanner),
+    return GlassIconButton(
+      icon: CamelliaIcons.qrScan,
+      size: 36,
+      iconSize: 18,
+      tooltip: translate('Scan QR'),
       onPressed: () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (BuildContext context) => ScanPage()),
+          MaterialPageRoute(builder: (BuildContext context) => const ScanPage()),
         );
       },
     );
@@ -1642,6 +1854,9 @@ class _DisplayPage extends StatefulWidget {
 class __DisplayPageState extends State<_DisplayPage> {
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        MyTheme.tokens(context);
     final Map codecsJson = jsonDecode(bind.mainSupportedHwdecodings());
     final h264 = codecsJson['h264'] ?? false;
     final h265 = codecsJson['h265'] ?? false;
@@ -1654,25 +1869,56 @@ class __DisplayPageState extends State<_DisplayPage> {
       if (h265) _RadioEntry('H265', 'h265'),
     ];
     RxBool showCustomImageQuality = false.obs;
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          onPressed: () => Navigator.pop(context),
-          icon: Icon(Icons.arrow_back_ios),
+
+    return AppAmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          toolbarHeight: 56,
+          leadingWidth: 52,
+          flexibleSpace: GlassSurface(
+            layer: CamelliaGlassLayer.sidebar,
+            borderRadius: BorderRadius.zero,
+            showShadow: false,
+            strokeWidth: 0,
+            child: const SizedBox.expand(),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(0.85),
+            child: Container(
+              height: 0.85,
+              color: tokens.border.withValues(alpha: 0.72),
+            ),
+          ),
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Center(
+              child: GlassIconButton(
+                icon: CamelliaIcons.arrowBack,
+                size: 36,
+                iconSize: 18,
+                tooltip: translate('Back'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ),
+          title: Text(translate('Display Settings')),
+          centerTitle: true,
         ),
-        title: Text(translate('Display Settings')),
-        centerTitle: true,
-      ),
-      body: CamelliaBackdrop(
-        child: SettingsList(
-          lightTheme: _camelliaSettingsTheme(Brightness.light),
-          darkTheme: _camelliaSettingsTheme(Brightness.dark),
-          contentPadding: const EdgeInsets.fromLTRB(12, 8, 12, 32),
+        body: SettingsList(
+          lightTheme: _camelliaSettingsTheme(context, Brightness.light),
+          darkTheme: _camelliaSettingsTheme(context, Brightness.dark),
+          contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
           sections: [
             SettingsSection(
               tiles: [
                 _getPopupDialogRadioEntry(
                   title: 'Default View Style',
+                  leadingIcon: Icons.fit_screen_rounded,
                   list: [
                     _RadioEntry('Scale original', kRemoteViewStyleOriginal),
                     _RadioEntry('Scale adaptive', kRemoteViewStyleAdaptive),
@@ -1690,6 +1936,7 @@ class __DisplayPageState extends State<_DisplayPage> {
                 ),
                 _getPopupDialogRadioEntry(
                   title: 'Default Image Quality',
+                  leadingIcon: Icons.high_quality_outlined,
                   list: [
                     _RadioEntry('Good image quality', kRemoteImageQualityBest),
                     _RadioEntry('Balanced', kRemoteImageQualityBalanced),
@@ -1723,6 +1970,7 @@ class __DisplayPageState extends State<_DisplayPage> {
                 ),
                 _getPopupDialogRadioEntry(
                   title: 'Default Codec',
+                  leadingIcon: Icons.video_settings_outlined,
                   list: codecList,
                   getter: () => bind.mainGetUserDefaultOption(
                     key: kOptionCodecPreference,
@@ -1797,22 +2045,56 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
   @override
   Widget build(BuildContext context) {
     final glass = CamelliaGlassTokens.of(context);
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        MyTheme.tokens(context);
+
     return AppAmbientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
           elevation: 0,
+          scrolledUnderElevation: 0,
+          toolbarHeight: 56,
+          leadingWidth: 52,
+          flexibleSpace: GlassSurface(
+            layer: CamelliaGlassLayer.sidebar,
+            borderRadius: BorderRadius.zero,
+            showShadow: false,
+            strokeWidth: 0,
+            child: const SizedBox.expand(),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(0.85),
+            child: Container(
+              height: 0.85,
+              color: tokens.border.withValues(alpha: 0.72),
+            ),
+          ),
+          leading: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Center(
+              child: GlassIconButton(
+                icon: CamelliaIcons.arrowBack,
+                size: 36,
+                iconSize: 18,
+                tooltip: translate('Back'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ),
           title: Text(translate('Manage trusted devices')),
           centerTitle: true,
           actions: [
             Obx(
               () => Padding(
-                padding: const EdgeInsets.only(right: 10),
+                padding: const EdgeInsets.only(right: 12),
                 child: GlassIconButton(
                   icon: CamelliaIcons.trash,
-                  size: 38,
-                  iconSize: 19,
+                  size: 36,
+                  iconSize: 18,
                   accentColor: glass.statusAlert,
                   tooltip: translate('Delete'),
                   onPressed: selectedDevices.isEmpty
@@ -1835,7 +2117,9 @@ class __ManageTrustedDevicesState extends State<_ManageTrustedDevices> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return Center(child: Text('Error: ${snapshot.error}'));
+              return Center(
+                child: Text('${translate("Error")}: ${snapshot.error}'),
+              );
             }
             return SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -1862,6 +2146,7 @@ SettingsTile _getPopupDialogRadioEntry({
   required List<_RadioEntry> list,
   required _RadioEntryGetter getter,
   required _RadioEntrySetter? asyncSetter,
+  IconData? leadingIcon,
   Widget? tail,
   RxBool? showTail,
   String? notCloseValue,
@@ -1869,7 +2154,7 @@ SettingsTile _getPopupDialogRadioEntry({
   RxString groupValue = ''.obs;
   RxString valueText = ''.obs;
 
-  init() {
+  void init() {
     groupValue.value = getter();
     final e = list.firstWhereOrNull((e) => e.value == groupValue.value);
     if (e != null) {
@@ -1902,20 +2187,26 @@ SettingsTile _getPopupDialogRadioEntry({
               };
 
         return Obx(
-          () => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ...list.map(
-                (e) => getRadio(
-                  Text(translate(e.label)),
-                  e.value,
-                  groupValue.value,
-                  onChanged,
+          () => Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ...list.map(
+                  (e) => getRadio(
+                    Text(translate(e.label)),
+                    e.value,
+                    groupValue.value,
+                    onChanged,
+                  ),
                 ),
-              ),
-              if (tail != null && showTail != null && showTail.value == true)
-                Padding(padding: const EdgeInsets.only(top: 10), child: tail),
-            ],
+                if (tail != null && showTail != null && showTail.value == true)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+                    child: tail,
+                  ),
+              ],
+            ),
           ),
         );
       },
@@ -1923,7 +2214,9 @@ SettingsTile _getPopupDialogRadioEntry({
   }
 
   return SettingsTile(
+    leading: leadingIcon != null ? Icon(leadingIcon) : null,
     title: Text(translate(title)),
+    trailing: const Icon(Icons.chevron_right_rounded),
     onPressed: asyncSetter == null ? null : (context) => showSheet(context),
     value: Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),

@@ -13,22 +13,12 @@ import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/desktop/pages/view_camera_page.dart';
 import 'package:camellia_remote_app/desktop/widgets/remote_toolbar.dart';
 import 'package:camellia_remote_app/desktop/widgets/tabbar_widget.dart';
-import 'package:camellia_remote_app/desktop/widgets/material_mod_popup_menu.dart'
-    as mod_menu;
-import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:camellia_remote_app/utils/sanitizer.dart';
 import 'package:get/get.dart';
-import 'package:bot_toast/bot_toast.dart';
 
 import '../../models/platform_model.dart';
-
-class _MenuTheme {
-  // kMinInteractiveDimension
-  static const double height = 34.0;
-  static const double dividerHeight = 12.0;
-}
 
 class ViewCameraTabPage extends StatefulWidget {
   final Map<String, dynamic> params;
@@ -40,11 +30,12 @@ class ViewCameraTabPage extends StatefulWidget {
 }
 
 class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
-  final tabController =
-      Get.put(DesktopTabController(tabType: DesktopTabType.viewCamera));
+  final tabController = Get.put(
+    DesktopTabController(tabType: DesktopTabType.viewCamera),
+  );
   final contentKey = UniqueKey();
-  static const IconData selectedIcon = Icons.desktop_windows_sharp;
-  static const IconData unselectedIcon = Icons.desktop_windows_outlined;
+  static const IconData selectedIcon = CamelliaIcons.camera;
+  static const IconData unselectedIcon = CamelliaIcons.camera;
 
   String? peerId;
   bool _isScreenRectSet = false;
@@ -70,40 +61,56 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         if (viewCameraPage is ViewCameraPage) {
           final ffi = viewCameraPage.ffi;
           bind.setCurSessionId(sessionId: ffi.sessionId);
+          bind.sessionSetCustomFps(sessionId: ffi.sessionId, fps: 0);
+          bind.sessionRefresh(sessionId: ffi.sessionId, display: _display ?? 0);
         }
-        WindowController.fromWindowId(params['windowId'])
-            .setTitle(getWindowNameWithId(id));
+        // Throttle unselected camera tabs so background streams don't waste decode cycles.
+        for (final tab in tabController.state.value.tabs) {
+          if (tab.key != id) {
+            final page = tabController.widget(tab.key);
+            if (page is ViewCameraPage) {
+              bind.sessionSetCustomFps(sessionId: page.ffi.sessionId, fps: 1);
+            }
+          }
+        }
+        WindowController.fromWindowId(
+          params['windowId'],
+        ).setTitle(getWindowNameWithId(id));
         UnreadChatCountState.find(id).value = 0;
       };
-      tabController.add(TabInfo(
-        key: peerId!,
-        label: peerId!,
-        selectedIcon: selectedIcon,
-        unselectedIcon: unselectedIcon,
-        onTabCloseButton: () async {
-          if (await desktopTryShowTabAuditDialogCloseCancelled(
+      tabController.add(
+        TabInfo(
+          key: peerId!,
+          label: peerId!,
+          selectedIcon: selectedIcon,
+          unselectedIcon: unselectedIcon,
+          onTabCloseButton: () async {
+            if (await desktopTryShowTabAuditDialogCloseCancelled(
+              id: peerId!,
+              tabController: tabController,
+            )) {
+              return;
+            }
+            tabController.closeBy(peerId!);
+          },
+          page: ViewCameraPage(
+            key: ValueKey(peerId),
             id: peerId!,
+            sessionId: sessionId == null
+                ? null
+                : SessionID.fromString(sessionId),
+            tabWindowId: tabWindowId,
+            display: display,
+            displays: displays?.cast<int>(),
+            password: params['password'],
+            toolbarState: ToolbarState(),
             tabController: tabController,
-          )) {
-            return;
-          }
-          tabController.closeBy(peerId!);
-        },
-        page: ViewCameraPage(
-          key: ValueKey(peerId),
-          id: peerId!,
-          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
-          tabWindowId: tabWindowId,
-          display: display,
-          displays: displays?.cast<int>(),
-          password: params['password'],
-          toolbarState: ToolbarState(),
-          tabController: tabController,
-          connToken: params['connToken'],
-          forceRelay: params['forceRelay'],
-          isSharedPassword: params['isSharedPassword'],
+            connToken: params['connToken'],
+            forceRelay: params['forceRelay'],
+            isSharedPassword: params['isSharedPassword'],
+          ),
         ),
-      ));
+      );
       _update_remote_count();
       // CRED-006: Redact transient credentials immediately after consumption
       params['password'] = null;
@@ -133,6 +140,9 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
 
   @override
   Widget build(BuildContext context) {
+    final tokens =
+        Theme.of(context).extension<AppDesignTokens>() ??
+        AppVisual.tokens(context);
     final child = Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: DesktopTab(
@@ -146,47 +156,53 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           final connectionType = ConnectionTypeState.find(key);
           if (!connectionType.isValid()) {
             return Row(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                icon,
-                label,
-              ],
+              children: [icon, label],
             );
           } else {
-            bool secure =
+            final secure =
                 connectionType.secure.value == ConnectionType.strSecure;
-            bool direct =
+            final direct =
                 connectionType.direct.value == ConnectionType.strDirect;
-            String msgConn = getConnectionText(
-                secure, direct, connectionType.stream_type.value);
+            final msgConn = getConnectionText(
+              secure,
+              direct,
+              connectionType.stream_type.value,
+            );
             var msgFingerprint = '${translate('Fingerprint')}:\n';
             var fingerprint = FingerprintState.find(key).value;
             if (fingerprint.isEmpty) {
               fingerprint = 'N/A';
             }
             if (fingerprint.length > 5 * 8) {
-              var first = fingerprint.substring(0, 39);
-              var second = fingerprint.substring(40);
+              final first = fingerprint.substring(0, 39);
+              final second = fingerprint.substring(40);
               msgFingerprint += '$first\n$second';
             } else {
               msgFingerprint += fingerprint;
             }
 
             final tab = Row(
+              mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 icon,
                 Tooltip(
                   message: '$msgConn\n$msgFingerprint',
-                  child: CamelliaIcons.securityBadge(
-                    secure: secure,
-                    direct: direct,
-                    size: themeConf.iconSize,
-                  ).paddingOnly(right: 5),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: CamelliaIcons.securityBadge(
+                      secure: secure,
+                      direct: direct,
+                      size: 15,
+                    ),
+                  ),
                 ),
                 label,
-                unreadMessageCountBuilder(UnreadChatCountState.find(key))
-                    .marginOnly(left: 4),
+                unreadMessageCountBuilder(
+                  UnreadChatCountState.find(key),
+                ).marginOnly(left: 4),
               ],
             );
 
@@ -195,16 +211,20 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
                 if (e.kind != ui.PointerDeviceKind.mouse) {
                   return;
                 }
-                final viewCameraPage = tabController.state.value.tabs
-                    .firstWhere((tab) => tab.key == key)
-                    .page as ViewCameraPage;
+                final matched = tabController.state.value.tabs.firstWhereOrNull(
+                  (tab) => tab.key == key,
+                );
+                if (matched == null || matched.page is! ViewCameraPage) {
+                  return;
+                }
+                final viewCameraPage = matched.page as ViewCameraPage;
                 if (viewCameraPage.ffi.ffiModel.pi.isSet.isTrue &&
                     e.buttons == 2) {
-                  showRightMenu(
-                    (CancelFunc cancelFunc) {
-                      return _tabMenuBuilder(key, cancelFunc);
-                    },
-                    target: e.position,
+                  showFrostedContextMenu(
+                    context: context,
+                    globalPosition: e.position,
+                    itemsBuilder: (closeMenu) =>
+                        _buildTabContextMenuItems(key, closeMenu),
                   );
                 }
               },
@@ -218,88 +238,93 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         ? buildVirtualWindowFrame(context, child)
         : workaroundWindowBorder(
             context,
-            Obx(() => Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                        width: stateGlobal.windowBorderWidth.value),
+            Obx(
+              () => Container(
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: tokens.border,
+                    width: stateGlobal.windowBorderWidth.value,
                   ),
-                  child: child,
-                )));
+                ),
+                child: child,
+              ),
+            ),
+          );
     return isMacOS
         ? tabWidget
-        : Obx(() => SubWindowDragToResizeArea(
+        : Obx(
+            () => SubWindowDragToResizeArea(
               key: contentKey,
               child: tabWidget,
-              // Specially configured for a better resize area and remote control.
               childPadding: kDragToResizeAreaPadding,
               resizeEdgeSize: stateGlobal.resizeEdgeSize.value,
               enableResizeEdges: subWindowManagerEnableResizeEdges,
               windowId: stateGlobal.windowId,
-            ));
+            ),
+          );
   }
 
-  // Note: Some dup code to ../widgets/remote_toolbar
-  Widget _tabMenuBuilder(String key, CancelFunc cancelFunc) {
-    final List<MenuEntryBase<String>> menu = [];
-    const EdgeInsets padding = EdgeInsets.only(left: 8.0, right: 5.0);
-    final viewCameraPage = tabController.state.value.tabs
-        .firstWhere((tab) => tab.key == key)
-        .page as ViewCameraPage;
+  List<Widget> _buildTabContextMenuItems(String key, VoidCallback closeMenu) {
+    final matched = tabController.state.value.tabs.firstWhereOrNull(
+      (tab) => tab.key == key,
+    );
+    if (matched == null || matched.page is! ViewCameraPage) {
+      return const [];
+    }
+    final viewCameraPage = matched.page as ViewCameraPage;
     final ffi = viewCameraPage.ffi;
     final sessionId = ffi.sessionId;
     final toolbarState = viewCameraPage.toolbarState;
-    menu.addAll([
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Obx(() => Text(
-              translate(
-                  toolbarState.hide.isTrue ? 'Show Toolbar' : 'Hide Toolbar'),
-              style: style,
-            )),
-        proc: () {
-          toolbarState.switchHide(sessionId);
-          cancelFunc();
-        },
-        padding: padding,
+    final items = <Widget>[
+      Obx(
+        () => FrostedMenuItem(
+          label: translate(
+            toolbarState.hide.isTrue ? 'Show Toolbar' : 'Hide Toolbar',
+          ),
+          icon: toolbarState.hide.isTrue
+              ? CamelliaIcons.eye
+              : CamelliaIcons.eyeOff,
+          onTap: () {
+            closeMenu();
+            toolbarState.switchHide(sessionId);
+          },
+        ),
       ),
-    ]);
+    ];
 
     if (tabController.state.value.tabs.length > 1) {
-      final splitAction = MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Text(
-          translate('Move tab to new window'),
-          style: style,
-        ),
-        proc: () async {
-          await DesktopMultiWindow.invokeMethod(
+      items.add(
+        FrostedMenuItem(
+          label: translate('Move tab to new window'),
+          icon: Icons.open_in_new_rounded,
+          onTap: () async {
+            closeMenu();
+            await DesktopMultiWindow.invokeMethod(
               kMainWindowId,
               kWindowEventMoveTabToNewWindow,
-              '${windowId()},$key,$sessionId,ViewCamera');
-          cancelFunc();
-        },
-        padding: padding,
+              '${windowId()},$key,$sessionId,ViewCamera',
+            );
+          },
+        ),
       );
-      menu.insert(1, splitAction);
     }
 
-    menu.addAll([
-      MenuEntryDivider<String>(),
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Text(
-          translate('Copy Fingerprint'),
-          style: style,
-        ),
-        proc: () => onCopyFingerprint(FingerprintState.find(key).value),
-        padding: padding,
-        dismissOnClicked: true,
-        dismissCallback: cancelFunc,
+    items.addAll([
+      const FrostedMenuDivider(),
+      FrostedMenuItem(
+        label: translate('Copy Fingerprint'),
+        icon: Icons.fingerprint_rounded,
+        onTap: () {
+          closeMenu();
+          onCopyFingerprint(FingerprintState.find(key).value);
+        },
       ),
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Text(
-          translate('Close'),
-          style: style,
-        ),
-        proc: () async {
+      FrostedMenuItem(
+        label: translate('Close'),
+        icon: CamelliaIcons.close,
+        destructive: true,
+        onTap: () async {
+          closeMenu();
           if (await desktopTryShowTabAuditDialogCloseCancelled(
             id: key,
             tabController: tabController,
@@ -307,41 +332,37 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
             return;
           }
           tabController.closeBy(key);
-          cancelFunc();
         },
-        padding: padding,
-      )
+      ),
     ]);
-
-    return mod_menu.PopupMenu<String>(
-      items: menu
-          .map((entry) => entry.build(
-              context,
-              MenuConfig(
-                commonColor: Theme.of(context).colorScheme.primary,
-                height: _MenuTheme.height,
-                dividerHeight: _MenuTheme.dividerHeight,
-              )))
-          .expand((i) => i)
-          .toList(),
-    );
+    return items;
   }
 
   void onRemoveId(String id) async {
     if (tabController.state.value.tabs.isEmpty) {
-      // Keep calling until the window status is hidden.
-      //
-      // Workaround for Windows:
-      // If you click other buttons and close in msgbox within a very short period of time, the close may fail.
-      // `await WindowController.fromWindowId(windowId()).close();`.
       Future<void> loopCloseWindow() async {
         int c = 0;
-        final windowController = WindowController.fromWindowId(windowId());
+        final wId = windowId();
+        try {
+          await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+            "id": wId,
+          });
+        } catch (e) {
+          debugPrint("Failed to notify main window on camera window close: $e");
+        }
+        final windowController = WindowController.fromWindowId(wId);
+        try {
+          await windowController.setPreventClose(false);
+        } catch (_) {}
         while (c < 20 &&
             tabController.state.value.tabs.isEmpty &&
             (!await windowController.isHidden())) {
-          await windowController.close();
-          await Future.delayed(Duration(milliseconds: 100));
+          try {
+            await windowController.close();
+          } catch (_) {
+            break;
+          }
+          await Future.delayed(const Duration(milliseconds: 100));
           c++;
         }
       }
@@ -365,23 +386,26 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       )) {
         return false;
       }
+      tabController.clear();
+      return true;
     }
     if (connLength <= 0) {
       tabController.clear();
       return true;
-    } else {
-      final bool res;
-      if (!option2bool(kOptionEnableConfirmClosingTabs,
-          bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs))) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog();
-      }
-      if (res) {
-        tabController.clear();
-      }
-      return res;
     }
+    final bool res;
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      res = true;
+    } else {
+      res = await closeConfirmDialog(isSessionWindow: true);
+    }
+    if (res) {
+      tabController.clear();
+    }
+    return res;
   }
 
   _update_remote_count() =>
@@ -389,10 +413,10 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
 
   Future<dynamic> _remoteMethodHandler(call, fromWindowId) async {
     debugPrint(
-        "[View Camera Page] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId");
+      "[View Camera Page] call ${call.method} with args ${LogSanitizer.sanitize(call.arguments.toString())} from window $fromWindowId",
+    );
 
     dynamic returnValue;
-    // for simplify, just replace connectionId
     if (call.method == kWindowEventNewViewCamera) {
       final args = jsonDecode(call.arguments);
       final id = args['id'];
@@ -407,46 +431,56 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           await WindowController.fromWindowId(windowId()).setFullscreen(false);
           stateGlobal.setFullscreen(false, procWnd: false);
         }
-        await setNewConnectWindowFrame(windowId(), id!, prePeerCount,
-            WindowType.ViewCamera, display, screenRect);
+        await setNewConnectWindowFrame(
+          windowId(),
+          id!,
+          prePeerCount,
+          WindowType.ViewCamera,
+          display,
+          screenRect,
+        );
         Future.delayed(Duration(milliseconds: isWindows ? 100 : 0), () async {
           await windowOnTop(windowId());
         });
       });
       ConnectionTypeState.init(id);
-      tabController.add(TabInfo(
-        key: id,
-        label: id,
-        selectedIcon: selectedIcon,
-        unselectedIcon: unselectedIcon,
-        onTabCloseButton: () async {
-          if (await desktopTryShowTabAuditDialogCloseCancelled(
+      tabController.add(
+        TabInfo(
+          key: id,
+          label: id,
+          selectedIcon: selectedIcon,
+          unselectedIcon: unselectedIcon,
+          onTabCloseButton: () async {
+            if (await desktopTryShowTabAuditDialogCloseCancelled(
+              id: id,
+              tabController: tabController,
+            )) {
+              return;
+            }
+            tabController.closeBy(id);
+          },
+          page: ViewCameraPage(
+            key: ValueKey(id),
             id: id,
+            sessionId: sessionId == null
+                ? null
+                : SessionID.fromString(sessionId),
+            tabWindowId: tabWindowId,
+            display: display,
+            displays: displays?.cast<int>(),
+            password: args['password'],
+            toolbarState: ToolbarState(),
             tabController: tabController,
-          )) {
-            return;
-          }
-          tabController.closeBy(id);
-        },
-        page: ViewCameraPage(
-          key: ValueKey(id),
-          id: id,
-          sessionId: sessionId == null ? null : SessionID.fromString(sessionId),
-          tabWindowId: tabWindowId,
-          display: display,
-          displays: displays?.cast<int>(),
-          password: args['password'],
-          toolbarState: ToolbarState(),
-          tabController: tabController,
-          connToken: args['connToken'],
-          forceRelay: args['forceRelay'],
-          isSharedPassword: args['isSharedPassword'],
+            connToken: args['connToken'],
+            forceRelay: args['forceRelay'],
+            isSharedPassword: args['isSharedPassword'],
+          ),
         ),
-      ));
+      );
       args['password'] = null;
       args['connToken'] = null;
     } else if (call.method == kWindowDisableGrabKeyboard) {
-      // ???
+      // no-op
     } else if (call.method == "onDestroy") {
       tabController.clear();
     } else if (call.method == kWindowActionRebuild) {
@@ -461,8 +495,11 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       final args = jsonDecode(call.arguments);
       final id = args['id'];
       final display = args['display'];
-      final jumpOk =
-          tabController.jumpToByKeyAndDisplay(id, display, isCamera: true);
+      final jumpOk = tabController.jumpToByKeyAndDisplay(
+        id,
+        display,
+        isCamera: true,
+      );
       if (jumpOk) {
         windowOnTop(windowId());
       }
@@ -478,14 +515,15 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           .toList()
           .join(';');
     } else if (call.method == kWindowEventGetCachedSessionData) {
-      // Ready to show new window and close old tab.
       final args = jsonDecode(call.arguments);
       final id = args['id'];
       final close = args['close'];
       try {
-        final viewCameraPage = tabController.state.value.tabs
-            .firstWhere((tab) => tab.key == id)
-            .page as ViewCameraPage;
+        final viewCameraPage =
+            tabController.state.value.tabs
+                    .firstWhere((tab) => tab.key == id)
+                    .page
+                as ViewCameraPage;
         returnValue = viewCameraPage.ffi.ffiModel.cachedPeerData.toString();
       } catch (e) {
         debugPrint('Failed to get cached session data: $e');
@@ -498,8 +536,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       final args = jsonDecode(call.arguments);
       final id = args['id'];
       try {
-        tabController.state.value.tabs
-            .firstWhere((tab) => tab.key == id);
+        tabController.state.value.tabs.firstWhere((tab) => tab.key == id);
         closeSessionOnDispose[id] = false;
         tabController.closeBy(id);
       } catch (e) {
@@ -518,15 +555,17 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           frame = await wc.getFrame();
         } catch (e) {
           debugPrint(
-              "Failed to get frame of window $windowId, it may be hidden");
+            "Failed to get frame of window $windowId, it may be hidden",
+          );
         }
         if (frame != null) {
           ffi.cursorModel.moveLocal(0, 0);
           final coords = RemoteWindowCoords(
-              frame,
-              CanvasCoords.fromCanvasModel(ffi.canvasModel),
-              CursorCoords.fromCursorModel(ffi.cursorModel),
-              displayRect);
+            frame,
+            CanvasCoords.fromCanvasModel(ffi.canvasModel),
+            CursorCoords.fromCursorModel(ffi.cursorModel),
+            displayRect,
+          );
           returnValue = jsonEncode(coords.toJson());
         }
       }

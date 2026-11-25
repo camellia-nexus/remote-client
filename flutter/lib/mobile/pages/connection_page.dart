@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:auto_size_text_field/auto_size_text_field.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/formatter/id_formatter.dart';
 import 'package:camellia_remote_app/common/widgets/connection_page_title.dart';
-import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:get/get.dart';
@@ -19,15 +20,20 @@ import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'home_page.dart';
+import 'scan_page.dart';
 
 enum _MobileConnectMode { desktop, files, camera, terminal }
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
-  const ConnectionPage({super.key, required this.appBarActions, this.shareSection});
+  const ConnectionPage({
+    super.key,
+    required this.appBarActions,
+    this.shareSection,
+  });
 
   @override
-  Icon get icon => const Icon(Icons.connected_tv_outlined);
+  Icon get icon => const Icon(CamelliaIcons.screen);
 
   @override
   String get title => translate("Connection");
@@ -42,7 +48,6 @@ class ConnectionPage extends StatefulWidget implements PageShape {
 
 /// State for the connection page.
 class _ConnectionPageState extends State<ConnectionPage> {
-  /// Controller for the id input bar.
   final _idController = IDTextEditingController();
   final RxBool _idEmpty = true.obs;
   final RxBool _idFocused = false.obs;
@@ -74,7 +79,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final lastRemoteId = await bind.mainGetLastRemoteId();
-        if (lastRemoteId != _idController.id) {
+        if (mounted && lastRemoteId != _idController.id) {
           setState(() {
             _idController.id = lastRemoteId;
           });
@@ -87,62 +92,57 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
-    return CustomScrollView(
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-          sliver: SliverList(
-            delegate: SliverChildListDelegate([
-              _buildRemoteIDTextField(),
-              if (widget.shareSection != null) ...[
-                const SizedBox(height: 12),
-                CamelliaPageHeader(
-                  title: translate('Share screen'),
-                  subtitle: translate('Your Device'),
-                  leading: const AppIconBadge(
-                    icon: Icons.screen_share_rounded,
-                    colors: AppVisual.securityGradient,
-                    size: 36,
-                    iconSize: 19,
-                  ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compactVertical =
+            constraints.maxHeight < 460 || widget.shareSection != null;
+
+        if (!compactVertical) {
+          // Non-contending studio split: Connect Deck stays pinned at top while
+          // PeerTabPage owns the single vertical scroll surface below.
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                child: _buildRemoteIDTextField(),
+              ),
+              const Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, 2, 16, 4),
+                  child: PeerTabPage(),
                 ),
-                const SizedBox(height: 10),
-                widget.shareSection!,
-              ],
-            ]),
-          ),
-        ),
-        SliverFillRemaining(
-          hasScrollBody: true,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                CamelliaPageHeader(
-                  title: translate('Devices'),
-                  subtitle: translate('Recent and trusted connections'),
-                  leading: const AppIconBadge(
-                    icon: Icons.devices_other_rounded,
-                    colors: AppVisual.identityGradient,
-                    size: 36,
-                    iconSize: 19,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                const Expanded(child: PeerTabPage()),
-              ],
-            ),
-          ),
-        ),
-      ],
+              ),
+            ],
+          );
+        }
+
+        // Compact landscape / embedded shareSection fallback with bounded peer height.
+        final peerHeight = math.max(260.0, constraints.maxHeight - 72.0);
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+          children: [
+            _buildRemoteIDTextField(),
+            if (widget.shareSection != null) ...[
+              const SizedBox(height: 12),
+              CamelliaPageHeader(
+                title: translate('Share screen'),
+                subtitle: translate('Your Device'),
+              ),
+              const SizedBox(height: 8),
+              widget.shareSection!,
+            ],
+            const SizedBox(height: 10),
+            SizedBox(height: peerHeight, child: const PeerTabPage()),
+          ],
+        );
+      },
     );
   }
 
-  /// Callback for the connect button.
   /// Connects to the selected peer using the active session mode.
   void onConnect() {
-    var id = _idController.id;
+    final id = _idController.id.trim();
     HapticFeedback.mediumImpact();
     connect(
       context,
@@ -157,14 +157,27 @@ class _ConnectionPageState extends State<ConnectionPage> {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final raw = data?.text?.trim() ?? '';
     if (raw.isEmpty || !mounted) return;
+    final cleaned = raw.replaceAll(RegExp(r'[\s\-]+'), '');
     final numericMatch = RegExp(r'\d[\d\s\-]{4,}\d').firstMatch(raw);
-    final extracted = numericMatch != null
-        ? numericMatch.group(0)!.replaceAll(RegExp(r'[\s\-]'), '')
-        : raw;
+    final String extracted;
+    if (RegExp(r'^[\d\s\-]+$').hasMatch(raw) && cleaned.isNotEmpty) {
+      extracted = cleaned;
+    } else if (numericMatch != null) {
+      extracted = numericMatch.group(0)!.replaceAll(RegExp(r'[\s\-]+'), '');
+    } else {
+      extracted = raw.split(RegExp(r'\s+')).first;
+    }
     HapticFeedback.lightImpact();
     setState(() {
       _idController.id = extracted;
     });
+  }
+
+  void _openQrScanner() {
+    HapticFeedback.selectionClick();
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const ScanPage()));
   }
 
   String _modeLabel(_MobileConnectMode mode) => switch (mode) {
@@ -175,17 +188,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
   };
 
   IconData _modeIcon(_MobileConnectMode mode) => switch (mode) {
-    _MobileConnectMode.desktop => Icons.desktop_windows_rounded,
-    _MobileConnectMode.files => Icons.folder_copy_rounded,
-    _MobileConnectMode.camera => Icons.videocam_rounded,
-    _MobileConnectMode.terminal => Icons.terminal_rounded,
-  };
-
-  Color _modeAccent(_MobileConnectMode mode) => switch (mode) {
-    _MobileConnectMode.desktop => CamelliaColors.indigo,
-    _MobileConnectMode.files => CamelliaColors.azure,
-    _MobileConnectMode.camera => CamelliaColors.aqua,
-    _MobileConnectMode.terminal => CamelliaColors.orchid,
+    _MobileConnectMode.desktop => CamelliaIcons.display,
+    _MobileConnectMode.files => CamelliaIcons.transfer,
+    _MobileConnectMode.camera => CamelliaIcons.camera,
+    _MobileConnectMode.terminal => CamelliaIcons.terminal,
   };
 
   void onFocusChanged() {
@@ -197,7 +203,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
 
       final textLength = _idEditingController.value.text.length;
-      // Select all to facilitate removing text, just following the behavior of address input of chrome.
       _idEditingController.selection = TextSelection(
         baseOffset: 0,
         extentOffset: textLength,
@@ -205,19 +210,26 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
-  /// UI for the remote ID TextField.
-  /// Search for a peer and connect to it if the id exists.
+  /// Studio Connect Deck: tactile tabular ID field, quick Paste / QR / Clear,
+  /// segmented session mode selector, and full-width primary Connect CTA.
   Widget _buildRemoteIDTextField() {
-    final glass = CamelliaGlassTokens.of(context);
-    final activeAccent = _modeAccent(_connectMode);
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final compactSegments = screenWidth < 390;
+
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
         constraints: kMobilePageConstraints,
         child: GlassCard(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-          elevated: true,
+          padding: const EdgeInsets.all(14),
+          elevated: false,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -225,113 +237,105 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 getConnectionPageTitle(
                   context,
                   true,
-                ).marginOnly(bottom: 12, left: 2),
-              if (!isWebDesktop)
-                Row(
-                  children: [
-                    const CamelliaAnimatedBrandMark(size: 38),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            translate('Control Remote Desktop'),
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            translate('Remote ID'),
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: AppVisual.subduedText(context),
-                                ),
-                          ),
-                        ],
+                ).marginOnly(bottom: 10, left: 2)
+              else
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      CamelliaVectorIcon(
+                        CamelliaGlyph.remoteDesktop,
+                        size: 18,
+                        color: accent,
+                        duotone: true,
                       ),
-                    ),
-                    GlassIconButton(
-                      icon: Icons.content_paste_rounded,
-                      tooltip: translate('Paste'),
-                      size: 36,
-                      iconSize: 17,
-                      onPressed: _pasteFromClipboard,
-                    ),
-                  ],
-                ).marginOnly(bottom: 14),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          translate('Control Remote Desktop'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.1,
+                          ),
+                        ),
+                      ),
+                      GlassIconButton(
+                        icon: CamelliaIcons.paste,
+                        tooltip: translate('Paste'),
+                        size: 34,
+                        iconSize: 16,
+                        onPressed: _pasteFromClipboard,
+                      ),
+                      if (!isWeb) ...[
+                        const SizedBox(width: 6),
+                        GlassIconButton(
+                          icon: CamelliaIcons.qrScan,
+                          tooltip: translate('Scan QR'),
+                          size: 34,
+                          iconSize: 16,
+                          onPressed: _openQrScanner,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               Obx(
                 () => AnimatedContainer(
                   duration: CamelliaMotion.resolve(
                     context,
-                    CamelliaMotion.state,
+                    CamelliaMotion.hover,
                   ),
-                  curve: CamelliaMotion.springSnappy,
+                  curve: CamelliaMotion.standard,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+                    horizontal: 12,
+                    vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: AppVisual.inset(context).withValues(alpha: 0.72),
-                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                    color: tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.72 : 0.82,
+                    ),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
                     border: Border.all(
                       color: _idFocused.value
-                          ? activeAccent
-                          : glass.specularBottom,
-                      width: _idFocused.value ? 1.5 : 1.0,
+                          ? accent.withValues(alpha: 0.85)
+                          : tokens.border.withValues(alpha: 0.85),
+                      width: _idFocused.value ? 1.2 : 0.85,
                     ),
                     boxShadow: _idFocused.value
                         ? [
                             BoxShadow(
-                              color: activeAccent.withValues(alpha: 0.20),
-                              blurRadius: 12,
-                              spreadRadius: 1,
+                              color: accent.withValues(
+                                alpha: dark ? 0.22 : 0.14,
+                              ),
+                              blurRadius: 10,
                             ),
                           ]
                         : const [],
                   ),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final optionsWidth = (constraints.maxWidth - 96)
-                          .clamp(220, 420)
-                          .toDouble();
+                      final optionsWidth = (constraints.maxWidth - 40)
+                          .clamp(200.0, 440.0);
                       return Row(
                         children: <Widget>[
                           Expanded(child: _buildAutocomplete(optionsWidth)),
                           Obx(
-                            () => Offstage(
-                              offstage: _idEmpty.value,
-                              child: IconButton(
-                                tooltip: translate('Clear'),
-                                onPressed: () {
-                                  HapticFeedback.selectionClick();
-                                  setState(() {
-                                    _idController.clear();
-                                  });
-                                },
-                                icon: Icon(
-                                  Icons.clear_rounded,
-                                  color: AppVisual.subduedText(context),
-                                ),
-                              ),
-                            ),
-                          ),
-                          GlassButton(
-                            variant: GlassButtonVariant.primary,
-                            tooltip: translate('Connect'),
-                            minHeight: 46,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                            borderRadius: BorderRadius.circular(
-                              CamelliaRadius.control,
-                            ),
-                            onPressed: onConnect,
-                            child: const Icon(
-                              Icons.arrow_forward_rounded,
-                              size: 22,
-                              color: Colors.white,
-                            ),
+                            () => _idEmpty.value
+                                ? const SizedBox.shrink()
+                                : GlassIconButton(
+                                    icon: CamelliaIcons.close,
+                                    tooltip: translate('Clear'),
+                                    size: 32,
+                                    iconSize: 15,
+                                    onPressed: () {
+                                      HapticFeedback.selectionClick();
+                                      setState(() {
+                                        _idController.clear();
+                                      });
+                                    },
+                                  ),
                           ),
                         ],
                       );
@@ -339,17 +343,50 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final mode in _MobileConnectMode.values)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: _buildModeChip(mode),
-                      ),
-                  ],
+              const SizedBox(height: 10),
+              GlassSegmentedControl<_MobileConnectMode>(
+                expand: true,
+                compact: compactSegments,
+                selected: _connectMode,
+                items: [
+                  GlassSegmentItem(
+                    value: _MobileConnectMode.desktop,
+                    icon: CamelliaIcons.display,
+                    label: compactSegments ? null : translate('Control'),
+                    tooltip: translate('Control'),
+                  ),
+                  GlassSegmentItem(
+                    value: _MobileConnectMode.files,
+                    icon: CamelliaIcons.transfer,
+                    label: compactSegments ? null : translate('Transfer file'),
+                    tooltip: translate('Transfer file'),
+                  ),
+                  GlassSegmentItem(
+                    value: _MobileConnectMode.camera,
+                    icon: CamelliaIcons.camera,
+                    label: compactSegments ? null : translate('View camera'),
+                    tooltip: translate('View camera'),
+                  ),
+                  GlassSegmentItem(
+                    value: _MobileConnectMode.terminal,
+                    icon: CamelliaIcons.terminal,
+                    label: compactSegments ? null : translate('Terminal'),
+                    tooltip: translate('Terminal'),
+                  ),
+                ],
+                onChanged: (next) {
+                  setState(() => _connectMode = next);
+                },
+              ),
+              const SizedBox(height: 10),
+              GlassButton(
+                variant: GlassButtonVariant.primary,
+                expand: true,
+                minHeight: 44,
+                icon: Icon(_modeIcon(_connectMode), size: 18),
+                onPressed: onConnect,
+                child: Text(
+                  '${translate('Connect')} · ${_modeLabel(_connectMode)}',
                 ),
               ),
             ],
@@ -359,55 +396,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  Widget _buildModeChip(_MobileConnectMode mode) {
-    final selected = _connectMode == mode;
-    final accent = _modeAccent(mode);
-    final theme = Theme.of(context);
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        setState(() => _connectMode = mode);
-      },
-      child: AnimatedContainer(
-        duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
-        curve: CamelliaMotion.springSnappy,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected
-              ? accent.withValues(
-                  alpha: theme.brightness == Brightness.dark ? 0.24 : 0.14,
-                )
-              : AppVisual.inset(context).withValues(alpha: 0.65),
-          borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-          border: Border.all(
-            color: selected
-                ? accent.withValues(alpha: 0.55)
-                : AppVisual.border(context).withValues(alpha: 0.55),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              _modeIcon(mode),
-              size: 15,
-              color: selected ? accent : AppVisual.subduedText(context),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              _modeLabel(mode),
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: selected ? accent : theme.colorScheme.onSurface,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildAutocomplete(double optionsWidth) {
+    final theme = Theme.of(context);
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
     return RawAutocomplete<Peer>(
       optionsBuilder: (TextEditingValue textEditingValue) {
         if (textEditingValue.text == '') {
@@ -470,7 +462,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
             return AutoSizeTextField(
               controller: fieldTextEditingController,
               focusNode: fieldFocusNode,
-              minFontSize: 18,
+              minFontSize: 16,
               autocorrect: false,
               enableSuggestions: false,
               keyboardType: TextInputType.visiblePassword,
@@ -479,27 +471,28 @@ class _ConnectionPageState extends State<ConnectionPage> {
               },
               style: CamelliaTypography.tabular(
                 TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 24,
                   letterSpacing: 0.4,
-                  color: Theme.of(context).colorScheme.primary,
+                  color: theme.colorScheme.onSurface,
                 ),
               ),
               decoration: InputDecoration(
                 labelText: translate('Remote ID'),
+                hintText: '000 000 000',
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 6,
+                  horizontal: 2,
                   vertical: 4,
                 ),
                 labelStyle: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
                   letterSpacing: 0,
-                  color: AppVisual.subduedText(context),
+                  color: tokens.muted,
                 ),
               ),
               inputFormatters: [IDTextInputFormatter()],
@@ -532,39 +525,42 @@ class _ConnectionPageState extends State<ConnectionPage> {
             maxHeight = maxHeight.clamp(0, 200);
             return Align(
               alignment: Alignment.topLeft,
-              child: GlassSurface(
-                layer: CamelliaGlassLayer.modal,
-                elevated: true,
-                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-                child: Material(
-                  type: MaterialType.transparency,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: maxHeight,
-                      maxWidth: optionsWidth,
-                    ),
-                    child:
-                        _allPeersLoader.peers.isEmpty &&
-                            !_allPeersLoader.isPeersLoaded
-                        ? const SizedBox(
-                            height: 80,
-                            child: Center(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: GlassSurface(
+                  layer: CamelliaGlassLayer.modal,
+                  elevated: true,
+                  borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: maxHeight,
+                        maxWidth: optionsWidth,
+                      ),
+                      child:
+                          _allPeersLoader.peers.isEmpty &&
+                              !_allPeersLoader.isPeersLoaded
+                          ? const SizedBox(
+                              height: 80,
+                              child: Center(
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
+                            )
+                          : ListView(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              children: options
+                                  .map(
+                                    (peer) => AutocompletePeerTile(
+                                      onSelect: () => onSelected(peer),
+                                      peer: peer,
+                                    ),
+                                  )
+                                  .toList(),
                             ),
-                          )
-                        : ListView(
-                            padding: const EdgeInsets.only(top: 5),
-                            children: options
-                                .map(
-                                  (peer) => AutocompletePeerTile(
-                                    onSelect: () => onSelected(peer),
-                                    peer: peer,
-                                  ),
-                                )
-                                .toList(),
-                          ),
+                    ),
                   ),
                 ),
               ),

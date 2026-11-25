@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../common.dart' show translate;
 import 'camellia_design.dart';
+export 'camellia_vector_icons.dart';
 
 /// Paints a physical top-lit specular edge highlight (bright top refraction fading
 /// to a softer bottom edge) around rounded glass surfaces.
@@ -207,13 +208,17 @@ class GlassCard extends StatelessWidget {
               children: [
                 if (accent != null) ...[
                   Container(
-                    width: 3.5,
-                    height: 18,
+                    width: 8,
+                    height: 8,
                     decoration: BoxDecoration(
                       color: accent,
-                      borderRadius: BorderRadius.circular(
-                        CamelliaRadius.pill,
-                      ),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: accent!.withValues(alpha: 0.30),
+                          blurRadius: 6,
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -395,8 +400,25 @@ class _GlassButtonState extends State<GlassButton> {
     final scale = (!_enabled || reduceMotion)
         ? 1.0
         : _pressed
-        ? 0.96
-        : (_hovered ? 1.01 : 1.0);
+        ? 0.98
+        : 1.0;
+
+    final bool hasRim =
+        widget.variant == GlassButtonVariant.primary ||
+        widget.variant == GlassButtonVariant.secondary ||
+        widget.variant == GlassButtonVariant.danger;
+    final Color rimTop = switch (widget.variant) {
+      GlassButtonVariant.primary || GlassButtonVariant.danger =>
+        Colors.white.withValues(alpha: 0.24),
+      GlassButtonVariant.secondary => glass.specularTop,
+      _ => Colors.transparent,
+    };
+    final Color rimBottom = switch (widget.variant) {
+      GlassButtonVariant.primary || GlassButtonVariant.danger =>
+        Colors.black.withValues(alpha: 0.16),
+      GlassButtonVariant.secondary => glass.specularBottom,
+      _ => Colors.transparent,
+    };
 
     Widget content = AnimatedOpacity(
       duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
@@ -426,18 +448,18 @@ class _GlassButtonState extends State<GlassButton> {
                 ),
               if (widget.variant == GlassButtonVariant.primary && _enabled)
                 BoxShadow(
-                  color: theme.colorScheme.primary.withValues(
-                    alpha: _hovered ? 0.34 : 0.22,
+                  color: bgColor.withValues(
+                    alpha: _hovered ? 0.28 : 0.18,
                   ),
-                  blurRadius: _hovered ? 16 : 10,
-                  offset: Offset(0, _hovered ? 5 : 3),
+                  blurRadius: _hovered ? 12 : 8,
+                  offset: Offset(0, _hovered ? 4 : 2),
                 ),
               if (widget.variant == GlassButtonVariant.danger && _enabled)
                 BoxShadow(
                   color: CamelliaColors.statusAlertLight.withValues(
-                    alpha: _hovered ? 0.32 : 0.20,
+                    alpha: _hovered ? 0.26 : 0.16,
                   ),
-                  blurRadius: _hovered ? 14 : 8,
+                  blurRadius: _hovered ? 12 : 8,
                   offset: Offset(0, _hovered ? 4 : 2),
                 ),
             ],
@@ -445,9 +467,9 @@ class _GlassButtonState extends State<GlassButton> {
           child: CustomPaint(
             foregroundPainter: SpecularEdgePainter(
               borderRadius: radius,
-              topColor: Colors.transparent,
-              bottomColor: Colors.transparent,
-              strokeWidth: 0.0,
+              topColor: rimTop,
+              bottomColor: rimBottom,
+              strokeWidth: hasRim ? 0.85 : 0.0,
             ),
             child: Padding(
               padding:
@@ -669,7 +691,7 @@ class _GlassIconButtonState extends State<GlassIconButton> {
                 bottomColor: widget.selected
                     ? accent.withValues(alpha: 0.22)
                     : glass.specularBottom,
-                strokeWidth: 0.0,
+                strokeWidth: 0.85,
               ),
               child: Center(
                 child: widget.loading
@@ -1646,11 +1668,15 @@ class GlassSegmentedControl<T> extends StatelessWidget {
             ? BoxDecoration(
                 color: thumbBg,
                 borderRadius: thumbRadius,
+                border: Border.all(
+                  color: glass.specularTop.withValues(alpha: dark ? 0.28 : 0.72),
+                  width: 0.85,
+                ),
                 boxShadow: [
                   BoxShadow(
                     color: glass.ambientShadow,
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
+                    blurRadius: 6,
+                    offset: const Offset(0, 1.5),
                   ),
                 ],
               )
@@ -1686,7 +1712,7 @@ class GlassSegmentedControl<T> extends StatelessWidget {
       borderRadius: trackRadius,
       showShadow: false,
       enableBlur: enableBlur,
-      strokeWidth: 0.0,
+      strokeWidth: 0.8,
       padding: const EdgeInsets.all(trackPadding),
       child: child,
     );
@@ -1737,11 +1763,17 @@ class GlassSegmentedControl<T> extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: thumbBg,
                       borderRadius: thumbRadius,
+                      border: Border.all(
+                        color: glass.specularTop.withValues(
+                          alpha: dark ? 0.28 : 0.72,
+                        ),
+                        width: 0.85,
+                      ),
                       boxShadow: [
                         BoxShadow(
                           color: glass.ambientShadow,
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
+                          blurRadius: 6,
+                          offset: const Offset(0, 1.5),
                         ),
                       ],
                     ),
@@ -1933,10 +1965,25 @@ class GlassBadge extends StatelessWidget {
         dark ? theme.colorScheme.secondary : theme.colorScheme.primary,
     };
 
-    final bg = accent.withValues(alpha: dark ? 0.18 : 0.12);
-    final borderColor = accent.withValues(alpha: dark ? 0.24 : 0.18);
-    // Keep foreground contrast WCAG AA+ across light/dark/midnight frosted glass.
-    final textColor = theme.colorScheme.onSurface;
+    final bg = accent.withValues(alpha: dark ? 0.14 : 0.10);
+    final borderColor = accent.withValues(alpha: dark ? 0.28 : 0.22);
+    // Semantic foreground ink calibrated for WCAG AA+ contrast in Light/Dark/Midnight.
+    final textColor = switch (tone) {
+      GlassBadgeTone.online =>
+        dark ? const Color(0xFF6EE7B7) : const Color(0xFF047857),
+      GlassBadgeTone.connecting =>
+        dark ? const Color(0xFF93C5FD) : const Color(0xFF1D4ED8),
+      GlassBadgeTone.encrypted =>
+        dark ? const Color(0xFF67E8F9) : const Color(0xFF0E7490),
+      GlassBadgeTone.warning =>
+        dark ? const Color(0xFFFCD34D) : const Color(0xFFB45309),
+      GlassBadgeTone.danger =>
+        dark ? const Color(0xFFFDA4AF) : const Color(0xFFBE123C),
+      GlassBadgeTone.brand =>
+        dark ? const Color(0xFFC7D2FE) : theme.colorScheme.primary,
+      GlassBadgeTone.offline || GlassBadgeTone.neutral =>
+        theme.colorScheme.onSurfaceVariant,
+    };
     final rawStyle =
         (compact ? theme.textTheme.labelSmall : theme.textTheme.labelMedium)
             ?.copyWith(color: textColor, fontWeight: FontWeight.w600);

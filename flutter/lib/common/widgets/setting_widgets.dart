@@ -4,6 +4,7 @@ import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -106,8 +107,9 @@ class _CustomImageQualityWidgetState extends State<CustomImageQualityWidget> {
       layer: CamelliaGlassLayer.floating,
       showShadow: false,
       enableBlur: false,
+      strokeWidth: 0.85,
       borderRadius: BorderRadius.circular(CamelliaRadius.control),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -145,7 +147,7 @@ class _CustomImageQualityWidgetState extends State<CustomImageQualityWidget> {
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
                           Switch.adaptive(
                             value: moreQualityChecked.value,
                             onChanged: widget.setQuality == null
@@ -393,40 +395,39 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
             onChanged: (double v) => updateValue(v.round()),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         SizedBox(
-          width: 64,
-          child: TextField(
+          width: 78,
+          child: GlassInput(
             controller: _controller,
+            tabularNums: true,
+            showClearButton: false,
+            minHeight: 38,
             keyboardType: TextInputType.number,
-            textAlign: TextAlign.center,
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp(r'^$|^[0-9]{1,4}$')),
+            ],
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 0,
+            ),
+            trailing: Text(
+              '%',
+              style: CamelliaTypography.tabular(
+                theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
             onSubmitted: (text) {
               final v = int.tryParse(text);
               if (v != null) {
                 updateValue(v);
+              } else {
+                _controller.text = value.toString();
               }
             },
-            style: CamelliaTypography.tabular(
-              theme.textTheme.labelMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            decoration: const InputDecoration(
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(
-                vertical: 8.0,
-                horizontal: 8.0,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          '%',
-          style: CamelliaTypography.tabular(
-            theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
           ),
         ),
       ],

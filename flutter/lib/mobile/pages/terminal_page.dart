@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math';
+
 import 'package:flutter/gestures.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common.dart';
@@ -16,6 +18,9 @@ import 'package:xterm/xterm.dart';
 import '../../desktop/pages/terminal_connection_manager.dart';
 import '../../consts.dart';
 
+const String _kMobileTerminalFontSizeKey = 'mobile-terminal-font-size';
+const double _kTopSessionBarHeight = 44.0;
+
 class TerminalPage extends StatefulWidget {
   const TerminalPage({
     super.key,
@@ -26,6 +31,7 @@ class TerminalPage extends StatefulWidget {
     this.connToken,
     this.isTerminalRunAsAdmin = false,
   });
+
   final String id;
   final String? password;
   final bool? forceRelay;
@@ -48,16 +54,15 @@ class _TerminalPageState extends State<TerminalPage>
   final GlobalKey _keyboardKey = GlobalKey();
   double _keyboardHeight = 0;
   late bool _showTerminalExtraKeys;
-  // Ctrl lock state for virtual keyboard: active key presses are mapped to control codes
   bool _ctrlLocked = false;
   bool _altLocked = false;
-  // Row3 expand/collapse state for compact keyboard layout
   bool _row3Expanded = false;
   bool _everTerminalOpened = false;
   bool _closingByTerminalExit = false;
-  // For iOS edge swipe gesture
+  double _fontSize = 13.0;
   double _swipeStartX = 0;
   double _swipeCurrentX = 0;
+
   static const _webMonoFallback = <String>[
     'Consolas',
     'monospace',
@@ -79,11 +84,13 @@ class _TerminalPageState extends State<TerminalPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    debugPrint(
-      '[TerminalPage] Initializing terminal ${widget.terminalId} for peer ${widget.id}',
+    final savedFont = double.tryParse(
+      bind.getLocalFlutterOption(k: _kMobileTerminalFontSizeKey),
     );
+    if (savedFont != null) {
+      _fontSize = savedFont.clamp(9.0, 22.0);
+    }
 
-    // Use shared FFI instance from connection manager
     _ffi = TerminalConnectionManager.getConnection(
       peerId: widget.id,
       password: widget.password,
@@ -93,29 +100,20 @@ class _TerminalPageState extends State<TerminalPage>
       isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
     );
 
-    // Create terminal model with specific terminal ID
     _terminalModel = TerminalModel(_ffi, widget.terminalId);
-    debugPrint(
-      '[TerminalPage] Terminal model created for terminal ${widget.terminalId}',
-    );
-
     _terminalModel.onResizeExternal = (w, h, pw, ph) {
       _cellHeight = ph * 1.0;
     };
     _terminalModel.addListener(_onTerminalStateChanged);
 
-    // Register this terminal model with FFI for event routing
     _ffi.registerTerminalModel(widget.terminalId, _terminalModel);
 
-    // Auto-close connection when shell exits
     _terminalModel.onClosed = () {
       if (mounted) {
         closeConnection(id: widget.id);
       }
     };
 
-    // Web desktop users have full hardware keyboard access, so the on-screen
-    // terminal extra keys bar is unnecessary and disabled.
     _showTerminalExtraKeys =
         !isWebDesktop &&
         mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
@@ -127,11 +125,9 @@ class _TerminalPageState extends State<TerminalPage>
     _terminalModel.clearAltLock = () {
       if (_altLocked) setState(() => _altLocked = false);
     };
-    // Load Row3 expand/collapse state from persistent storage. The raw option
-    // read keeps Row3 collapsed when no value has been saved yet.
     _row3Expanded =
         bind.mainGetLocalOption(key: kOptionShowTerminalCtrlKeys) == 'Y';
-    // Initialize terminal connection
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ffi.dialogManager.showLoading(
         translate('Connecting...'),
@@ -147,7 +143,6 @@ class _TerminalPageState extends State<TerminalPage>
 
   @override
   void dispose() {
-    // Unregister terminal model from FFI
     _terminalModel.removeListener(_onTerminalStateChanged);
     _ffi.unregisterTerminalModel(widget.terminalId);
     _terminalModel.dispose();
@@ -157,6 +152,19 @@ class _TerminalPageState extends State<TerminalPage>
     TerminalConnectionManager.releaseConnection(
       widget.id,
       isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
+    );
+  }
+
+  void _adjustFontSize(double delta) {
+    final next = (_fontSize + delta).clamp(9.0, 22.0);
+    if (next == _fontSize) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _fontSize = next;
+    });
+    bind.setLocalFlutterOption(
+      k: _kMobileTerminalFontSizeKey,
+      v: next.toStringAsFixed(0),
     );
   }
 
@@ -187,39 +195,45 @@ class _TerminalPageState extends State<TerminalPage>
 
     _keyboardDebounce?.cancel();
     _keyboardDebounce = Timer(const Duration(milliseconds: 20), () {
+      if (!mounted) return;
       final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-      setState(() {
-        _sysKeyboardHeight = bottomInset;
-      });
+      if (bottomInset != _sysKeyboardHeight) {
+        setState(() {
+          _sysKeyboardHeight = bottomInset;
+        });
+      }
     });
   }
 
   void _updateKeyboardHeight() {
     if (_keyboardKey.currentContext != null) {
       final renderBox =
-          _keyboardKey.currentContext!.findRenderObject() as RenderBox;
-      _keyboardHeight = renderBox.size.height;
+          _keyboardKey.currentContext!.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
+        _keyboardHeight = renderBox.size.height;
+      }
     }
   }
 
-  EdgeInsets _calculatePadding(double heightPx) {
-    if (_cellHeight == null) {
-      return const EdgeInsets.symmetric(horizontal: 3.0, vertical: 2.0);
+  EdgeInsets _calculatePadding(double heightPx, double bottomSafe) {
+    final bottomReserve =
+        _sysKeyboardHeight +
+        (_showTerminalExtraKeys ? _keyboardHeight + 8 : bottomSafe);
+    if (_cellHeight == null || _cellHeight! <= 0) {
+      return EdgeInsets.fromLTRB(6.0, 4.0, 6.0, bottomReserve + 4.0);
     }
-    final realHeight = heightPx - _sysKeyboardHeight - _keyboardHeight;
+    final realHeight = max(0.0, heightPx - bottomReserve);
     final rows = (realHeight / _cellHeight!).floor();
     final extraSpace = realHeight - rows * _cellHeight!;
     final topBottom = max(0.0, extraSpace / 2.0);
     return EdgeInsets.only(
-      left: 3.0,
-      right: 3.0,
+      left: 6.0,
+      right: 6.0,
       top: topBottom,
-      bottom: topBottom + _sysKeyboardHeight + _keyboardHeight,
+      bottom: topBottom + bottomReserve,
     );
   }
 
-  /// Pastes clipboard text through TerminalModel so keyboard-only modifiers and
-  /// mobile Enter normalization never alter clipboard data.
   Future<void> _pasteClipboardText() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
@@ -245,8 +259,6 @@ class _TerminalPageState extends State<TerminalPage>
     );
     if (!shouldPaste) return KeyEventResult.ignored;
 
-    // Only locked virtual modifiers need interception. Without a lock, keep
-    // xterm's default hardware paste behavior, including bracketed paste mode.
     unawaited(_pasteClipboardText());
     return KeyEventResult.handled;
   }
@@ -264,71 +276,273 @@ class _TerminalPageState extends State<TerminalPage>
     );
   }
 
+  Widget _buildTopSessionBar(BuildContext context, double topSafe) {
+    final glass = CamelliaGlassTokens.of(context);
+    final connected = _terminalModel.terminalOpened;
+    final dotColor = connected ? glass.statusOnline : glass.statusConnecting;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withValues(alpha: 0.14),
+            width: 0.85,
+          ),
+        ),
+      ),
+      child: GlassSurface(
+        layer: CamelliaGlassLayer.modal,
+        tintColor: const Color(0xE60A0F1A),
+        borderRadius: BorderRadius.zero,
+        showShadow: false,
+        strokeWidth: 0,
+        padding: EdgeInsets.only(
+          top: topSafe,
+          left: 12,
+          right: 8,
+        ),
+        child: SizedBox(
+          height: _kTopSessionBarHeight,
+          child: Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: dotColor.withValues(alpha: 0.45),
+                      blurRadius: 5,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                CamelliaIcons.terminal,
+                size: 16,
+                color: CamelliaColors.aqua,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: CamelliaTypography.tabular(
+                          const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (widget.isTerminalRunAsAdmin) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: CamelliaColors.sun.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: CamelliaColors.sun.withValues(alpha: 0.55),
+                            width: 0.75,
+                          ),
+                        ),
+                        child: Text(
+                          translate('Admin'),
+                          style: const TextStyle(
+                            color: Color(0xFFFCD34D),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              // Font size − / + controls
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    width: 0.85,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _TopBarSmallButton(
+                      icon: Icons.remove_rounded,
+                      tooltip: translate('Decrease font size'),
+                      onTap: _fontSize > 9.0
+                          ? () => _adjustFontSize(-1.0)
+                          : null,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        '${_fontSize.round()}',
+                        style: CamelliaTypography.tabular(
+                          const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    _TopBarSmallButton(
+                      icon: Icons.add_rounded,
+                      tooltip: translate('Increase font size'),
+                      onTap: _fontSize < 22.0
+                          ? () => _adjustFontSize(1.0)
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              if (!isWebDesktop)
+                _TopBarSmallButton(
+                  icon: _showTerminalExtraKeys
+                      ? Icons.keyboard_hide_rounded
+                      : CamelliaIcons.keyboard,
+                  tooltip: translate('Show terminal extra keys'),
+                  active: _showTerminalExtraKeys,
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    setState(() {
+                      _showTerminalExtraKeys = !_showTerminalExtraKeys;
+                      if (!_showTerminalExtraKeys) {
+                        _keyboardHeight = 0;
+                      }
+                    });
+                    if (_showTerminalExtraKeys) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) {
+                          setState(_updateKeyboardHeight);
+                        }
+                      });
+                    }
+                  },
+                ),
+              const SizedBox(width: 4),
+              // Explicit Close / Disconnect × button on BOTH Android & iOS & Web
+              Tooltip(
+                message: translate('Close'),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () {
+                    HapticFeedback.mediumImpact();
+                    clientClose(sessionId, _ffi);
+                  },
+                  child: Container(
+                    width: 32,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: CamelliaColors.statusAlertLight.withValues(
+                        alpha: 0.22,
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: CamelliaColors.statusAlertLight.withValues(
+                          alpha: 0.50,
+                        ),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: const Icon(
+                      CamelliaIcons.close,
+                      size: 16,
+                      color: Color(0xFFFDA4AF),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget buildBody() {
+    final topSafe = MediaQuery.paddingOf(context).top;
+    final bottomSafe = MediaQuery.paddingOf(context).bottom;
+    final liveBottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final effectiveSysKeyboardHeight = max(_sysKeyboardHeight, liveBottomInset);
+
     final scaffold = Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: const Color(0xFF070B12),
       body: Stack(
         children: [
           Positioned.fill(
-            child: SafeArea(
-              top: true,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final heightPx = constraints.maxHeight;
-                  return TerminalView(
-                    _terminalModel.terminal,
-                    controller: _terminalModel.terminalController,
-                    autofocus: true,
-                    theme: isWeb
-                        ? TerminalThemes.whiteOnBlack
-                        : TerminalThemes.defaultTheme,
-                    textStyle: _getTerminalStyle(),
-                    backgroundOpacity: 1.0,
-                    // The following comment is from xterm.dart source code:
-                    // Workaround to detect delete key for platforms and IMEs that do not
-                    // emit a hardware delete event. Preferred on mobile platforms. [false] by
-                    // default.
-                    //
-                    // Android works fine without this workaround.
-                    deleteDetection: isIOS,
-                    onKeyEvent: _handleTerminalKeyEvent,
-                    padding: _calculatePadding(heightPx),
-                    onSecondaryTapDown: (details, offset) async {
-                      final selection =
-                          _terminalModel.terminalController.selection;
-                      if (selection != null) {
-                        final text = _terminalModel.terminal.buffer.getText(
-                          selection,
-                        );
-                        _terminalModel.terminalController.clearSelection();
-                        await Clipboard.setData(ClipboardData(text: text));
-                      } else {
-                        await _pasteClipboardText();
-                      }
-                    },
-                  );
-                },
-              ),
+            top: topSafe + _kTopSessionBarHeight,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return TerminalView(
+                  _terminalModel.terminal,
+                  controller: _terminalModel.terminalController,
+                  autofocus: true,
+                  theme: TerminalThemes.whiteOnBlack,
+                  textStyle: _getTerminalStyle(),
+                  backgroundOpacity: 1.0,
+                  deleteDetection: isIOS,
+                  onKeyEvent: _handleTerminalKeyEvent,
+                  padding: _calculatePadding(constraints.maxHeight, bottomSafe),
+                  onSecondaryTapDown: (details, offset) async {
+                    final selection =
+                        _terminalModel.terminalController.selection;
+                    if (selection != null) {
+                      final text = _terminalModel.terminal.buffer.getText(
+                        selection,
+                      );
+                      _terminalModel.terminalController.clearSelection();
+                      await Clipboard.setData(ClipboardData(text: text));
+                    } else {
+                      await _pasteClipboardText();
+                    }
+                  },
+                );
+              },
             ),
           ),
-          if (isWebDesktop) _buildWebCloseButton(),
-          if (_showTerminalExtraKeys) _buildFloatingKeyboard(),
-          // iOS-style circular close button in top-right corner
-          if (isIOS) _buildCloseButton(),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: _buildTopSessionBar(context, topSafe),
+          ),
+          if (_showTerminalExtraKeys)
+            _buildFloatingKeyboard(
+              effectiveSysKeyboardHeight > 0
+                  ? effectiveSysKeyboardHeight + 6
+                  : bottomSafe + 6,
+            ),
         ],
       ),
     );
 
-    // Add iOS edge swipe gesture to exit (similar to Android back button)
     if (isIOS) {
       return LayoutBuilder(
         builder: (context, constraints) {
           final screenWidth = constraints.maxWidth;
-          // Base thresholds on screen width but clamp to reasonable logical pixel ranges
-          // Edge detection region: ~10% of width, clamped between 20 and 80 logical pixels
           final edgeThreshold = (screenWidth * 0.1).clamp(20.0, 80.0);
-          // Required horizontal movement: ~25% of width, clamped between 80 and 300 logical pixels
           final swipeThreshold = (screenWidth * 0.25).clamp(80.0, 300.0);
 
           return RawGestureDetector(
@@ -340,12 +554,10 @@ class _TerminalPageState extends State<TerminalPage>
                   >(
                     () => HorizontalDragGestureRecognizer(
                       debugOwner: this,
-                      // Only respond to touch input, exclude mouse/trackpad
                       supportedDevices: kTouchBasedDeviceKinds,
                     ),
                     (HorizontalDragGestureRecognizer instance) {
                       instance
-                        // Capture initial touch-down position (before touch slop)
                         ..onDown = (details) {
                           _swipeStartX = details.localPosition.dx;
                           _swipeCurrentX = details.localPosition.dx;
@@ -354,7 +566,6 @@ class _TerminalPageState extends State<TerminalPage>
                           _swipeCurrentX = details.localPosition.dx;
                         }
                         ..onEnd = (details) {
-                          // Check if swipe started from left edge and moved right
                           if (_swipeStartX < edgeThreshold &&
                               (_swipeCurrentX - _swipeStartX) >
                                   swipeThreshold) {
@@ -379,112 +590,89 @@ class _TerminalPageState extends State<TerminalPage>
     return scaffold;
   }
 
-  Widget _buildWebCloseButton() {
-    return SafeArea(
-      child: Align(
-        alignment: Alignment.topRight,
-        child: Padding(
-          padding: const EdgeInsets.only(top: 8, right: 8),
-          child: GlassIconButton(
-            icon: CamelliaIcons.close,
-            size: 36,
-            iconSize: 18,
-            tooltip: translate('Close'),
-            onPressed: () => clientClose(sessionId, _ffi),
+  Widget _buildFloatingKeyboard(double bottomOffset) {
+    return AnimatedPositioned(
+      duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+      curve: CamelliaMotion.standard,
+      left: 8,
+      right: 8,
+      bottom: bottomOffset,
+      child: Center(
+        heightFactor: 1.0,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 540),
+          child: GlassSurface(
+            key: _keyboardKey,
+            layer: CamelliaGlassLayer.modal,
+            elevated: true,
+            tintColor: const Color(0xE00D1422),
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const slots = 7;
+                final maxRowWidth = constraints.maxWidth;
+                final keyWidth = min(
+                  terminalKeyboardKeyWidth,
+                  max(
+                    34.0,
+                    (maxRowWidth - (slots - 1) * terminalKeyboardKeySpacing) /
+                        slots,
+                  ),
+                );
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: _buildKeyboardKeyButtons(
+                        terminalKeyboardRow1Keys,
+                        keyWidth,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ..._buildKeyboardKeyButtons(
+                          terminalKeyboardRow2Keys,
+                          keyWidth,
+                        ),
+                        const SizedBox(width: terminalKeyboardKeySpacing),
+                        _buildCollapseButton(keyWidth),
+                      ],
+                    ),
+                    if (_row3Expanded) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          ..._buildKeyboardKeyButtons(
+                            terminalKeyboardRow3Keys,
+                            keyWidth,
+                          ),
+                          for (
+                            var i = 0;
+                            i < terminalKeyboardRow3TrailingPlaceholderCount;
+                            i++
+                          ) ...[
+                            const SizedBox(width: terminalKeyboardKeySpacing),
+                            SizedBox(width: keyWidth),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildCloseButton() {
-    return Positioned(
-      top: 0,
-      right: 0,
-      child: SafeArea(
-        minimum: const EdgeInsets.only(top: 14, right: 14),
-        child: GlassIconButton(
-          icon: CamelliaIcons.close,
-          size: 42,
-          iconSize: 20,
-          tooltip: translate('Close'),
-          onPressed: () => clientClose(sessionId, _ffi),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFloatingKeyboard() {
-    return AnimatedPositioned(
-      duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
-      curve: CamelliaMotion.springSnappy,
-      left: 6,
-      right: 6,
-      bottom: _sysKeyboardHeight + 6,
-      child: GlassSurface(
-        key: _keyboardKey,
-        layer: CamelliaGlassLayer.modal,
-        elevated: true,
-        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: _buildKeyboardKeyButtons(terminalKeyboardRow1Keys),
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ..._buildKeyboardKeyButtons(terminalKeyboardRow2Keys),
-                const SizedBox(width: terminalKeyboardKeySpacing),
-                _buildCollapseButton(),
-              ],
-            ),
-            if (_row3Expanded)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ..._buildKeyboardKeyButtons(terminalKeyboardRow3Keys),
-                  for (
-                    var i = 0;
-                    i < terminalKeyboardRow3TrailingPlaceholderCount;
-                    i++
-                  ) ...[
-                    const SizedBox(width: terminalKeyboardKeySpacing),
-                    const SizedBox(width: terminalKeyboardKeyWidth),
-                  ],
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Ctrl toggle button with highlighted locked state
-  Widget _buildCtrlKeyButton() {
-    return _buildModifierToggleButton(
-      text: 'Ctrl',
-      semanticsLabel: 'Ctrl',
-      isLocked: _ctrlLocked,
-      onPressed: () => setState(() => _ctrlLocked = !_ctrlLocked),
-    );
-  }
-
-  // Alt toggle button with highlighted locked state
-  Widget _buildAltKeyButton() {
-    return _buildModifierToggleButton(
-      text: 'Alt',
-      semanticsLabel: 'Alt',
-      isLocked: _altLocked,
-      onPressed: () => setState(() => _altLocked = !_altLocked),
-    );
-  }
-
-  // Collapse/expand toggle button for Row3
   void _toggleRow3Expanded() {
     final willExpand = !_row3Expanded;
     final shouldClearModifiers = shouldClearTerminalModifiersWhenRow3Collapses(
@@ -502,107 +690,124 @@ class _TerminalPageState extends State<TerminalPage>
     });
     mainSetLocalBoolOption(kOptionShowTerminalCtrlKeys, willExpand);
 
-    // The floating keyboard height changes after Row3 is inserted/removed.
-    // Re-measure on the next frame so terminal padding uses the new height.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_showTerminalExtraKeys) return;
-      setState(() {
-        _updateKeyboardHeight();
-      });
+      setState(_updateKeyboardHeight);
     });
   }
 
-  Widget _buildCollapseButton() {
+  Widget _buildCollapseButton(double keyWidth) {
     return Semantics(
       label: translate('Show terminal extra keys'),
       toggled: _row3Expanded,
-      child: ElevatedButton(
-        onPressed: () {
+      button: true,
+      child: _TerminalKeyCap(
+        width: keyWidth,
+        active: _row3Expanded,
+        onTap: () {
           HapticFeedback.selectionClick();
           _toggleRow3Expanded();
         },
-        style: ElevatedButton.styleFrom(
-          minimumSize: const Size(terminalKeyboardKeyWidth, 32),
-          padding: EdgeInsets.zero,
-          backgroundColor: Theme.of(
-            context,
-          ).colorScheme.surfaceContainerHighest,
-          foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
         child: Icon(
           _row3Expanded
               ? Icons.keyboard_arrow_up_rounded
               : Icons.keyboard_arrow_down_rounded,
-          size: 18,
+          size: 17,
+          color: _row3Expanded
+              ? CamelliaColors.aqua
+              : Colors.white.withValues(alpha: 0.85),
         ),
       ),
     );
   }
 
-  /// Builds a fixed-width key sequence with the reviewed 2dp spacing.
-  List<Widget> _buildKeyboardKeyButtons(List<String> labels) {
+  List<Widget> _buildKeyboardKeyButtons(List<String> labels, double keyWidth) {
     return [
       for (var i = 0; i < labels.length; i++) ...[
-        _buildKeyButton(labels[i]),
+        _buildKeyButton(labels[i], keyWidth),
         if (i < labels.length - 1)
           const SizedBox(width: terminalKeyboardKeySpacing),
       ],
     ];
   }
 
-  /// Build a modifier toggle button (Ctrl/Alt) with one-shot behavior.
-  /// When [isLocked] is true, the button highlights in blue and the next
-  /// single-character input is mapped to its modified equivalent.
   Widget _buildModifierToggleButton({
     required String text,
     required String semanticsLabel,
     required bool isLocked,
+    required double keyWidth,
     required VoidCallback onPressed,
   }) {
     return Semantics(
-      // Ctrl and Alt are technical key names and intentionally stay unchanged.
       label: semanticsLabel,
       toggled: isLocked,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        child: Text(text),
-        style: ElevatedButton.styleFrom(
-          minimumSize: const Size(terminalKeyboardKeyWidth, 32),
-          padding: EdgeInsets.zero,
-          textStyle: const TextStyle(fontSize: 12),
-          backgroundColor: isLocked
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          foregroundColor: isLocked
-              ? Theme.of(context).colorScheme.onPrimary
-              : Theme.of(context).colorScheme.onSurfaceVariant,
+      button: true,
+      child: _TerminalKeyCap(
+        width: keyWidth,
+        active: isLocked,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onPressed();
+        },
+        child: Text(
+          text,
+          style: CamelliaTypography.tabular(
+            TextStyle(
+              fontSize: 11.5,
+              fontWeight: isLocked ? FontWeight.w700 : FontWeight.w600,
+              color: isLocked
+                  ? CamelliaColors.aqua
+                  : Colors.white.withValues(alpha: 0.90),
+            ),
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildKeyButton(String label) {
-    if (label == 'Ctrl') return _buildCtrlKeyButton();
-    if (label == 'Alt') return _buildAltKeyButton();
+  Widget _buildKeyButton(String label, double keyWidth) {
+    if (label == 'Ctrl') {
+      return _buildModifierToggleButton(
+        text: 'Ctrl',
+        semanticsLabel: 'Ctrl',
+        isLocked: _ctrlLocked,
+        keyWidth: keyWidth,
+        onPressed: () => setState(() => _ctrlLocked = !_ctrlLocked),
+      );
+    }
+    if (label == 'Alt') {
+      return _buildModifierToggleButton(
+        text: 'Alt',
+        semanticsLabel: 'Alt',
+        isLocked: _altLocked,
+        keyWidth: keyWidth,
+        onPressed: () => setState(() => _altLocked = !_altLocked),
+      );
+    }
 
-    return ElevatedButton(
-      onPressed: () {
+    return _TerminalKeyCap(
+      width: keyWidth,
+      onTap: () {
+        HapticFeedback.selectionClick();
         _sendKeyToTerminal(label);
       },
-      child: Text(label),
-      style: ElevatedButton.styleFrom(
-        minimumSize: const Size(terminalKeyboardKeyWidth, 32),
-        padding: EdgeInsets.zero,
-        textStyle: const TextStyle(fontSize: 12),
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-        foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.clip,
+        style: CamelliaTypography.tabular(
+          TextStyle(
+            fontSize: label.length > 4 ? 10.5 : 11.5,
+            fontWeight: FontWeight.w600,
+            color: Colors.white.withValues(alpha: 0.90),
+          ),
+        ),
       ),
     );
   }
 
   void _sendKeyToTerminal(String key) {
     String send;
-
     switch (key) {
       case 'Esc':
         send = '\x1B';
@@ -613,7 +818,6 @@ class _TerminalPageState extends State<TerminalPage>
       case 'Ctrl+C':
         send = '\x03';
         break;
-
       case '↑':
         send = '\x1B[A';
         break;
@@ -626,7 +830,6 @@ class _TerminalPageState extends State<TerminalPage>
       case '←':
         send = '\x1B[D';
         break;
-
       case 'Home':
         send = '\x1B[H';
         break;
@@ -639,7 +842,6 @@ class _TerminalPageState extends State<TerminalPage>
       case 'PgDn':
         send = '\x1B[6~';
         break;
-
       default:
         send = key;
         break;
@@ -648,19 +850,104 @@ class _TerminalPageState extends State<TerminalPage>
     _terminalModel.sendVirtualKey(send);
   }
 
-  // https://github.com/TerminalStudio/xterm.dart/issues/42#issuecomment-877495472
-  // https://github.com/TerminalStudio/xterm.dart/issues/198#issuecomment-2526548458
   TerminalStyle _getTerminalStyle() {
-    return isWeb
-        ? const TerminalStyle(
-            fontFamily: 'Consolas',
-            fontFamilyFallback: _webMonoFallback,
-            fontSize: 13,
-            height: 1.15,
-          )
-        : const TerminalStyle();
+    return TerminalStyle(
+      fontFamily: isWeb ? 'Consolas' : 'monospace',
+      fontFamilyFallback: _webMonoFallback,
+      fontSize: _fontSize,
+      height: 1.18,
+    );
   }
 
   @override
   bool get wantKeepAlive => true;
+}
+
+class _TopBarSmallButton extends StatelessWidget {
+  const _TopBarSmallButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final fg = !enabled
+        ? Colors.white.withValues(alpha: 0.30)
+        : active
+        ? CamelliaColors.aqua
+        : Colors.white.withValues(alpha: 0.86);
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(7),
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: Icon(icon, size: 15, color: fg),
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalKeyCap extends StatefulWidget {
+  const _TerminalKeyCap({
+    required this.width,
+    required this.onTap,
+    required this.child,
+    this.active = false,
+  });
+
+  final double width;
+  final VoidCallback onTap;
+  final Widget child;
+  final bool active;
+
+  @override
+  State<_TerminalKeyCap> createState() => _TerminalKeyCapState();
+}
+
+class _TerminalKeyCapState extends State<_TerminalKeyCap> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.active
+        ? CamelliaColors.aqua.withValues(alpha: 0.22)
+        : _pressed
+        ? Colors.white.withValues(alpha: 0.20)
+        : Colors.white.withValues(alpha: 0.08);
+    final border = widget.active
+        ? CamelliaColors.aqua.withValues(alpha: 0.65)
+        : Colors.white.withValues(alpha: 0.18);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 110),
+        width: widget.width,
+        height: 32,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: border, width: 0.85),
+        ),
+        child: widget.child,
+      ),
+    );
+  }
 }

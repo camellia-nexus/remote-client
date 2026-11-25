@@ -9,7 +9,6 @@ import 'package:camellia_remote_app/consts.dart';
 import 'package:camellia_remote_app/desktop/widgets/popup_menu.dart';
 import 'package:camellia_remote_app/models/ab_model.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
-import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/models/user_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
@@ -36,9 +35,22 @@ class AddressBook extends StatefulWidget {
 }
 
 class _AddressBookState extends State<AddressBook> {
-  var menuPos = RelativeRect.fill;
+  Offset _lastPointerPos = Offset.zero;
   final _tagsMenuController = MenuController();
   final _abSearchController = TextEditingController();
+
+  RelativeRect _resolveMenuRect(Offset globalPos) {
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    final overlaySize = overlay?.size ?? MediaQuery.sizeOf(context);
+    final local = overlay != null
+        ? overlay.globalToLocal(globalPos)
+        : globalPos;
+    return RelativeRect.fromRect(
+      Rect.fromLTWH(local.dx, local.dy, 0, 0),
+      Offset.zero & overlaySize,
+    );
+  }
 
   @override
   void dispose() {
@@ -134,6 +146,8 @@ class _AddressBookState extends State<AddressBook> {
   });
 
   Widget _buildAddressBookContent() {
+    final tokens = AppVisual.tokens(context);
+    final glass = CamelliaGlassTokens.of(context);
     return Column(
       children: [
         Padding(
@@ -143,23 +157,77 @@ class _AddressBookState extends State<AddressBook> {
             showShadow: false,
             enableBlur: false,
             borderRadius: BorderRadius.circular(CamelliaRadius.control),
+            borderTopColor: glass.specularTop,
+            borderBottomColor: tokens.border,
+            strokeWidth: 0.85,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            child: SizedBox(
-              height: 42,
-              child: Row(
-                children: [
-                  Flexible(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 220),
-                      child: _buildAbDropdown(),
-                    ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compactToolbar = constraints.maxWidth < 520;
+                return SizedBox(
+                  height: 40,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 230),
+                          child: _buildAbDropdown(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Spacer(),
+                      Obx(() {
+                        final canWrite = gFFI.abModel.current.canWrite();
+                        if (!canWrite) return const SizedBox.shrink();
+                        if (compactToolbar) {
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: GlassIconButton(
+                              icon: CamelliaIcons.add,
+                              size: 32,
+                              iconSize: 17,
+                              tooltip: translate('Add ID'),
+                              onPressed: addIdToCurrentAb,
+                            ),
+                          );
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: GlassButton(
+                            variant: GlassButtonVariant.secondary,
+                            minHeight: 32,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 11,
+                              vertical: 5,
+                            ),
+                            icon: const Icon(CamelliaIcons.add, size: 16),
+                            onPressed: addIdToCurrentAb,
+                            child: Text(translate('Add ID')),
+                          ),
+                        );
+                      }),
+                      if (!hideAbTagsPanel.value) _buildTagsMenuButton(),
+                      const SizedBox(width: 4),
+                      Listener(
+                        onPointerDown: (event) {
+                          _lastPointerPos = event.position;
+                        },
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (details) =>
+                              _showMenu(_resolveMenuRect(details.globalPosition)),
+                          child: Tooltip(
+                            message: translate('More'),
+                            child: build_more(context),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      _buildAbPermission(),
+                    ],
                   ),
-                  const Spacer(),
-                  if (!hideAbTagsPanel.value) _buildTagsMenuButton(),
-                  const SizedBox(width: 6),
-                  _buildAbPermission(),
-                ],
-              ),
+                );
+              },
             ),
           ),
         ),
@@ -170,21 +238,27 @@ class _AddressBookState extends State<AddressBook> {
   }
 
   Widget _buildTagsMenuButton() => Obx(() {
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final selectedCount = gFFI.abModel.selectedTags.length;
+    final canWrite = gFFI.abModel.current.canWrite();
     final mediaSize = MediaQuery.sizeOf(context);
-    final popoverWidth = (mediaSize.width - 24).clamp(0.0, 280.0).toDouble();
+    final popoverWidth = (mediaSize.width - 24).clamp(0.0, 296.0).toDouble();
     final popoverHeight = (mediaSize.height - 24).clamp(0.0, 400.0).toDouble();
     return MenuAnchor(
       controller: _tagsMenuController,
-      alignmentOffset: const Offset(0, 4),
+      alignmentOffset: const Offset(0, 6),
       style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(tokens.surfaceElevated),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(12),
         minimumSize: WidgetStatePropertyAll(Size(popoverWidth, 0)),
         maximumSize: WidgetStatePropertyAll(Size(popoverWidth, popoverHeight)),
         padding: const WidgetStatePropertyAll(EdgeInsets.zero),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(color: AppVisual.border(context)),
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            side: BorderSide(color: tokens.border, width: 0.85),
           ),
         ),
       ),
@@ -195,7 +269,7 @@ class _AddressBookState extends State<AddressBook> {
             maxHeight: popoverHeight,
           ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -205,29 +279,41 @@ class _AddressBookState extends State<AddressBook> {
                     Expanded(
                       child: Text(
                         translate('Tags'),
-                        style: Theme.of(context).textTheme.titleSmall,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
+                    if (canWrite)
+                      GlassIconButton(
+                        icon: CamelliaIcons.add,
+                        size: 28,
+                        iconSize: 15,
+                        tooltip: translate('Add Tag'),
+                        onPressed: () {
+                          _tagsMenuController.close();
+                          abAddTag();
+                        },
+                      ),
+                    const SizedBox(width: 4),
                     Listener(
                       onPointerDown: (event) {
-                        final x = event.position.dx;
-                        final y = event.position.dy;
-                        menuPos = RelativeRect.fromLTRB(x, y, x, y);
+                        _lastPointerPos = event.position;
                       },
                       onPointerUp: (_) {
                         _tagsMenuController.close();
-                        _showMenu(menuPos);
+                        _showMenu(_resolveMenuRect(_lastPointerPos));
                       },
                       child: build_more(context, invert: true),
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 Flexible(
                   child: SingleChildScrollView(
                     child: Wrap(
-                      spacing: 2,
-                      runSpacing: 2,
+                      spacing: 4,
+                      runSpacing: 4,
                       children: [
                         for (final tag in _addressBookTags()) _tagBuilder(tag),
                       ],
@@ -239,14 +325,24 @@ class _AddressBookState extends State<AddressBook> {
           ),
         ),
       ],
-      builder: (context, controller, child) => Tooltip(
-        message: translate('Tags'),
-        child: IconButton(
-          onPressed: controller.isOpen ? controller.close : controller.open,
-          icon: Badge.count(
-            count: selectedCount,
-            isLabelVisible: selectedCount > 0,
-            child: const Icon(Icons.sell_outlined, size: 19),
+      builder: (context, controller, child) => GlassButton(
+        variant: selectedCount > 0
+            ? GlassButtonVariant.primary
+            : GlassButtonVariant.subtle,
+        minHeight: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        tooltip: translate('Tags'),
+        icon: const Icon(Icons.sell_outlined, size: 15),
+        onPressed: controller.isOpen ? controller.close : controller.open,
+        child: Text(
+          selectedCount > 0
+              ? '${translate('Tags')} ($selectedCount)'
+              : translate('Tags'),
+          style: CamelliaTypography.tabular(
+            theme.textTheme.labelMedium?.copyWith(
+              color: selectedCount > 0 ? Colors.white : null,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
@@ -346,24 +442,30 @@ class _AddressBookState extends State<AddressBook> {
       names.insert(0, personalAddressBookName);
     }
 
+    final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     Row buildItem(String e, {bool button = false}) {
       return Row(
         children: [
           if (button) ...[
             Icon(
-              Icons.menu_book_outlined,
-              size: 18,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              CamelliaIcons.addressBook,
+              size: 16,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
             const SizedBox(width: 8),
           ],
           Expanded(
             child: Tooltip(
-              waitDuration: Duration(milliseconds: 500),
+              waitDuration: const Duration(milliseconds: 500),
               message: gFFI.abModel.translatedName(e),
               child: Text(
                 gFFI.abModel.translatedName(e),
-                style: button ? null : TextStyle(fontSize: 14.0),
+                style: button
+                    ? theme.textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      )
+                    : theme.textTheme.bodyMedium,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.start,
@@ -380,69 +482,99 @@ class _AddressBookState extends State<AddressBook> {
     final TextEditingController textEditingController = _abSearchController;
 
     final isOptFixed = isOptionFixed(kOptionCurrentAbName);
-    return DropdownButton2<String>(
-      valueListenable: ValueNotifier(gFFI.abModel.currentName.value),
-      onChanged: isOptFixed
-          ? null
-          : (value) {
-              if (value != null) {
-                gFFI.abModel.setCurrentName(value);
-                bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: value);
-              }
-            },
-      customButton: Obx(
-        () => SizedBox(
-          height: 40,
-          child: Row(
-            children: [
-              Expanded(
-                child: buildItem(gFFI.abModel.currentName.value, button: true),
+    return DropdownButtonHideUnderline(
+      child: DropdownButton2<String>(
+        valueListenable: ValueNotifier(gFFI.abModel.currentName.value),
+        onChanged: isOptFixed
+            ? null
+            : (value) {
+                if (value != null) {
+                  gFFI.abModel.setCurrentName(value);
+                  bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: value);
+                }
+              },
+        customButton: Obx(
+          () => MouseRegion(
+            cursor: isOptFixed
+                ? SystemMouseCursors.basic
+                : SystemMouseCursors.click,
+            child: SizedBox(
+              height: 36,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: buildItem(
+                      gFFI.abModel.currentName.value,
+                      button: true,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.expand_more_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ],
               ),
-              const Icon(Icons.arrow_drop_down, size: 20),
+            ),
+          ),
+        ),
+        dropdownStyleData: DropdownStyleData(
+          maxHeight: 320,
+          offset: const Offset(0, -4),
+          decoration: BoxDecoration(
+            color: tokens.surfaceElevated,
+            borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+            border: Border.all(color: tokens.border, width: 0.85),
+            boxShadow: [
+              BoxShadow(
+                color: tokens.shadowStrong,
+                blurRadius: 18,
+                spreadRadius: -2,
+                offset: const Offset(0, 8),
+              ),
             ],
           ),
         ),
-      ),
-      underline: Container(
-        height: 0.7,
-        color: Theme.of(context).dividerColor.withValues(alpha: 0.1),
-      ),
-      menuItemStyleData: const MenuItemStyleData(),
-      dropdownSeparator: contains && items.length > 1
-          ? const DropdownSeparator(height: 4, child: Divider())
-          : null,
-      items: items,
-      isExpanded: true,
-      isDense: true,
-      dropdownSearchData: DropdownSearchData(
-        searchController: textEditingController,
-        searchBarWidgetHeight: 50,
-        searchBarWidget: Container(
-          height: 50,
-          padding: const EdgeInsets.only(top: 8, bottom: 4, right: 8, left: 8),
-          child: TextFormField(
-            expands: true,
-            maxLines: null,
-            controller: textEditingController,
-            decoration: InputDecoration(
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 8,
-              ),
-              hintText: translate('Search'),
-              hintStyle: const TextStyle(fontSize: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ).workaroundFreezeLinuxMint(),
+        menuItemStyleData: const MenuItemStyleData(
+          padding: EdgeInsets.symmetric(horizontal: 12),
         ),
-        searchMatchFn: (item, searchValue) {
-          return item.value.toString().toLowerCase().contains(
-            searchValue.toLowerCase(),
-          );
-        },
+        dropdownSeparator: contains && items.length > 1
+            ? DropdownSeparator(
+                height: 8,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Center(
+                    child: Container(height: 0.85, color: tokens.border),
+                  ),
+                ),
+              )
+            : null,
+        items: items,
+        isExpanded: true,
+        isDense: true,
+        dropdownSearchData: DropdownSearchData(
+          searchController: textEditingController,
+          searchBarWidgetHeight: 48,
+          searchBarWidget: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            child: GlassInput(
+              controller: textEditingController,
+              minHeight: 36,
+              prefixIcon: CamelliaIcons.search,
+              hintText: translate('Search'),
+              showClearButton: true,
+            ).workaroundFreezeLinuxMint(),
+          ),
+          searchMatchFn: (item, searchValue) {
+            final q = searchValue.toLowerCase();
+            final raw = item.value.toString().toLowerCase();
+            final translated = gFFI.abModel
+                .translatedName(item.value.toString())
+                .toLowerCase();
+            return raw.contains(q) || translated.contains(q);
+          },
+        ),
       ),
     );
   }
@@ -560,26 +692,45 @@ class _AddressBookState extends State<AddressBook> {
     }
     var isInProgress = false;
     var passwordVisible = false;
-    IDTextEditingController idController = IDTextEditingController(text: '');
-    TextEditingController aliasController = TextEditingController(text: '');
-    TextEditingController passwordController = TextEditingController(text: '');
-    TextEditingController noteController = TextEditingController(text: '');
+    final idController = IDTextEditingController(text: '');
+    final aliasController = TextEditingController(text: '');
+    final passwordController = TextEditingController(text: '');
+    final noteController = TextEditingController(text: '');
     final tags = List.of(gFFI.abModel.currentAbTags);
-    var selectedTag = List<dynamic>.empty(growable: true).obs;
-    final style = TextStyle(fontSize: 14.0);
+    final selectedTag = List<dynamic>.empty(growable: true).obs;
     String? errorMsg;
     final isCurrentAbShared = !gFFI.abModel.current.isPersonal();
+    var disposed = false;
 
-    gFFI.dialogManager.show((setState, close, context) {
-      submit() async {
-        setState(() {
-          isInProgress = true;
-          errorMsg = null;
-        });
-        String id = idController.id;
-        if (id.isEmpty) {
-          // pass
-        } else {
+    void cleanup() {
+      if (disposed) return;
+      disposed = true;
+      idController.dispose();
+      aliasController.dispose();
+      passwordController.clear();
+      passwordController.dispose();
+      noteController.dispose();
+      selectedTag.close();
+    }
+
+    try {
+      await gFFI.dialogManager.show((setState, close, context) {
+        void handleClose() {
+          cleanup();
+          close();
+        }
+
+        Future<void> submit() async {
+          if (isInProgress) return;
+          final String id = idController.id.trim();
+          if (id.isEmpty) {
+            setState(() => errorMsg = translate('Can not be empty'));
+            return;
+          }
+          setState(() {
+            isInProgress = true;
+            errorMsg = null;
+          });
           if (gFFI.abModel.idContainByCurrent(id)) {
             setState(() {
               isInProgress = false;
@@ -587,11 +738,8 @@ class _AddressBookState extends State<AddressBook> {
             });
             return;
           }
-          var password = '';
-          if (isCurrentAbShared) {
-            password = passwordController.text;
-          }
-          String? errMsg2 = await gFFI.abModel.addIdToCurrent(
+          final password = isCurrentAbShared ? passwordController.text : '';
+          final String? errMsg2 = await gFFI.abModel.addIdToCurrent(
             id,
             aliasController.text.trim(),
             password,
@@ -601,265 +749,280 @@ class _AddressBookState extends State<AddressBook> {
           if (errMsg2 != null) {
             setState(() {
               isInProgress = false;
-              errorMsg = errMsg2;
+              errorMsg = formatUserFriendlyError(errMsg2);
             });
             return;
           }
-          // final currentPeers
+          handleClose();
         }
-        close();
-      }
 
-      double marginBottom = 4;
+        final theme = Theme.of(context);
+        final tokens = AppVisual.tokens(context);
+        final glass = CamelliaGlassTokens.of(context);
 
-      row({required Widget label, required Widget input}) {
-        makeChild(bool isPortrait) => Row(
-          children: [
-            !isPortrait
-                ? ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 100),
-                    child: label.marginOnly(right: 10),
-                  )
-                : SizedBox.shrink(),
-            Expanded(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 200),
-                child: input,
-              ),
+        return CustomAlertDialog(
+          title: ModernDialogHeader(
+            icon: CamelliaIcons.addressBook,
+            title: translate("Add ID"),
+            subtitle: gFFI.abModel.translatedName(
+              gFFI.abModel.currentName.value,
             ),
-          ],
-        ).marginOnly(bottom: !isPortrait ? 8 : 0);
-        return Obx(() => makeChild(stateGlobal.isPortrait.isTrue));
-      }
-
-      return CustomAlertDialog(
-        title: ModernDialogHeader(
-          icon: CamelliaIcons.addressBook,
-          title: translate("Add ID"),
-          onClose: close,
-        ),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
+            onClose: isInProgress ? null : handleClose,
+          ),
+          contentBoxConstraints: const BoxConstraints(maxWidth: 460),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                row(
-                  label: Row(
-                    children: [
-                      Text(
-                        '*',
-                        style: TextStyle(
-                          color: CamelliaGlassTokens.of(context).statusAlert,
-                          fontSize: 14,
-                        ),
+                GlassInput(
+                  controller: idController,
+                  autofocus: true,
+                  tabularNums: true,
+                  labelText: '${translate('ID')} *',
+                  hintText: translate('Enter Remote ID'),
+                  errorText: errorMsg,
+                  showPasteButton: true,
+                  inputFormatters: [IDTextInputFormatter()],
+                  onChanged: (_) {
+                    if (errorMsg != null) {
+                      setState(() => errorMsg = null);
+                    }
+                  },
+                ).workaroundFreezeLinuxMint(),
+                const SizedBox(height: 12),
+                GlassInput(
+                  controller: aliasController,
+                  labelText: translate('Alias'),
+                  hintText: translate('Alias'),
+                ).workaroundFreezeLinuxMint(),
+                if (isCurrentAbShared) ...[
+                  const SizedBox(height: 12),
+                  GlassInput(
+                    controller: passwordController,
+                    obscureText: !passwordVisible,
+                    showClearButton: false,
+                    labelText: translate('Password'),
+                    hintText: translate('Password'),
+                    trailing: IconButton(
+                      tooltip: passwordVisible
+                          ? translate('Hide Password')
+                          : translate('Show Password'),
+                      icon: Icon(
+                        passwordVisible
+                            ? CamelliaIcons.eyeOff
+                            : CamelliaIcons.eye,
+                        size: 18,
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
-                      Text('ID', style: style),
-                    ],
+                      onPressed: () {
+                        setState(() => passwordVisible = !passwordVisible);
+                      },
+                    ),
+                  ).workaroundFreezeLinuxMint(),
+                ],
+                const SizedBox(height: 12),
+                GlassInput(
+                  controller: noteController,
+                  maxLines: 3,
+                  labelText: translate('Note'),
+                  hintText: translate('Note'),
+                ).workaroundFreezeLinuxMint(),
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Text(
+                    translate('Tags'),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  input: Obx(
-                    () => TextField(
-                      controller: idController,
-                      style: CamelliaTypography.tabular(
-                        Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      inputFormatters: [IDTextInputFormatter()],
-                      decoration: InputDecoration(
-                        labelText: stateGlobal.isPortrait.isFalse
-                            ? null
-                            : translate('ID'),
-                        errorText: errorMsg,
-                        errorMaxLines: 5,
-                      ),
-                    ).workaroundFreezeLinuxMint(),
-                  ),
-                ),
-                row(
-                  label: Text(translate('Alias'), style: style),
-                  input: Obx(
-                    () => TextField(
-                      controller: aliasController,
-                      decoration: InputDecoration(
-                        labelText: stateGlobal.isPortrait.isFalse
-                            ? null
-                            : translate('Alias'),
-                      ),
-                    ).workaroundFreezeLinuxMint(),
-                  ),
-                ),
-                if (isCurrentAbShared)
-                  row(
-                    label: Text(translate('Password'), style: style),
-                    input: Obx(
-                      () => TextField(
-                        controller: passwordController,
-                        obscureText: !passwordVisible,
-                        decoration: InputDecoration(
-                          labelText: stateGlobal.isPortrait.isFalse
-                              ? null
-                              : translate('Password'),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              passwordVisible
-                                  ? CamelliaIcons.eye
-                                  : CamelliaIcons.eyeOff,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                passwordVisible = !passwordVisible;
-                              });
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: tags
+                        .map(
+                          (e) => AddressBookTag(
+                            name: e,
+                            tags: selectedTag,
+                            onTap: () {
+                              if (selectedTag.contains(e)) {
+                                selectedTag.remove(e);
+                              } else {
+                                selectedTag.add(e);
+                              }
                             },
+                            showActionMenu: false,
                           ),
-                        ),
-                      ).workaroundFreezeLinuxMint(),
-                    ),
+                        )
+                        .toList(growable: false),
                   ),
-                row(
-                  label: Text(translate('Note'), style: style),
-                  input: Obx(
-                    () => TextField(
-                      controller: noteController,
-                      maxLines: 3,
-                      minLines: 1,
-                      maxLength: 300,
-                      decoration: InputDecoration(
-                        labelText: stateGlobal.isPortrait.isFalse
-                            ? null
-                            : translate('Note'),
+                ],
+                if (isCurrentAbShared) ...[
+                  const SizedBox(height: 12),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: glass.statusHighLatency.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
                       ),
-                    ).workaroundFreezeLinuxMint(),
-                  ),
-                ),
-                if (gFFI.abModel.currentAbTags.isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(translate('Tags'), style: style),
-                  ).marginOnly(top: 8, bottom: marginBottom),
-                if (gFFI.abModel.currentAbTags.isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Wrap(
-                      children: tags
-                          .map(
-                            (e) => AddressBookTag(
-                              name: e,
-                              tags: selectedTag,
-                              onTap: () {
-                                if (selectedTag.contains(e)) {
-                                  selectedTag.remove(e);
-                                } else {
-                                  selectedTag.add(e);
-                                }
-                              },
-                              showActionMenu: false,
-                            ),
-                          )
-                          .toList(growable: false),
+                      border: Border.all(color: tokens.border, width: 0.85),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 4.0),
-            if (!gFFI.abModel.current.isPersonal())
-              Row(
-                children: [
-                  Icon(
-                    Icons.info_outline_rounded,
-                    size: 16,
-                    color: CamelliaGlassTokens.of(context).statusHighLatency,
-                  ).marginOnly(right: 6),
-                  Expanded(
-                    child: Text(
-                      translate('share_warning_tip'),
-                      style: Theme.of(context).textTheme.bodySmall,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.info_outline_rounded,
+                            size: 16,
+                            color: glass.statusHighLatency,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              translate('share_warning_tip'),
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
-              ).marginSymmetric(vertical: 10),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress) const LinearProgressIndicator(),
+                // NOT use Offstage to wrap LinearProgressIndicator
+                if (isInProgress) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              onPressed: isInProgress ? null : handleClose,
+              icon: const Icon(CamelliaIcons.close, size: 17),
+              child: Text(translate('Cancel')),
+            ),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              loading: isInProgress,
+              onPressed: isInProgress ? null : submit,
+              icon: const Icon(CamelliaIcons.check, size: 17),
+              child: Text(translate('OK')),
+            ),
           ],
-        ),
-        actions: [
-          dialogButton("Cancel", onPressed: close, isOutline: true),
-          dialogButton("OK", onPressed: submit),
-        ],
-        onSubmit: submit,
-        onCancel: close,
-      );
-    });
+          onSubmit: isInProgress ? null : submit,
+          onCancel: isInProgress ? null : handleClose,
+        );
+      });
+    } finally {
+      cleanup();
+    }
   }
 
   void abAddTag() async {
     var field = "";
     var msg = "";
     var isInProgress = false;
-    TextEditingController controller = TextEditingController(text: field);
-    gFFI.dialogManager.show((setState, close, context) {
-      submit() async {
-        setState(() {
-          msg = "";
-          isInProgress = true;
-        });
-        field = controller.text.trim();
-        if (field.isEmpty) {
-          // pass
-        } else {
-          final tags = field.trim().split(RegExp(r"[\s,;\n]+"));
-          field = tags.join(',');
-          for (var t in [kUntagged, translate(kUntagged)]) {
+    final controller = TextEditingController(text: field);
+    var disposed = false;
+
+    void cleanup() {
+      if (disposed) return;
+      disposed = true;
+      controller.dispose();
+    }
+
+    try {
+      await gFFI.dialogManager.show((setState, close, context) {
+        void handleClose() {
+          cleanup();
+          close();
+        }
+
+        Future<void> submit() async {
+          if (isInProgress) return;
+          field = controller.text.trim();
+          if (field.isEmpty) {
+            handleClose();
+            return;
+          }
+          setState(() {
+            msg = "";
+            isInProgress = true;
+          });
+          final tags = field
+              .split(RegExp(r"[\s,;\n]+"))
+              .map((t) => t.trim())
+              .where((t) => t.isNotEmpty)
+              .toList();
+          for (final t in [kUntagged, translate(kUntagged)]) {
             if (tags.contains(t)) {
-              showToast('Tag name cannot be "$t"');
-              isInProgress = false;
+              showToast(translate('Tag name cannot be empty'));
+              setState(() => isInProgress = false);
               return;
             }
           }
           gFFI.abModel.addTags(tags);
-          // final currentPeers
+          handleClose();
         }
-        close();
-      }
 
-      return CustomAlertDialog(
-        title: ModernDialogHeader(
-          icon: Icons.label_outline_rounded,
-          title: translate("Add Tag"),
-          onClose: close,
-        ),
-        content: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(translate("whitelist_sep")),
-            const SizedBox(height: 8.0),
-            Row(
+        return CustomAlertDialog(
+          title: ModernDialogHeader(
+            icon: Icons.sell_outlined,
+            title: translate("Add Tag"),
+            subtitle: translate("whitelist_sep"),
+            onClose: isInProgress ? null : handleClose,
+          ),
+          contentBoxConstraints: const BoxConstraints(maxWidth: 440),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: TextField(
-                    maxLines: null,
-                    decoration: InputDecoration(
-                      errorText: msg.isEmpty ? null : translate(msg),
-                    ),
-                    controller: controller,
-                    autofocus: true,
-                  ).workaroundFreezeLinuxMint(),
-                ),
+                GlassInput(
+                  controller: controller,
+                  autofocus: true,
+                  maxLines: 2,
+                  labelText: translate('Tags'),
+                  hintText: translate('Tags'),
+                  errorText: msg.isEmpty ? null : translate(msg),
+                ).workaroundFreezeLinuxMint(),
+                // NOT use Offstage to wrap LinearProgressIndicator
+                if (isInProgress) ...[
+                  const SizedBox(height: 10),
+                  const LinearProgressIndicator(),
+                ],
               ],
             ),
-            const SizedBox(height: 4.0),
-            // NOT use Offstage to wrap LinearProgressIndicator
-            if (isInProgress) const LinearProgressIndicator(),
+          ),
+          actions: [
+            GlassButton(
+              variant: GlassButtonVariant.secondary,
+              onPressed: isInProgress ? null : handleClose,
+              icon: const Icon(CamelliaIcons.close, size: 17),
+              child: Text(translate('Cancel')),
+            ),
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              loading: isInProgress,
+              onPressed: isInProgress ? null : submit,
+              icon: const Icon(CamelliaIcons.check, size: 17),
+              child: Text(translate('OK')),
+            ),
           ],
-        ),
-        actions: [
-          dialogButton("Cancel", onPressed: close, isOutline: true),
-          dialogButton("OK", onPressed: submit),
-        ],
-        onSubmit: submit,
-        onCancel: close,
-      );
-    });
+          onSubmit: isInProgress ? null : submit,
+          onCancel: isInProgress ? null : handleClose,
+        );
+      });
+    } finally {
+      cleanup();
+    }
   }
 }
 
@@ -870,21 +1033,32 @@ class AddressBookTag extends StatelessWidget {
   final bool showActionMenu;
 
   const AddressBookTag({
-    Key? key,
+    super.key,
     required this.name,
     required this.tags,
     this.onTap,
     this.showActionMenu = true,
-  }) : super(key: key);
+  });
+
+  RelativeRect _resolveRect(BuildContext context, Offset globalPos) {
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    final overlaySize = overlay?.size ?? MediaQuery.sizeOf(context);
+    final local = overlay != null
+        ? overlay.globalToLocal(globalPos)
+        : globalPos;
+    return RelativeRect.fromRect(
+      Rect.fromLTWH(local.dx, local.dy, 0, 0),
+      Offset.zero & overlaySize,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    var pos = RelativeRect.fill;
+    Offset tapPos = Offset.zero;
 
     void setPosition(TapDownDetails e) {
-      final x = e.globalPosition.dx;
-      final y = e.globalPosition.dy;
-      pos = RelativeRect.fromLTRB(x, y, x, y);
+      tapPos = e.globalPosition;
     }
 
     final isUnTagged = name == kUntagged;
@@ -892,36 +1066,46 @@ class AddressBookTag extends StatelessWidget {
     return GestureDetector(
       onTapDown: showAction ? setPosition : null,
       onSecondaryTapDown: showAction ? setPosition : null,
-      onSecondaryTap: showAction ? () => _showMenu(context, pos) : null,
-      onLongPress: showAction ? () => _showMenu(context, pos) : null,
+      onSecondaryTap: showAction
+          ? () => _showMenu(context, _resolveRect(context, tapPos))
+          : null,
+      onLongPress: showAction
+          ? () => _showMenu(context, _resolveRect(context, tapPos))
+          : null,
       child: Obx(() {
         final theme = Theme.of(context);
+        final tokens = AppVisual.tokens(context);
         final selected = tags.contains(name);
         final tagColor = gFFI.abModel.getCurrentAbTagColor(name);
         final selectedForeground =
             ThemeData.estimateBrightnessForColor(tagColor) == Brightness.dark
             ? Colors.white
-            : const Color(0xFF171A21);
+            : const Color(0xFF0F172A);
         return Semantics(
           selected: selected,
           button: true,
           label: isUnTagged ? translate(name) : name,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
             child: Material(
-              color: selected ? tagColor : theme.colorScheme.surfaceContainer,
+              color: selected
+                  ? tagColor
+                  : tokens.surfaceContainer.withValues(alpha: 0.78),
               shape: StadiumBorder(
                 side: BorderSide(
-                  color: selected ? tagColor : theme.colorScheme.outlineVariant,
+                  color: selected ? tagColor : tokens.border,
+                  width: 0.85,
                 ),
               ),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: onTap,
                 customBorder: const StadiumBorder(),
+                splashFactory: NoSplash.splashFactory,
+                highlightColor: Colors.transparent,
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(
-                    minHeight: 34,
+                    minHeight: 32,
                     maxWidth: 180,
                   ),
                   child: Padding(
@@ -931,8 +1115,8 @@ class AddressBookTag extends StatelessWidget {
                       children: [
                         if (!isUnTagged) ...[
                           Container(
-                            width: 8,
-                            height: 8,
+                            width: 7.5,
+                            height: 7.5,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: selected ? selectedForeground : tagColor,
@@ -949,6 +1133,9 @@ class AddressBookTag extends StatelessWidget {
                               color: selected
                                   ? selectedForeground
                                   : theme.colorScheme.onSurface,
+                              fontWeight: selected
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
                             ),
                           ),
                         ),
@@ -965,7 +1152,7 @@ class AddressBookTag extends StatelessWidget {
   }
 
   void _showMenu(BuildContext context, RelativeRect pos) {
-    final items = [
+    final items = <MenuEntryBase<String>>[
       getEntry(translate("Rename"), () {
         renameDialog(
           oldName: name,
@@ -984,25 +1171,20 @@ class AddressBookTag extends StatelessWidget {
               final ok = await gFFI.abModel.renameTag(name, newName);
               if (ok) {
                 showToast(translate('Successful'));
-                Future.delayed(Duration.zero, () => Get.back());
                 return true;
               } else {
                 showToast(translate('Failed'));
                 return false;
               }
             }
-            Future.delayed(Duration.zero, () => Get.back());
             return true;
-          },
-          onCancel: () {
-            Future.delayed(Duration.zero, () => Get.back());
           },
         );
       }),
       getEntry(translate('Change Color'), () async {
         final model = gFFI.abModel;
-        Color oldColor = model.getCurrentAbTagColor(name);
-        Color newColor = await showColorPickerDialog(
+        final Color oldColor = model.getCurrentAbTagColor(name);
+        final Color newColor = await showColorPickerDialog(
           context,
           oldColor,
           pickersEnabled: {
@@ -1023,15 +1205,27 @@ class AddressBookTag extends StatelessWidget {
           model.setTagColor(name, newColor);
         }
       }),
-      getEntry(translate("Delete"), () async {
-        final ok = await gFFI.abModel.deleteTag(name);
-        if (ok) {
-          showToast(translate('Successful'));
-        } else {
-          showToast(translate('Failed'));
-        }
-        Future.delayed(Duration.zero, () => Get.back());
-      }),
+      MenuEntryDivider<String>(),
+      MenuEntryButton<String>(
+        isDestructive: true,
+        dismissOnClicked: true,
+        childBuilder: (TextStyle? style) => Text(translate("Delete"), style: style),
+        proc: () {
+          deleteConfirmDialog(
+            () async {
+              final ok = await gFFI.abModel.deleteTag(name);
+              if (ok) {
+                showToast(translate('Successful'));
+                return true;
+              } else {
+                showToast(translate('Failed'));
+                return false;
+              }
+            },
+            '${translate('Delete')} "$name"?',
+          );
+        },
+      ),
     ];
 
     mod_menu.showMenu(
@@ -1041,7 +1235,7 @@ class AddressBookTag extends StatelessWidget {
           .map(
             (e) => e.build(
               context,
-              MenuConfig(
+              const MenuConfig(
                 commonColor: CustomPopupMenuTheme.commonColor,
                 height: CustomPopupMenuTheme.height,
                 dividerHeight: CustomPopupMenuTheme.dividerHeight,

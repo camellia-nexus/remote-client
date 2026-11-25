@@ -23,6 +23,8 @@ import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
+import '../../ui/camellia_design.dart';
+import '../../ui/glass_components.dart';
 import 'macos_full_screen_focus_recovery.dart';
 import '../../utils/platform_channel.dart';
 
@@ -137,6 +139,11 @@ class _RemotePageState extends State<RemotePage>
 
   late FFI _ffi;
   Worker? _waylandKeyboardModeWorker;
+  Worker? _relMouseModeWorker;
+  Timer? _relMouseBannerTimer;
+  final Rxn<bool> _relMouseBannerActive = Rxn<bool>();
+  bool _postImageDismissScheduled = false;
+  bool _postImageDismissed = false;
   bool _waylandKeyboardModeNormalized = false;
   bool _waylandKeyboardModeNormalizing = false;
 
@@ -242,6 +249,19 @@ class _RemotePageState extends State<RemotePage>
     // Register callback to cancel debounce timer when relative mouse mode is disabled
     _ffi.inputModel.onRelativeMouseModeDisabled =
         _cancelPointerLockCenterDebounceTimer;
+
+    _relMouseModeWorker = ever<bool>(_ffi.inputModel.relativeMouseMode, (
+      bool enabled,
+    ) {
+      if (!mounted) return;
+      _relMouseBannerTimer?.cancel();
+      _relMouseBannerActive.value = enabled;
+      _relMouseBannerTimer = Timer(const Duration(milliseconds: 2400), () {
+        if (mounted) {
+          _relMouseBannerActive.value = null;
+        }
+      });
+    });
 
     _waylandKeyboardModeWorker = ever(_ffi.ffiModel.pi.isSet, (bool isSet) {
       if (isSet) {
@@ -722,6 +742,9 @@ class _RemotePageState extends State<RemotePage>
     DesktopMultiWindow.removeListener(this);
     _pointerLockCenterDebounceTimer?.cancel();
     _pointerLockCenterDebounceTimer = null;
+    _relMouseBannerTimer?.cancel();
+    _relMouseBannerTimer = null;
+    _relMouseModeWorker?.dispose();
     _waylandKeyboardModeWorker?.dispose();
     _timer?.cancel();
     _timer = null;
@@ -827,6 +850,16 @@ class _RemotePageState extends State<RemotePage>
                           OverlayEntry(builder: remoteToolbar)
                         ])
                       : remoteToolbar(context)),
+              Obx(() {
+                final bannerState = _relMouseBannerActive.value;
+                if (bannerState == null) return const Offstage();
+                return IgnorePointer(
+                  child: Align(
+                    alignment: const Alignment(0, -0.82),
+                    child: _RelativeMouseModeBanner(enabled: bannerState),
+                  ),
+                );
+              }),
               _ffi.ffiModel.pi.isSet.isFalse ? emptyOverlay() : Offstage(),
             ],
           ),
@@ -840,16 +873,23 @@ class _RemotePageState extends State<RemotePage>
         final imageReady = _ffi.ffiModel.pi.isSet.isTrue &&
             _ffi.ffiModel.waitForFirstImage.isFalse;
         if (imageReady) {
-          // If the privacy mode(disable physical displays) is switched,
-          // we should not dismiss the dialog immediately.
-          if (DateTime.now().difference(togglePrivacyModeTime) >
-              const Duration(milliseconds: 3000)) {
-            // `dismissAll()` is to ensure that the state is clean.
-            // It's ok to call dismissAll() here.
-            _ffi.dialogManager.dismissAll();
-            // Recreate the block state to refresh the state.
-            _blockableOverlayState = BlockableOverlayState();
-            _blockableOverlayState.applyFfi(_ffi);
+          if (!_postImageDismissed && !_postImageDismissScheduled) {
+            _postImageDismissScheduled = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _postImageDismissScheduled = false;
+              if (!mounted) return;
+              if (DateTime.now().difference(togglePrivacyModeTime) >
+                  const Duration(milliseconds: 3000)) {
+                _ffi.dialogManager.dismissAll();
+                setState(() {
+                  _postImageDismissed = true;
+                  _blockableOverlayState = BlockableOverlayState()
+                    ..applyFfi(_ffi);
+                });
+              } else {
+                _postImageDismissed = true;
+              }
+            });
           }
           // Block the whole `bodyWidget()` when dialog shows.
           return BlockableOverlay(
@@ -857,6 +897,7 @@ class _RemotePageState extends State<RemotePage>
             state: _blockableOverlayState,
           );
         } else {
+          _postImageDismissed = false;
           // `_blockableOverlayState` is not recreated here.
           // The toolbar's block state won't work properly when reconnecting, but that's okay.
           return bodyWidget();
@@ -1543,6 +1584,54 @@ class CursorPaint extends StatelessWidget {
         x: x,
         y: y,
         scale: scale,
+      ),
+    );
+  }
+}
+
+class _RelativeMouseModeBanner extends StatelessWidget {
+  const _RelativeMouseModeBanner({required this.enabled});
+
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = CamelliaGlassTokens.of(context);
+    final hotkey = isMacOS ? '⌘G' : 'Ctrl+Alt';
+    return GlassSurface(
+      layer: CamelliaGlassLayer.modal,
+      elevated: true,
+      strokeWidth: 0.85,
+      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CamelliaVectorIcon(
+            CamelliaGlyph.mouse,
+            size: 16,
+            color: enabled ? glass.statusOnline : theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            enabled
+                ? translate('Relative mouse mode enabled')
+                : translate('Relative mouse mode disabled'),
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          if (enabled) ...[
+            const SizedBox(width: 10),
+            GlassBadge(
+              label: '${translate('Exit')}: $hotkey',
+              tone: GlassBadgeTone.neutral,
+              compact: true,
+            ),
+          ],
+        ],
       ),
     );
   }

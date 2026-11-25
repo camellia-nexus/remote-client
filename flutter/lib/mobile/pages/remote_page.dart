@@ -1,5 +1,6 @@
 import 'dart:async';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/shared_state.dart';
@@ -65,6 +66,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
   bool _showGestureHelp = false;
   bool _showVirtualKeys = false;
+  bool _showFnNumbers = false;
   String _value = '';
   Orientation? _currentOrientation;
   Timer? _orientationTimer;
@@ -212,8 +214,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  // For client side
-  // When swithing from other app to this app, try to sync clipboard.
   void trySyncClipboard() {
     gFFI.invokeMethod("try_sync_clipboard");
   }
@@ -246,7 +246,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
     inputModel.keyboardInputAllowed = false;
 
-    // Ensure soft keyboard is not active before user confirms.
     _showEdit = false;
     gFFI.invokeMethod("enable_soft_keyboard", false);
     _mobileFocusNode.unfocus();
@@ -254,13 +253,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     setState(() {});
   }
 
-  // to-do: It should be better to use transparent color instead of the bgColor.
-  // But for now, the transparent color will cause the canvas to be white.
-  // I'm sure that the white color is caused by the Overlay widget in BlockableOverlay.
-  // But I don't know why and how to fix it.
   Widget emptyOverlay(Color bgColor) => BlockableOverlay(
-    /// the Overlay key will be set with _blockableOverlayState in BlockableOverlay
-    /// see override build() in [BlockableOverlay]
     state: _blockableOverlayState,
     underlying: Container(color: bgColor),
   );
@@ -268,25 +261,27 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
         gFFI.invokeMethod("enable_soft_keyboard", false);
       }
 
-      // Workaround for iOS: physical keyboard input fails after virtual keyboard is hidden
-      // https://github.com/flutter/flutter/issues/39900
-      // https://github.com/rustdesk/rustdesk/discussions/11843#discussioncomment-13499698 - Virtual keyboard issue
       if (isIOS) {
         _iosKeyboardWorkaroundTimer?.cancel();
-        _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 100), () {
-          if (!mounted) return;
-          _physicalFocusNode.unfocus();
-          _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 50), () {
+        _iosKeyboardWorkaroundTimer = Timer(
+          const Duration(milliseconds: 100),
+          () {
             if (!mounted) return;
-            _physicalFocusNode.requestFocus();
-          });
-        });
+            _physicalFocusNode.unfocus();
+            _iosKeyboardWorkaroundTimer = Timer(
+              const Duration(milliseconds: 50),
+              () {
+                if (!mounted) return;
+                _physicalFocusNode.requestFocus();
+              },
+            );
+          },
+        );
       }
     } else {
       _iosKeyboardWorkaroundTimer?.cancel();
@@ -300,7 +295,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         _mobileFocusNode.requestFocus();
       });
     }
-    // update for Scaffold
     setState(() {});
   }
 
@@ -315,7 +309,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     var subNewValue = newValue.substring(j + 1);
     var subOldValue = oldValue.substring(j + 1);
 
-    // get common prefix of subNewValue and subOldValue
     var common = 0;
     for (
       ;
@@ -325,15 +318,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       ++common
     ) {}
 
-    // get newStr from subNewValue
     var newStr = "";
     if (subNewValue.length > common) {
       newStr = subNewValue.substring(common);
     }
 
-    // Set the value to the old value and early return if is still composing. (1 && 2)
-    // 1. The composing range is valid
-    // 2. The new string is shorter than the composing range.
     if (_textController.value.isComposingRangeValid) {
       final composingLength =
           _textController.value.composing.end -
@@ -344,12 +333,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       }
     }
 
-    // Delete the different part in the old value.
     for (i = 0; i < subOldValue.length - common; ++i) {
       inputModel.inputKey('VK_BACK');
     }
 
-    // Input the new string.
     if (newStr.length > 1) {
       bind.sessionInputString(sessionId: sessionId, value: newStr);
     } else {
@@ -364,14 +351,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         newValue.isNotEmpty &&
         oldValue[0] == '1' &&
         newValue[0] != '1') {
-      // clipboard
       oldValue = '';
     }
     if (newValue.length == oldValue.length) {
-      // ?
+      // no-op
     } else if (newValue.length < oldValue.length) {
-      final char = 'VK_BACK';
-      inputModel.inputKey(char);
+      inputModel.inputKey('VK_BACK');
     } else {
       final content = newValue.substring(oldValue.length);
       if (content.length > 1) {
@@ -386,7 +371,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 content == '《》' ||
                 content == '（）' ||
                 content == '【】')) {
-          // can not only input content[0], because when input ], [ are also auo insert, which cause ] never be input
           bind.sessionInputString(sessionId: sessionId, value: content);
           _openKeyboardUnlocked();
           return;
@@ -398,7 +382,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  // handle mobile virtual keyboard
   void handleSoftKeyboardInput(String newValue) {
     if (!gFFI.ffiModel.effectiveControlPolicy.canControlRemote) {
       return;
@@ -458,14 +441,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void _openKeyboardUnlocked() {
     inputModel.keyboardInputAllowed = true;
     gFFI.invokeMethod("enable_soft_keyboard", true);
-    // destroy first, so that our _value trick can work
     _value = initText;
     _textController.text = _value;
     setState(() => _showEdit = false);
     _timer?.cancel();
     _timer = Timer(kMobileDelaySoftKeyboard, () {
-      // show now, and sleep a while to requestFocus to
-      // make sure edit ready, so that keyboard won't show/hide/show/hide happen
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
@@ -490,38 +470,34 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         keyboardVisibilityController.isVisible && _showEdit;
     final showActionButton = keyboardIsVisible || _showGestureHelp;
 
-    final scheme = Theme.of(context).colorScheme;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) clientClose(sessionId, gFFI);
       },
       child: Scaffold(
-        // workaround for https://github.com/rustdesk/rustdesk/issues/3131
         floatingActionButtonLocation: keyboardIsVisible
             ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
             : null,
         floatingActionButton: !showActionButton
             ? null
-            : Tooltip(
-                message: translate('Close'),
-                child: FloatingActionButton.small(
-                  foregroundColor: scheme.onSecondaryContainer,
-                  backgroundColor: scheme.secondaryContainer,
-                  child: const Icon(Icons.expand_more_rounded),
-                  onPressed: () {
-                    setState(() {
-                      if (keyboardIsVisible) {
-                        _showEdit = false;
-                        gFFI.invokeMethod("enable_soft_keyboard", false);
-                        _mobileFocusNode.unfocus();
-                        _physicalFocusNode.requestFocus();
-                      } else if (_showGestureHelp) {
-                        _showGestureHelp = false;
-                      }
-                    });
-                  },
-                ),
+            : GlassIconButton(
+                icon: Icons.keyboard_arrow_down_rounded,
+                tooltip: translate('Close'),
+                size: 40,
+                iconSize: 22,
+                onPressed: () {
+                  setState(() {
+                    if (keyboardIsVisible) {
+                      _showEdit = false;
+                      gFFI.invokeMethod("enable_soft_keyboard", false);
+                      _mobileFocusNode.unfocus();
+                      _physicalFocusNode.requestFocus();
+                    } else if (_showGestureHelp) {
+                      _showGestureHelp = false;
+                    }
+                  });
+                },
               ),
         bottomNavigationBar: Obx(
           () => Stack(
@@ -532,12 +508,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   ? emptyOverlay(MyTheme.canvasColor)
                   : () {
                       gFFI.ffiModel.tryShowAndroidActionsOverlay();
-                      return Offstage();
+                      return const Offstage();
                     }(),
               _bottomWidget(),
               gFFI.ffiModel.pi.isSet.isFalse
                   ? emptyOverlay(MyTheme.canvasColor)
-                  : Offstage(),
+                  : const Offstage(),
             ],
           ),
         ),
@@ -574,8 +550,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                     child: inputModel.isPhysicalMouse.value
                                         ? getBodyForMobile()
                                         : RawTouchGestureDetectorRegion(
-                                            child: getBodyForMobile(),
                                             ffi: gFFI,
+                                            child: getBodyForMobile(),
                                           ),
                                   );
                                 },
@@ -599,8 +575,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ? SystemMouseCursors.none
           : MouseCursor.defer,
       inputModel: inputModel,
-      // Disable RawKeyFocusScope before the connecting is established.
-      // The "Delete" key on the soft keyboard may be grabbed when inputting the password dialog.
       child: gFFI.ffiModel.pi.isSet.isTrue
           ? RawKeyFocusScope(
               focusNode: _physicalFocusNode,
@@ -613,8 +587,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget _buildVirtualKeyBar() {
     final theme = Theme.of(context);
-    final primary = theme.colorScheme.primary;
-    Widget keyPill({
+    final dark = theme.brightness == Brightness.dark;
+    final tokens =
+        theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final isMac = gFFI.ffiModel.pi.platform == kPeerPlatformMacOS;
+
+    Widget keyCap({
       required String label,
       IconData? icon,
       bool active = false,
@@ -629,29 +610,34 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           },
           child: AnimatedContainer(
             duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+            constraints: const BoxConstraints(minHeight: 32, minWidth: 38),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: active
-                  ? primary.withValues(alpha: 0.24)
-                  : AppVisual.inset(context).withValues(alpha: 0.78),
+                  ? accent.withValues(alpha: dark ? 0.26 : 0.16)
+                  : tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.78 : 0.88,
+                    ),
               borderRadius: BorderRadius.circular(CamelliaRadius.control),
               border: Border.all(
                 color: active
-                    ? primary.withValues(alpha: 0.65)
-                    : AppVisual.border(context).withValues(alpha: 0.55),
+                    ? accent.withValues(alpha: 0.75)
+                    : tokens.border.withValues(alpha: 0.85),
+                width: 0.85,
               ),
             ),
             child: icon != null
                 ? Icon(
                     icon,
                     size: 16,
-                    color: active ? primary : theme.colorScheme.onSurface,
+                    color: active ? accent : theme.colorScheme.onSurface,
                   )
                 : Text(
                     label,
                     style: CamelliaTypography.tabular(
                       theme.textTheme.labelMedium?.copyWith(
-                        color: active ? primary : theme.colorScheme.onSurface,
+                        color: active ? accent : theme.colorScheme.onSurface,
                         fontWeight: active ? FontWeight.w700 : FontWeight.w600,
                       ),
                     ),
@@ -676,65 +662,97 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  keyPill(
+                  keyCap(
                     label: 'Esc',
                     onTap: () => inputModel.inputKey('Escape'),
                   ),
-                  keyPill(
+                  keyCap(
                     label: 'Tab',
                     onTap: () => inputModel.inputKey('Tab'),
                   ),
-                  keyPill(
+                  keyCap(
                     label: 'Ctrl',
                     active: inputModel.ctrl,
-                    onTap: () => setState(() => inputModel.ctrl = !inputModel.ctrl),
+                    onTap: () =>
+                        setState(() => inputModel.ctrl = !inputModel.ctrl),
                   ),
-                  keyPill(
+                  keyCap(
                     label: 'Alt',
                     active: inputModel.alt,
-                    onTap: () => setState(() => inputModel.alt = !inputModel.alt),
+                    onTap: () =>
+                        setState(() => inputModel.alt = !inputModel.alt),
                   ),
-                  keyPill(
-                    label: 'Win',
+                  keyCap(
+                    label: isMac ? 'Cmd' : 'Win',
                     active: inputModel.command,
                     onTap: () => setState(
                       () => inputModel.command = !inputModel.command,
                     ),
                   ),
-                  keyPill(
+                  keyCap(
                     label: 'Shift',
                     active: inputModel.shift,
                     onTap: () =>
                         setState(() => inputModel.shift = !inputModel.shift),
                   ),
-                  keyPill(
-                    label: 'Left',
-                    icon: Icons.keyboard_arrow_left_rounded,
-                    onTap: () => inputModel.inputKey('LeftArrow'),
+                  keyCap(
+                    label: 'F1–12',
+                    active: _showFnNumbers,
+                    onTap: () =>
+                        setState(() => _showFnNumbers = !_showFnNumbers),
                   ),
-                  keyPill(
-                    label: 'Up',
-                    icon: Icons.keyboard_arrow_up_rounded,
-                    onTap: () => inputModel.inputKey('UpArrow'),
-                  ),
-                  keyPill(
-                    label: 'Down',
-                    icon: Icons.keyboard_arrow_down_rounded,
-                    onTap: () => inputModel.inputKey('DownArrow'),
-                  ),
-                  keyPill(
-                    label: 'Right',
-                    icon: Icons.keyboard_arrow_right_rounded,
-                    onTap: () => inputModel.inputKey('RightArrow'),
-                  ),
-                  keyPill(
-                    label: 'Del',
-                    onTap: () => inputModel.inputKey('Delete'),
-                  ),
-                  keyPill(
-                    label: 'CAD',
-                    onTap: () => bind.sessionCtrlAltDel(sessionId: sessionId),
-                  ),
+                  if (_showFnNumbers) ...[
+                    for (var i = 1; i <= 12; i++)
+                      keyCap(
+                        label: 'F$i',
+                        onTap: () => inputModel.inputKey('VK_F$i'),
+                      ),
+                  ] else ...[
+                    keyCap(
+                      label: 'Left',
+                      icon: Icons.keyboard_arrow_left_rounded,
+                      onTap: () => inputModel.inputKey('LeftArrow'),
+                    ),
+                    keyCap(
+                      label: 'Up',
+                      icon: Icons.keyboard_arrow_up_rounded,
+                      onTap: () => inputModel.inputKey('UpArrow'),
+                    ),
+                    keyCap(
+                      label: 'Down',
+                      icon: Icons.keyboard_arrow_down_rounded,
+                      onTap: () => inputModel.inputKey('DownArrow'),
+                    ),
+                    keyCap(
+                      label: 'Right',
+                      icon: Icons.keyboard_arrow_right_rounded,
+                      onTap: () => inputModel.inputKey('RightArrow'),
+                    ),
+                    keyCap(
+                      label: 'Home',
+                      onTap: () => inputModel.inputKey('VK_HOME'),
+                    ),
+                    keyCap(
+                      label: 'End',
+                      onTap: () => inputModel.inputKey('VK_END'),
+                    ),
+                    keyCap(
+                      label: 'PgUp',
+                      onTap: () => inputModel.inputKey('VK_PRIOR'),
+                    ),
+                    keyCap(
+                      label: 'PgDn',
+                      onTap: () => inputModel.inputKey('VK_NEXT'),
+                    ),
+                    keyCap(
+                      label: 'Del',
+                      onTap: () => inputModel.inputKey('Delete'),
+                    ),
+                    keyCap(
+                      label: 'CAD',
+                      onTap: () => bind.sessionCtrlAltDel(sessionId: sessionId),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -750,7 +768,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         !isWebDesktop && ffiModel.effectiveControlPolicy.canControlRemote;
     final actions = <Widget>[
       _RemoteDockButton(
-        icon: Icons.close_rounded,
+        icon: CamelliaIcons.close,
         label: translate('Close'),
         destructive: true,
         onPressed: () {
@@ -759,7 +777,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         },
       ),
       _RemoteDockButton(
-        icon: Icons.display_settings_outlined,
+        icon: CamelliaIcons.display,
         label: translate('Display'),
         onPressed: () {
           HapticFeedback.selectionClick();
@@ -769,7 +787,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       ),
       if (canInput)
         _RemoteDockButton(
-          icon: Icons.keyboard_alt_outlined,
+          icon: CamelliaIcons.keyboard,
           label: translate('Keyboard'),
           onPressed: () {
             HapticFeedback.selectionClick();
@@ -793,8 +811,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           icon: ffiModel.isPeerAndroid
               ? Icons.smartphone_rounded
               : ffiModel.touchMode
-              ? Icons.touch_app_rounded
-              : Icons.mouse_rounded,
+              ? CamelliaIcons.touch
+              : CamelliaIcons.mouse,
           label: translate(
             ffiModel.isPeerAndroid
                 ? 'Actions'
@@ -828,8 +846,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 VoiceCallStatus.connected,
               ].contains(gFFI.chatModel.voiceCallStatus.value);
               return _RemoteDockButton(
-                icon: Icons.forum_outlined,
+                icon: isInVoice ? CamelliaIcons.voiceCall : CamelliaIcons.chat,
                 label: translate('Chat'),
+                active: isInVoice,
                 onPressed: () {
                   HapticFeedback.selectionClick();
                   if ((isAndroid && supportsVoice) || isInVoice) {
@@ -843,7 +862,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           },
         ),
       _RemoteDockButton(
-        icon: Icons.more_horiz_rounded,
+        icon: CamelliaIcons.more,
         label: translate('More'),
         onPressed: () {
           HapticFeedback.selectionClick();
@@ -852,6 +871,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         },
       ),
     ];
+
     if (_dockCollapsed) {
       return SafeArea(
         top: false,
@@ -859,7 +879,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         child: Center(
           heightFactor: 1,
           child: Opacity(
-            opacity: 0.78,
+            opacity: 0.84,
             child: GlassSurface(
               layer: CamelliaGlassLayer.modal,
               borderRadius: BorderRadius.circular(CamelliaRadius.pill),
@@ -975,25 +995,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   : TextFormField(
                       textInputAction: TextInputAction.newline,
                       autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
                       autofocus: true,
                       focusNode: _mobileFocusNode,
                       maxLines: null,
                       controller: _textController,
-                      // trick way to make backspace work always
                       keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
                       onChanged: handleSoftKeyboardInput,
                     ).workaroundFreezeLinuxMint(),
             ),
@@ -1072,55 +1078,135 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       context: context,
       title: translate('Session actions'),
       builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        final dark = theme.brightness == Brightness.dark;
+        final tokens =
+            theme.extension<AppDesignTokens>() ?? MyTheme.tokens(sheetContext);
+
         Widget section(String title, List<TTextMenu> actions) {
-          final visibleActions = actions.where((action) => !action.divider);
+          final visibleActions = actions
+              .where((action) => !action.divider)
+              .toList(growable: false);
           if (visibleActions.isEmpty) return const SizedBox.shrink();
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-                child: Text(
-                  title,
-                  style: Theme.of(sheetContext).textTheme.labelLarge?.copyWith(
-                    color: AppVisual.subduedText(sheetContext),
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 6),
+                  child: Text(
+                    title,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: tokens.muted,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-              ),
-              ...visibleActions.map(
-                (action) => ListTile(
-                  title: action.getChild(),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.of(sheetContext).pop();
-                    action.onPressed?.call();
-                  },
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.65 : 0.80,
+                    ),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                    border: Border.all(
+                      color: tokens.border.withValues(alpha: 0.85),
+                      width: 0.85,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < visibleActions.length; i++) ...[
+                        if (i > 0)
+                          Divider(
+                            height: 1,
+                            thickness: 0.85,
+                            indent: 14,
+                            endIndent: 14,
+                            color: tokens.border.withValues(alpha: 0.55),
+                          ),
+                        ListTile(
+                          dense: true,
+                          minTileHeight: 46,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                          ),
+                          title: visibleActions[i].getChild(),
+                          trailing: Icon(
+                            Icons.chevron_right_rounded,
+                            size: 18,
+                            color: tokens.muted,
+                          ),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.of(sheetContext).pop();
+                            visibleActions[i].onPressed?.call();
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           );
         }
 
         return ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.72,
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.74,
           ),
           child: ListView(
             shrinkWrap: true,
             children: [
               if (!gFFI.ffiModel.isPeerAndroid)
-                ListTile(
-                  leading: const Icon(Icons.gesture_rounded),
-                  title: Text(translate('Gesture Help')),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    Navigator.of(sheetContext).pop();
-                    setState(() => _showGestureHelp = true);
-                  },
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: tokens.surfaceContainer.withValues(
+                        alpha: dark ? 0.65 : 0.80,
+                      ),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.surface,
+                      ),
+                      border: Border.all(
+                        color: tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: ListTile(
+                      dense: true,
+                      minTileHeight: 48,
+                      leading: Icon(
+                        CamelliaIcons.touch,
+                        size: 19,
+                        color: dark
+                            ? theme.colorScheme.secondary
+                            : theme.colorScheme.primary,
+                      ),
+                      title: Text(
+                        translate('Gesture Help'),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      trailing: Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: tokens.muted,
+                      ),
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.of(sheetContext).pop();
+                        setState(() => _showGestureHelp = true);
+                      },
+                    ),
+                  ),
                 ),
               section(translate('Device actions'), mobileActionMenus),
               section(translate('Session actions'), menus),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
             ],
           ),
         );
@@ -1159,48 +1245,53 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         final accent = theme.brightness == Brightness.dark
             ? theme.colorScheme.secondary
             : theme.colorScheme.primary;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: Icon(CamelliaIcons.chat, color: accent),
-              title: Text(translate('Text chat')),
-              onTap: () {
-                Navigator.of(sheetCtx).pop();
-                onPressedTextChat(widget.id);
-              },
-            ),
-            if (isInVoice)
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               ListTile(
-                leading: Icon(CamelliaIcons.endCall, color: glass.statusAlert),
-                title: Text(
-                  translate('End voice call'),
-                  style: TextStyle(
-                    color: glass.statusAlert,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                leading: Icon(CamelliaIcons.chat, color: accent),
+                title: Text(translate('Text chat')),
                 onTap: () {
                   Navigator.of(sheetCtx).pop();
-                  onPressEndVoiceCall();
-                },
-              )
-            else if (isAndroid && supportsVoice)
-              ListTile(
-                leading: Icon(CamelliaIcons.voiceCall, color: accent),
-                title: Text(translate('Voice call')),
-                onTap: () {
-                  Navigator.of(sheetCtx).pop();
-                  onPressVoiceCall();
+                  onPressedTextChat(widget.id);
                 },
               ),
-          ],
+              if (isInVoice)
+                ListTile(
+                  leading: Icon(
+                    CamelliaIcons.endCall,
+                    color: glass.statusAlert,
+                  ),
+                  title: Text(
+                    translate('End voice call'),
+                    style: TextStyle(
+                      color: glass.statusAlert,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    onPressEndVoiceCall();
+                  },
+                )
+              else if (isAndroid && supportsVoice)
+                ListTile(
+                  leading: Icon(CamelliaIcons.voiceCall, color: accent),
+                  title: Text(translate('Voice call')),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    onPressVoiceCall();
+                  },
+                ),
+            ],
+          ),
         );
       },
     );
   }
 
-  /// aka changeTouchMode
   Widget getGestureHelp() {
     return SafeArea(
       top: false,
@@ -1209,7 +1300,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         layer: CamelliaGlassLayer.modal,
         elevated: true,
         borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: SingleChildScrollView(
           child: GestureHelp(
             touchMode: gFFI.ffiModel.touchMode,
@@ -1225,25 +1316,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       ),
     );
   }
-
-  // * Currently mobile does not enable map mode
-  // void changePhysicalKeyboardInputMode() async {
-  //   var current = await bind.sessionGetKeyboardMode(id: widget.id) ?? "legacy";
-  //   gFFI.dialogManager.show((setState, close) {
-  //     void setMode(String? v) async {
-  //       await bind.sessionSetKeyboardMode(id: widget.id, value: v ?? "");
-  //       setState(() => current = v ?? '');
-  //       Future.delayed(Duration(milliseconds: 300), close);
-  //     }
-  //
-  //     return CustomAlertDialog(
-  //         title: Text(translate('Physical Keyboard Input Mode')),
-  //         content: Column(mainAxisSize: MainAxisSize.min, children: [
-  //           getRadio('Legacy mode', 'legacy', current, setMode),
-  //           getRadio('Map mode', 'map', current, setMode),
-  //         ]));
-  //   }, clickMaskDismiss: true);
-  // }
 }
 
 class _RemoteDockButton extends StatelessWidget {
@@ -1263,11 +1335,14 @@ class _RemoteDockButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark ? scheme.secondary : scheme.primary;
     final color = destructive
         ? scheme.error
         : active
-        ? scheme.primary
+        ? accent
         : scheme.onSurfaceVariant;
     return Semantics(
       button: true,
@@ -1283,11 +1358,7 @@ class _RemoteDockButton extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 5),
             decoration: BoxDecoration(
               color: active
-                  ? scheme.primary.withValues(
-                      alpha: Theme.of(context).brightness == Brightness.dark
-                          ? 0.20
-                          : 0.12,
-                    )
+                  ? accent.withValues(alpha: dark ? 0.20 : 0.12)
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(12),
             ),
@@ -1303,301 +1374,13 @@ class _RemoteDockButton extends StatelessWidget {
                   softWrap: false,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  style: theme.textTheme.labelSmall?.copyWith(
                     color: onPressed == null ? null : color,
                     fontWeight: active ? FontWeight.w700 : FontWeight.w600,
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class KeyHelpTools extends StatefulWidget {
-  final bool keyboardIsVisible;
-  final bool showGestureHelp;
-
-  /// need to show by external request, etc [keyboardIsVisible] or [changeTouchMode]
-  bool get requestShow => keyboardIsVisible || showGestureHelp;
-
-  const KeyHelpTools({
-    super.key,
-    required this.keyboardIsVisible,
-    required this.showGestureHelp,
-  });
-
-  @override
-  State<KeyHelpTools> createState() => _KeyHelpToolsState();
-}
-
-class _KeyHelpToolsState extends State<KeyHelpTools> {
-  var _more = true;
-  var _fn = false;
-  var _pin = false;
-  final _keyboardVisibilityController = KeyboardVisibilityController();
-  final _key = GlobalKey();
-
-  InputModel get inputModel => gFFI.inputModel;
-
-  Widget wrap(
-    String text,
-    void Function() onPressed, {
-    bool? active,
-    IconData? icon,
-    String? tooltip,
-  }) {
-    final scheme = Theme.of(context).colorScheme;
-    final selected = active == true;
-    final label = tooltip ?? text.trim();
-    final foreground = selected
-        ? scheme.onPrimaryContainer
-        : scheme.onSurfaceVariant;
-    final button = TextButton(
-      style: TextButton.styleFrom(
-        foregroundColor: foreground,
-        backgroundColor: selected
-            ? scheme.primaryContainer
-            : scheme.surfaceContainerHighest,
-        minimumSize: const Size(44, 44),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        tapTargetSize: MaterialTapTargetSize.padded,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        side: BorderSide(
-          color: selected ? scheme.primary : scheme.outlineVariant,
-        ),
-      ),
-      onPressed: onPressed,
-      child: icon != null
-          ? Icon(icon, size: 20)
-          : Text(
-              translate(text.trim()),
-              style: Theme.of(
-                context,
-              ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-    );
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label.isEmpty ? null : translate(label),
-      child: label.isEmpty
-          ? button
-          : Tooltip(message: translate(label), child: button),
-    );
-  }
-
-  void _updateRect() {
-    final renderObject = _key.currentContext?.findRenderObject();
-    if (renderObject == null) {
-      return;
-    }
-    if (renderObject is RenderBox) {
-      final size = renderObject.size;
-      final pos = renderObject.localToGlobal(Offset.zero);
-      gFFI.cursorModel.keyHelpToolsVisibilityChanged(
-        Rect.fromLTWH(pos.dx, pos.dy, size.width, size.height),
-        widget.keyboardIsVisible,
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final hasModifierOn =
-        inputModel.ctrl ||
-        inputModel.alt ||
-        inputModel.shift ||
-        inputModel.command;
-
-    if (!_pin && !hasModifierOn && !widget.requestShow) {
-      gFFI.cursorModel.keyHelpToolsVisibilityChanged(
-        null,
-        widget.keyboardIsVisible,
-      );
-      return Offstage();
-    }
-    final size = MediaQuery.sizeOf(context);
-
-    final pi = gFFI.ffiModel.pi;
-    final isMac = pi.platform == kPeerPlatformMacOS;
-    final isWin = pi.platform == kPeerPlatformWindows;
-    final isLinux = pi.platform == kPeerPlatformLinux;
-    final modifiers = <Widget>[
-      wrap('Ctrl ', () {
-        setState(() => inputModel.ctrl = !inputModel.ctrl);
-      }, active: inputModel.ctrl),
-      wrap(' Alt ', () {
-        setState(() => inputModel.alt = !inputModel.alt);
-      }, active: inputModel.alt),
-      wrap('Shift', () {
-        setState(() => inputModel.shift = !inputModel.shift);
-      }, active: inputModel.shift),
-      wrap(isMac ? ' Cmd ' : ' Win ', () {
-        setState(() => inputModel.command = !inputModel.command);
-      }, active: inputModel.command),
-    ];
-    final keys = <Widget>[
-      wrap(
-        ' Fn ',
-        () => setState(() {
-          _fn = !_fn;
-          if (_fn) {
-            _more = false;
-          }
-        }),
-        active: _fn,
-      ),
-      wrap(
-        '',
-        () => setState(() => _pin = !_pin),
-        active: _pin,
-        icon: Icons.push_pin,
-        tooltip: 'Pin',
-      ),
-      wrap(
-        ' ... ',
-        () => setState(() {
-          _more = !_more;
-          if (_more) {
-            _fn = false;
-          }
-        }),
-        active: _more,
-      ),
-    ];
-    final lineBreak = SizedBox(width: size.width, height: 0);
-    final fn = <Widget>[lineBreak];
-    for (var i = 1; i <= 12; ++i) {
-      final name = 'F$i';
-      fn.add(
-        wrap(name, () {
-          inputModel.inputKey('VK_$name');
-        }),
-      );
-    }
-    final more = <Widget>[
-      lineBreak,
-      wrap('Esc', () {
-        inputModel.inputKey('VK_ESCAPE');
-      }),
-      wrap('Tab', () {
-        inputModel.inputKey('VK_TAB');
-      }),
-      wrap('Home', () {
-        inputModel.inputKey('VK_HOME');
-      }),
-      wrap('End', () {
-        inputModel.inputKey('VK_END');
-      }),
-      wrap('Ins', () {
-        inputModel.inputKey('VK_INSERT');
-      }),
-      wrap('Del', () {
-        inputModel.inputKey('VK_DELETE');
-      }),
-      wrap('PgUp', () {
-        inputModel.inputKey('VK_PRIOR');
-      }),
-      wrap('PgDn', () {
-        inputModel.inputKey('VK_NEXT');
-      }),
-      // to-do: support PrtScr on Mac
-      if (isWin || isLinux)
-        wrap('PrtScr', () {
-          inputModel.inputKey('VK_SNAPSHOT');
-        }),
-      if (isWin || isLinux)
-        wrap('ScrollLock', () {
-          inputModel.inputKey('VK_SCROLL');
-        }),
-      if (isWin || isLinux)
-        wrap('Pause', () {
-          inputModel.inputKey('VK_PAUSE');
-        }),
-      if (isWin || isLinux)
-        // Maybe it's better to call it "Menu"
-        // https://en.wikipedia.org/wiki/Menu_key
-        wrap('Menu', () {
-          inputModel.inputKey('Apps');
-        }),
-      wrap('Enter', () {
-        inputModel.inputKey('VK_ENTER');
-      }),
-      lineBreak,
-      wrap(
-        '',
-        () {
-          inputModel.inputKey('VK_LEFT');
-        },
-        icon: Icons.keyboard_arrow_left,
-        tooltip: 'Left',
-      ),
-      wrap(
-        '',
-        () {
-          inputModel.inputKey('VK_UP');
-        },
-        icon: Icons.keyboard_arrow_up,
-        tooltip: 'Up',
-      ),
-      wrap(
-        '',
-        () {
-          inputModel.inputKey('VK_DOWN');
-        },
-        icon: Icons.keyboard_arrow_down,
-        tooltip: 'Down',
-      ),
-      wrap(
-        '',
-        () {
-          inputModel.inputKey('VK_RIGHT');
-        },
-        icon: Icons.keyboard_arrow_right,
-        tooltip: 'Right',
-      ),
-      wrap(isMac ? 'Cmd+C' : 'Ctrl+C', () {
-        sendPrompt(isMac, 'VK_C');
-      }),
-      wrap(isMac ? 'Cmd+V' : 'Ctrl+V', () {
-        sendPrompt(isMac, 'VK_V');
-      }),
-      wrap(isMac ? 'Cmd+S' : 'Ctrl+S', () {
-        sendPrompt(isMac, 'VK_S');
-      }),
-    ];
-    final space = size.width > 320 ? 4.0 : 2.0;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _updateRect();
-    });
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      key: _key,
-      elevation: 10,
-      color: scheme.surface.withValues(alpha: 0.96),
-      shape: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            10,
-            _keyboardVisibilityController.isVisible ? 10 : 8,
-            10,
-            10,
-          ),
-          child: Wrap(
-            spacing: space,
-            runSpacing: space,
-            children:
-                <Widget>[lineBreak] +
-                modifiers +
-                keys +
-                (_fn ? fn : []) +
-                (_more ? more : []),
           ),
         ),
       ),
@@ -1661,10 +1444,10 @@ class CursorPaint extends StatelessWidget {
       hoty = preForbiddenCursor.image!.height / 2;
     }
     if (image == null) {
-      return Offstage();
+      return const Offstage();
     }
 
-    final minSize = 12.0;
+    const minSize = 12.0;
     double mins =
         minSize / (image.width > image.height ? image.width : image.height);
     double factor = 1.0;
@@ -1689,48 +1472,14 @@ void showOptions(
   String id,
   OverlayDialogManager dialogManager,
 ) async {
-  var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
-  final image = gFFI.ffiModel.getConnectionImageText();
-  if (image != null) {
-    displays.add(Padding(padding: const EdgeInsets.only(top: 8), child: image));
-  }
+  final connectionSummary = gFFI.ffiModel.getConnectionImageText();
   final privacyModeState = PrivacyModeState.find(id);
-  if (pi.displays.length > 1 &&
+  final canSwitchDisplay =
+      pi.displays.length > 1 &&
       pi.currentDisplay != kAllDisplayValue &&
       (privacyModeState.isEmpty ||
-          allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value))) {
-    final cur = pi.currentDisplay;
-    final children = <Widget>[];
-    for (var i = 0; i < pi.displays.length; ++i) {
-      children.add(
-        ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 56, minHeight: 44),
-          child: ChoiceChip(
-            selected: i == cur,
-            avatar: const Icon(Icons.monitor_rounded, size: 18),
-            label: Text('${i + 1}'),
-            onSelected: i == cur
-                ? null
-                : (_) {
-                    openMonitorInTheSameTab(i, gFFI, pi);
-                    gFFI.dialogManager.dismissAll();
-                  },
-          ),
-        ),
-      );
-    }
-    displays.add(
-      Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 8,
-          children: children,
-        ),
-      ),
-    );
-  }
+          allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value));
 
   final viewStyleRadios = await toolbarViewStyle(context, id, gFFI);
   if (!context.mounted) return;
@@ -1752,56 +1501,73 @@ void showOptions(
     }
   }
 
-  await dialogManager.show(
-    (setState, close, context) {
-      final viewStyle =
-          (viewStyleRadios.isNotEmpty ? viewStyleRadios[0].groupValue : '').obs;
-      final imageQuality =
-          (imageQualityRadios.isNotEmpty
-                  ? imageQualityRadios[0].groupValue
-                  : '')
-              .obs;
-      final codec =
-          (codecRadios.isNotEmpty ? codecRadios[0].groupValue : '').obs;
-      final rxCursorToggleValues = cursorToggles
-          .map((e) => e.value.obs)
-          .toList();
-      final rxToggleValues = displayToggles.map((e) => e.value.obs).toList();
-      final scheme = Theme.of(context).colorScheme;
+  final viewStyle =
+      (viewStyleRadios.isNotEmpty ? viewStyleRadios[0].groupValue : '').obs;
+  final imageQuality =
+      (imageQualityRadios.isNotEmpty ? imageQualityRadios[0].groupValue : '')
+          .obs;
+  final codec = (codecRadios.isNotEmpty ? codecRadios[0].groupValue : '').obs;
+  final rxCursorToggleValues = cursorToggles.map((e) => e.value.obs).toList();
+  final rxToggleValues = displayToggles.map((e) => e.value.obs).toList();
 
-      Widget section(String title, IconData icon, List<Widget> children) {
+  await showGlassBottomSheet<void>(
+    context: context,
+    title: translate('Display Settings'),
+    builder: (sheetCtx) {
+      final theme = Theme.of(sheetCtx);
+      final dark = theme.brightness == Brightness.dark;
+      final tokens =
+          theme.extension<AppDesignTokens>() ?? MyTheme.tokens(sheetCtx);
+      final accent = dark
+          ? theme.colorScheme.secondary
+          : theme.colorScheme.primary;
+
+      Widget sectionFrame({
+        required String title,
+        required IconData icon,
+        required List<Widget> children,
+      }) {
         if (children.isEmpty) return const SizedBox.shrink();
-        return Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: scheme.outlineVariant),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: tokens.surfaceContainer.withValues(
+                alpha: dark ? 0.65 : 0.80,
+              ),
+              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+              border: Border.all(
+                color: tokens.border.withValues(alpha: 0.85),
+                width: 0.85,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(icon, size: 20, color: scheme.primary),
-                  const SizedBox(width: 10),
-                  Text(
-                    translate(title),
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                  Row(
+                    children: [
+                      Icon(icon, size: 17, color: accent),
+                      const SizedBox(width: 8),
+                      Text(
+                        translate(title),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 10),
+                  ...children,
                 ],
               ),
-              const SizedBox(height: 10),
-              ...children,
-            ],
+            ),
           ),
         );
       }
 
-      Widget radioSection(
+      Widget radioGroupSection(
         String title,
         IconData icon,
         List<TRadioMenu<String>> entries,
@@ -1810,236 +1576,372 @@ void showOptions(
       }) {
         if (entries.isEmpty) return const SizedBox.shrink();
         return Obx(
-          () => section(title, icon, [
-            RadioGroup<String>(
-              groupValue: selected.value,
-              onChanged: (value) {
-                if (value == null) return;
-                for (final entry in entries) {
-                  if (entry.value == value) {
-                    entry.onChanged?.call(value);
-                    selected.value = value;
-                    break;
-                  }
-                }
-              },
-              child: Column(
+          () => sectionFrame(
+            title: title,
+            icon: icon,
+            children: [
+              Column(
                 children: [
                   for (final entry in entries)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: RadioListTile<String>(
-                        value: entry.value,
-                        enabled: entry.onChanged != null,
-                        title: entry.child,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(
+                          CamelliaRadius.control,
                         ),
-                        minTileHeight: 52,
-                        tileColor: scheme.surfaceContainer,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                        onTap: entry.onChanged == null
+                            ? null
+                            : () {
+                                HapticFeedback.selectionClick();
+                                entry.onChanged?.call(entry.value);
+                                selected.value = entry.value;
+                              },
+                        child: AnimatedContainer(
+                          duration: CamelliaMotion.resolve(
+                            sheetCtx,
+                            CamelliaMotion.hover,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 9,
+                          ),
+                          decoration: BoxDecoration(
+                            color: selected.value == entry.value
+                                ? accent.withValues(alpha: dark ? 0.18 : 0.10)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.control,
+                            ),
+                            border: Border.all(
+                              color: selected.value == entry.value
+                                  ? accent.withValues(alpha: 0.55)
+                                  : Colors.transparent,
+                              width: 0.85,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: DefaultTextStyle.merge(
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: selected.value == entry.value
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                  ),
+                                  child: entry.child,
+                                ),
+                              ),
+                              Icon(
+                                CamelliaIcons.check,
+                                size: 17,
+                                color: selected.value == entry.value
+                                    ? accent
+                                    : Colors.transparent,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                 ],
               ),
-            ),
-            ?footer,
-          ]),
-        );
-      }
-
-      Widget toggleTile(TToggleMenu entry, RxBool value, IconData icon) {
-        return Obx(
-          () => Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: SwitchListTile(
-              value: value.value,
-              onChanged: entry.onChanged == null
-                  ? null
-                  : (next) {
-                      entry.onChanged?.call(next);
-                      value.value = next;
-                    },
-              secondary: Icon(icon, color: scheme.onSurfaceVariant),
-              title: entry.child,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-              minTileHeight: 52,
-              tileColor: scheme.surfaceContainer,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
+              ?footer,
+            ],
           ),
         );
       }
 
-      final popupDialogMenus = <Widget>[];
-      final resolution = getResolutionMenu(gFFI, id);
+      Widget toggleRow(TToggleMenu entry, RxBool value, IconData icon) {
+        return Obx(
+          () => SwitchListTile.adaptive(
+            dense: true,
+            value: value.value,
+            onChanged: entry.onChanged == null
+                ? null
+                : (next) {
+                    HapticFeedback.selectionClick();
+                    entry.onChanged?.call(next);
+                    value.value = next;
+                  },
+            secondary: Icon(icon, size: 18, color: tokens.muted),
+            title: DefaultTextStyle.merge(
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+              child: entry.child,
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          ),
+        );
+      }
+
+      final displayHeaderWidgets = <Widget>[
+        if (connectionSummary != null)
+          Padding(
+            padding: EdgeInsets.only(bottom: canSwitchDisplay ? 10 : 0),
+            child: connectionSummary,
+          ),
+        if (canSwitchDisplay)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < pi.displays.length; i++)
+                GestureDetector(
+                  onTap: () {
+                    if (i == pi.currentDisplay) return;
+                    HapticFeedback.selectionClick();
+                    Navigator.of(sheetCtx).pop();
+                    openMonitorInTheSameTab(i, gFFI, pi);
+                  },
+                  child: AnimatedContainer(
+                    duration: CamelliaMotion.resolve(
+                      sheetCtx,
+                      CamelliaMotion.feedback,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: i == pi.currentDisplay
+                          ? accent.withValues(alpha: dark ? 0.22 : 0.14)
+                          : tokens.surface,
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: i == pi.currentDisplay
+                            ? accent.withValues(alpha: 0.65)
+                            : tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          CamelliaIcons.screen,
+                          size: 15,
+                          color: i == pi.currentDisplay ? accent : tokens.muted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${i + 1}',
+                          style: CamelliaTypography.tabular(
+                            theme.textTheme.labelMedium?.copyWith(
+                              color: i == pi.currentDisplay
+                                  ? accent
+                                  : theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+      ];
+
+      final subSheetRows = <Widget>[];
+      final resolution = getResolutionMenu(gFFI, id, parentContext: context);
       if (resolution != null) {
-        popupDialogMenus.add(
+        subSheetRows.add(
           ListTile(
-            leading: const Icon(Icons.aspect_ratio_rounded),
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+            leading: Icon(
+              Icons.aspect_ratio_rounded,
+              size: 18,
+              color: tokens.muted,
+            ),
             title: resolution.child,
-            trailing: const Icon(Icons.chevron_right_rounded),
-            tileColor: scheme.surfaceContainer,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: tokens.muted,
             ),
             onTap: () {
-              close();
+              Navigator.of(sheetCtx).pop();
               resolution.onPressed?.call();
             },
           ),
         );
       }
-      final virtualDisplayMenu = getVirtualDisplayMenu(gFFI, id);
-      if (virtualDisplayMenu != null) {
-        popupDialogMenus.add(
-          Padding(
-            padding: EdgeInsets.only(top: popupDialogMenus.isEmpty ? 0 : 6),
-            child: ListTile(
-              leading: const Icon(Icons.add_to_queue_rounded),
-              title: virtualDisplayMenu.child,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              tileColor: scheme.surfaceContainer,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              onTap: () {
-                close();
-                virtualDisplayMenu.onPressed?.call();
-              },
+      final virtualDisplay = getVirtualDisplayMenu(
+        gFFI,
+        id,
+        parentContext: context,
+      );
+      if (virtualDisplay != null) {
+        subSheetRows.add(
+          ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+            leading: Icon(
+              Icons.add_to_queue_rounded,
+              size: 18,
+              color: tokens.muted,
             ),
+            title: virtualDisplay.child,
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: tokens.muted,
+            ),
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              virtualDisplay.onPressed?.call();
+            },
           ),
         );
       }
 
-      final generalTiles = <Widget>[
+      final generalRows = <Widget>[
         for (var i = 0; i < cursorToggles.length; i++)
-          toggleTile(
+          toggleRow(
             cursorToggles[i],
             rxCursorToggleValues[i],
-            Icons.mouse_outlined,
+            CamelliaIcons.mouse,
           ),
         for (var i = 0; i < displayToggles.length; i++)
-          toggleTile(
+          toggleRow(
             displayToggles[i],
             rxToggleValues[i],
-            Icons.display_settings_outlined,
+            CamelliaIcons.display,
           ),
         if (privacyModeList.length > 1)
           ListTile(
-            leading: const Icon(Icons.visibility_off_outlined),
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+            leading: Icon(
+              CamelliaIcons.privacy,
+              size: 18,
+              color: tokens.muted,
+            ),
             title: Text(translate('Privacy mode')),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            tileColor: scheme.surfaceContainer,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              size: 18,
+              color: tokens.muted,
             ),
-            onTap: () => setPrivacyModeDialog(
-              dialogManager,
-              privacyModeList,
-              privacyModeState,
-            ),
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              setPrivacyModeDialog(
+                dialogManager,
+                privacyModeList,
+                privacyModeState,
+                sheetContext: context,
+              );
+            },
           ),
       ];
 
-      return CustomAlertDialog(
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: scheme.primaryContainer,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(
-                Icons.display_settings_rounded,
-                color: scheme.primary,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              translate('Display Settings'),
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ],
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.78,
         ),
-        contentBoxConstraints: const BoxConstraints(maxWidth: 480),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          shrinkWrap: true,
           children: [
-            if (displays.isNotEmpty)
-              section('Display', Icons.monitor_rounded, displays),
-            radioSection(
+            if (displayHeaderWidgets.isNotEmpty)
+              sectionFrame(
+                title: 'Display',
+                icon: CamelliaIcons.screen,
+                children: displayHeaderWidgets,
+              ),
+            radioGroupSection(
               'View Mode',
               Icons.fit_screen_rounded,
               viewStyleRadios,
               viewStyle,
               footer: Obx(
                 () => viewStyle.value == kRemoteViewStyleCustom
-                    ? MobileCustomScaleControls(ffi: gFFI)
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: MobileCustomScaleControls(ffi: gFFI),
+                      )
                     : const SizedBox.shrink(),
               ),
             ),
-            radioSection(
+            radioGroupSection(
               'Image Quality',
               Icons.high_quality_outlined,
               imageQualityRadios,
               imageQuality,
             ),
-            radioSection(
+            radioGroupSection(
               'Codec',
               Icons.video_settings_outlined,
               codecRadios,
               codec,
             ),
-            if (popupDialogMenus.isNotEmpty)
-              section('Display', Icons.aspect_ratio_rounded, popupDialogMenus),
-            if (generalTiles.isNotEmpty)
-              section('General', Icons.tune_rounded, generalTiles),
+            if (subSheetRows.isNotEmpty)
+              sectionFrame(
+                title: 'Display',
+                icon: Icons.aspect_ratio_rounded,
+                children: subSheetRows,
+              ),
+            if (generalRows.isNotEmpty)
+              sectionFrame(
+                title: 'General',
+                icon: CamelliaIcons.settings,
+                children: generalRows,
+              ),
           ],
         ),
-        actions: [
-          SizedBox(
-            width: 132,
-            child: dialogButton(
-              'OK',
-              icon: const Icon(Icons.done_rounded),
-              onPressed: close,
-            ),
-          ),
-        ],
-        onSubmit: close,
-        onCancel: close,
       );
     },
-    clickMaskDismiss: true,
-    backDismiss: true,
   );
   _disableAndroidSoftKeyboard();
 }
 
-TTextMenu? getVirtualDisplayMenu(FFI ffi, String id) {
+TTextMenu? getVirtualDisplayMenu(
+  FFI ffi,
+  String id, {
+  BuildContext? parentContext,
+}) {
   if (!showVirtualDisplayMenu(ffi)) {
     return null;
   }
   return TTextMenu(
     child: Text(translate("Virtual display")),
-    onPressed: () {
+    onPressed: () async {
+      if (parentContext != null && parentContext.mounted) {
+        await showGlassBottomSheet<void>(
+          context: parentContext,
+          title: translate('Virtual display'),
+          builder: (sheetCtx) {
+            final children = getVirtualDisplayMenuChildren(
+              ffi,
+              id,
+              () => Navigator.of(sheetCtx).pop(),
+            );
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: children,
+              ),
+            );
+          },
+        );
+        _disableAndroidSoftKeyboard();
+        return;
+      }
       ffi.dialogManager
           .show(
             (setState, close, context) {
               final children = getVirtualDisplayMenuChildren(ffi, id, close);
               return CustomAlertDialog(
-                title: Text(translate('Virtual display')),
+                title: ModernDialogHeader(
+                  icon: Icons.add_to_queue_rounded,
+                  title: translate('Virtual display'),
+                  onClose: close,
+                ),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: children,
@@ -2049,14 +1951,16 @@ TTextMenu? getVirtualDisplayMenu(FFI ffi, String id) {
             clickMaskDismiss: true,
             backDismiss: true,
           )
-          .then((value) {
-            _disableAndroidSoftKeyboard();
-          });
+          .then((_) => _disableAndroidSoftKeyboard());
     },
   );
 }
 
-TTextMenu? getResolutionMenu(FFI ffi, String id) {
+TTextMenu? getResolutionMenu(
+  FFI ffi,
+  String id, {
+  BuildContext? parentContext,
+}) {
   final ffiModel = ffi.ffiModel;
   final pi = ffiModel.pi;
   final resolutions = pi.resolutions;
@@ -2068,16 +1972,90 @@ TTextMenu? getResolutionMenu(FFI ffi, String id) {
 
   return TTextMenu(
     child: Text(translate("Resolution")),
-    onPressed: () {
+    onPressed: () async {
+      final currentKey = '${display.width}x${display.height}';
+      if (parentContext != null && parentContext.mounted) {
+        await showGlassBottomSheet<void>(
+          context: parentContext,
+          title: translate('Resolution'),
+          builder: (sheetCtx) {
+            final theme = Theme.of(sheetCtx);
+            final dark = theme.brightness == Brightness.dark;
+            final accent = dark
+                ? theme.colorScheme.secondary
+                : theme.colorScheme.primary;
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.62,
+              ),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+                shrinkWrap: true,
+                children: [
+                  for (final r in resolutions)
+                    Builder(
+                      builder: (ctx) {
+                        final val = '${r.width}x${r.height}';
+                        final selected = val == currentKey;
+                        return ListTile(
+                          dense: true,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.control,
+                            ),
+                          ),
+                          title: Text(
+                            '${r.width} × ${r.height}',
+                            style: CamelliaTypography.tabular(
+                              theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: selected
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: selected ? accent : null,
+                              ),
+                            ),
+                          ),
+                          trailing: Icon(
+                            CamelliaIcons.check,
+                            size: 18,
+                            color: selected ? accent : Colors.transparent,
+                          ),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.of(sheetCtx).pop();
+                            bind.sessionChangeResolution(
+                              sessionId: ffi.sessionId,
+                              display: pi.currentDisplay,
+                              width: r.width,
+                              height: r.height,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+        _disableAndroidSoftKeyboard();
+        return;
+      }
+
       ffi.dialogManager
           .show(
             (setState, close, context) {
               final children = resolutions
                   .map(
                     (e) => getRadio<String>(
-                      Text('${e.width}x${e.height}'),
+                      Text(
+                        '${e.width} × ${e.height}',
+                        style: CamelliaTypography.tabular(
+                          Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
                       '${e.width}x${e.height}',
-                      '${display.width}x${display.height}',
+                      currentKey,
                       (value) {
                         close();
                         bind.sessionChangeResolution(
@@ -2091,7 +2069,11 @@ TTextMenu? getResolutionMenu(FFI ffi, String id) {
                   )
                   .toList();
               return CustomAlertDialog(
-                title: Text(translate('Resolution')),
+                title: ModernDialogHeader(
+                  icon: Icons.aspect_ratio_rounded,
+                  title: translate('Resolution'),
+                  onClose: close,
+                ),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: children,
@@ -2101,9 +2083,7 @@ TTextMenu? getResolutionMenu(FFI ffi, String id) {
             clickMaskDismiss: true,
             backDismiss: true,
           )
-          .then((value) {
-            _disableAndroidSoftKeyboard();
-          });
+          .then((_) => _disableAndroidSoftKeyboard());
     },
   );
 }

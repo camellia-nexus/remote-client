@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/shared_state.dart';
 import 'package:camellia_remote_app/common/widgets/toolbar.dart';
 import 'package:camellia_remote_app/consts.dart';
+import 'package:camellia_remote_app/mobile/widgets/gesture_help.dart';
 import 'package:camellia_remote_app/models/chat_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
@@ -21,17 +23,13 @@ import '../../models/input_model.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../utils/image.dart';
+import '../widgets/custom_scale_widget.dart';
 
 final initText = '1' * 1024;
 
-// Workaround for Android (default input method, Microsoft SwiftKey keyboard) when using physical keyboard.
-// When connecting a physical keyboard, `KeyEvent.physicalKey.usbHidUsage` are wrong is using Microsoft SwiftKey keyboard.
-// https://github.com/flutter/flutter/issues/159384
-// https://github.com/flutter/flutter/issues/159383
 void _disableAndroidSoftKeyboard({bool? isKeyboardVisible}) {
   if (isAndroid) {
     if (isKeyboardVisible != true) {
-      // `enable_soft_keyboard` will be set to `true` when clicking the keyboard icon, in `openKeyboard()`.
       gFFI.invokeMethod("enable_soft_keyboard", false);
     }
   }
@@ -52,7 +50,7 @@ class ViewCameraPage extends StatefulWidget {
   final bool? forceRelay;
 
   @override
-  State<ViewCameraPage> createState() => _ViewCameraPageState(id);
+  State<ViewCameraPage> createState() => _ViewCameraPageState();
 }
 
 class _ViewCameraPageState extends State<ViewCameraPage>
@@ -73,7 +71,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   final keyboardVisibilityController = KeyboardVisibilityController();
   final FocusNode _mobileFocusNode = FocusNode();
   final FocusNode _physicalFocusNode = FocusNode();
-  var _showEdit = false; // use soft keyboard
+  var _showEdit = false;
 
   InputModel get inputModel => gFFI.inputModel;
   SessionID get sessionId => gFFI.sessionId;
@@ -81,8 +79,6 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   final TextEditingController _textController = TextEditingController(
     text: initText,
   );
-
-  _ViewCameraPageState(String id);
 
   @override
   void initState() {
@@ -183,8 +179,6 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
   @override
   void didChangeMetrics() {
-    // If the soft keyboard is visible and the canvas has been changed(panned or scaled)
-    // Don't try reset the view style and focus the cursor.
     if (gFFI.cursorModel.lastKeyboardIsVisible &&
         gFFI.canvasModel.isMobileCanvasChanged) {
       return;
@@ -195,8 +189,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
             .viewInsets
             .bottom;
     _timerDidChangeMetrics?.cancel();
-    _timerDidChangeMetrics = Timer(Duration(milliseconds: 100), () async {
-      // We need this comparation because poping up the floating action will also trigger `didChangeMetrics()`.
+    _timerDidChangeMetrics = Timer(const Duration(milliseconds: 100), () async {
       if (newBottom != _viewInsetsBottom) {
         gFFI.canvasModel.mobileFocusCanvasCursor();
         _viewInsetsBottom = newBottom;
@@ -204,26 +197,46 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     });
   }
 
-  // to-do: It should be better to use transparent color instead of the bgColor.
-  // But for now, the transparent color will cause the canvas to be white.
-  // I'm sure that the white color is caused by the Overlay widget in BlockableOverlay.
-  // But I don't know why and how to fix it.
   Widget emptyOverlay(Color bgColor) => BlockableOverlay(
-    /// the Overlay key will be set with _blockableOverlayState in BlockableOverlay
-    /// see override build() in [BlockableOverlay]
     state: _blockableOverlayState,
     underlying: Container(color: bgColor),
   );
 
-  Widget _bottomWidget() => (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
-      ? getBottomAppBar()
-      : Offstage());
+  Widget _bottomWidget() {
+    if (_showGestureHelp) {
+      return SafeArea(
+        top: false,
+        minimum: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+        child: GlassSurface(
+          layer: CamelliaGlassLayer.modal,
+          elevated: true,
+          borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: SingleChildScrollView(
+            child: GestureHelp(
+              touchMode: gFFI.ffiModel.touchMode,
+              onTouchModeChange: (t) {
+                gFFI.ffiModel.toggleTouchMode();
+                final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
+                bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+              },
+              virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
+              inputModel: gFFI.inputModel,
+            ),
+          ),
+        ),
+      );
+    }
+    return gFFI.ffiModel.pi.displays.isNotEmpty
+        ? getBottomAppBar()
+        : const SizedBox.shrink();
+  }
 
   @override
   Widget build(BuildContext context) {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    final showDismissButton = keyboardIsVisible || _showGestureHelp;
 
     return PopScope(
       canPop: false,
@@ -232,21 +245,16 @@ class _ViewCameraPageState extends State<ViewCameraPage>
         clientClose(sessionId, gFFI);
       },
       child: Scaffold(
-        // workaround for https://github.com/rustdesk/rustdesk/issues/3131
         floatingActionButtonLocation: keyboardIsVisible
             ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
             : null,
-        floatingActionButton: !showActionButton
+        floatingActionButton: !showDismissButton
             ? null
-            : FloatingActionButton(
-                mini: !keyboardIsVisible,
-                child: Icon(
-                  (keyboardIsVisible || _showGestureHelp)
-                      ? Icons.expand_more
-                      : Icons.expand_less,
-                  color: Colors.white,
-                ),
-                backgroundColor: const Color(0xFF10BFA8),
+            : GlassIconButton(
+                icon: Icons.keyboard_arrow_down_rounded,
+                tooltip: translate('Close'),
+                size: 40,
+                iconSize: 22,
                 onPressed: () {
                   setState(() {
                     if (keyboardIsVisible) {
@@ -256,8 +264,6 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                       _physicalFocusNode.requestFocus();
                     } else if (_showGestureHelp) {
                       _showGestureHelp = false;
-                    } else {
-                      _showBar = !_showBar;
                     }
                   });
                 },
@@ -271,12 +277,12 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                   ? emptyOverlay(MyTheme.canvasColor)
                   : () {
                       gFFI.ffiModel.tryShowAndroidActionsOverlay();
-                      return Offstage();
+                      return const Offstage();
                     }(),
               _bottomWidget(),
               gFFI.ffiModel.pi.isSet.isFalse
                   ? emptyOverlay(MyTheme.canvasColor)
-                  : Offstage(),
+                  : const Offstage(),
             ],
           ),
         ),
@@ -310,9 +316,9 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                               child: inputModel.isPhysicalMouse.value
                                   ? getBodyForMobile()
                                   : RawTouchGestureDetectorRegion(
-                                      child: getBodyForMobile(),
                                       ffi: gFFI,
                                       isCamera: true,
+                                      child: getBodyForMobile(),
                                     ),
                             );
                           },
@@ -332,8 +338,6 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   Widget getRawPointerAndKeyBody(Widget child) {
     return CameraRawPointerMouseRegion(
       inputModel: inputModel,
-      // Disable RawKeyFocusScope before the connecting is established.
-      // The "Delete" key on the soft keyboard may be grabbed when inputting the password dialog.
       child: gFFI.ffiModel.pi.isSet.isTrue
           ? RawKeyFocusScope(
               focusNode: _physicalFocusNode,
@@ -344,37 +348,190 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     );
   }
 
+  void _showCameraSwitcherSheet() {
+    final pi = gFFI.ffiModel.pi;
+    if (pi.displays.length <= 1) return;
+    showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Switch Camera'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final dark = theme.brightness == Brightness.dark;
+        final accent = dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < pi.displays.length; i++)
+                ListTile(
+                  dense: true,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                  ),
+                  leading: Icon(
+                    CamelliaIcons.camera,
+                    size: 19,
+                    color: i == pi.currentDisplay
+                        ? accent
+                        : theme.colorScheme.onSurfaceVariant,
+                  ),
+                  title: Text(
+                    '${translate('View camera')} ${i + 1}',
+                    style: CamelliaTypography.tabular(
+                      theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: i == pi.currentDisplay
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                        color: i == pi.currentDisplay ? accent : null,
+                      ),
+                    ),
+                  ),
+                  trailing: Icon(
+                    CamelliaIcons.check,
+                    size: 18,
+                    color: i == pi.currentDisplay ? accent : Colors.transparent,
+                  ),
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    Navigator.of(sheetCtx).pop();
+                    if (i != pi.currentDisplay) {
+                      openMonitorInTheSameTab(i, gFFI, pi);
+                    }
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget getBottomAppBar() {
-    return BottomAppBar(
-      elevation: 10,
-      color: MyTheme.accent,
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          Row(
-            children:
-                <Widget>[
-                  IconButton(
-                    color: Colors.white,
-                    icon: Icon(Icons.clear),
-                    onPressed: () {
-                      clientClose(sessionId, gFFI);
+    final theme = Theme.of(context);
+    final pi = gFFI.ffiModel.pi;
+    final hasMultipleCameras =
+        pi.displays.length > 1 && pi.currentDisplay != kAllDisplayValue;
+
+    if (!_showBar) {
+      return SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 6),
+        child: Center(
+          heightFactor: 1,
+          child: Opacity(
+            opacity: 0.84,
+            child: GlassSurface(
+              layer: CamelliaGlassLayer.modal,
+              borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() => _showBar = true);
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      CamelliaIcons.camera,
+                      size: 15,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      translate('Controls'),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.keyboard_arrow_up_rounded,
+                      size: 17,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Obx(
+            () => gFFI.ffiModel.waitForFirstImage.isTrue
+                ? const SizedBox.shrink()
+                : GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _showBar = false);
                     },
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 5),
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.28,
+                          ),
+                          borderRadius: BorderRadius.circular(
+                            CamelliaRadius.pill,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                  IconButton(
-                    color: Colors.white,
-                    icon: Icon(Icons.tv),
-                    onPressed: () {
-                      setState(() => _showEdit = false);
-                      showOptions(context, widget.id, gFFI.dialogManager);
-                    },
-                  ),
-                ] +
-                (isWeb
-                    ? []
-                    : <Widget>[
-                        futureBuilder(
+          ),
+          Center(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: GlassSurface(
+                layer: CamelliaGlassLayer.modal,
+                elevated: true,
+                borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 6,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (hasMultipleCameras) ...[
+                      _CameraDockButton(
+                        icon: Icons.cameraswitch_rounded,
+                        label: '${pi.currentDisplay + 1}/${pi.displays.length}',
+                        tabularLabel: true,
+                        onPressed: _showCameraSwitcherSheet,
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    Expanded(
+                      child: _CameraDockButton(
+                        icon: CamelliaIcons.display,
+                        label: translate('Display'),
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _showEdit = false);
+                          showOptions(context, widget.id, gFFI.dialogManager);
+                        },
+                      ),
+                    ),
+                    if (!isWeb)
+                      Expanded(
+                        child: futureBuilder(
                           future: gFFI.invokeMethod(
                             "get_value",
                             "KEY_IS_SUPPORT_VOICE_CALL",
@@ -384,15 +541,17 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                               VoiceCallStatus.waitingForResponse,
                               VoiceCallStatus.connected,
                             ].contains(gFFI.chatModel.voiceCallStatus.value);
-                            return IconButton(
-                              color: Colors.white,
-                              icon: Icon(
-                                (isAndroid && isSupportVoiceCall) || isInVoice
-                                    ? CamelliaIcons.chat
-                                    : Icons.message_rounded,
-                                color: Colors.white,
-                              ),
+                            return _CameraDockButton(
+                              icon: isInVoice
+                                  ? CamelliaIcons.voiceCall
+                                  : ((isAndroid && isSupportVoiceCall) ||
+                                        isInVoice)
+                                  ? CamelliaIcons.chat
+                                  : Icons.message_rounded,
+                              label: translate('Chat'),
+                              active: isInVoice,
                               onPressed: () {
+                                HapticFeedback.selectionClick();
                                 if ((isAndroid && isSupportVoiceCall) ||
                                     isInVoice) {
                                   showChatOptions(widget.id);
@@ -403,27 +562,37 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                             );
                           }),
                         ),
-                      ]) +
-                [
-                  IconButton(
-                    color: Colors.white,
-                    icon: Icon(Icons.more_vert),
-                    onPressed: () {
-                      setState(() => _showEdit = false);
-                      showActions(widget.id);
-                    },
-                  ),
-                ],
-          ),
-          Obx(
-            () => IconButton(
-              color: Colors.white,
-              icon: Icon(Icons.expand_more),
-              onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
-                  ? null
-                  : () {
-                      setState(() => _showBar = !_showBar);
-                    },
+                      ),
+                    Expanded(
+                      child: _CameraDockButton(
+                        icon: CamelliaIcons.more,
+                        label: translate('More'),
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _showEdit = false);
+                          showActions(widget.id);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GlassButton(
+                      variant: GlassButtonVariant.danger,
+                      minHeight: 40,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                      icon: const Icon(CamelliaIcons.close, size: 17),
+                      onPressed: () {
+                        HapticFeedback.mediumImpact();
+                        clientClose(sessionId, gFFI);
+                      },
+                      child: Text(translate('Disconnect')),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -432,14 +601,15 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   Widget getBodyForMobile() {
+    final topInset = MediaQuery.paddingOf(context).top;
     return Container(
       color: MyTheme.canvasColor,
       child: Stack(
         children: () {
           final paints = [
-            ImagePaint(),
+            const ImagePaint(),
             Positioned(
-              top: 10,
+              top: topInset + 8,
               right: 10,
               child: QualityMonitor(gFFI.qualityMonitorModel),
             ),
@@ -451,25 +621,11 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                   : TextFormField(
                       textInputAction: TextInputAction.newline,
                       autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
                       autofocus: true,
                       focusNode: _mobileFocusNode,
                       maxLines: null,
                       controller: _textController,
-                      // trick way to make backspace work always
                       keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
                       onChanged: null,
                     ).workaroundFreezeLinuxMint(),
             ),
@@ -481,7 +637,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   Widget getBodyForDesktopWithListener() {
-    var paints = <Widget>[ImagePaint()];
+    var paints = <Widget>[const ImagePaint()];
     return Container(
       color: MyTheme.canvasColor,
       child: Stack(children: paints),
@@ -524,41 +680,144 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   void showActions(String id) async {
-    final size = MediaQuery.sizeOf(context);
-    final x = 120.0;
-    final y = size.height;
     final mobileActionMenus = _getMobileActionMenus();
     final menus = toolbarControls(context, id, gFFI);
 
-    final List<PopupMenuEntry<int>> more = [
-      ...mobileActionMenus.asMap().entries.map(
-        (e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key),
-      ),
-      if (mobileActionMenus.isNotEmpty) PopupMenuDivider(),
-      ...menus.asMap().entries.map(
-        (e) => PopupMenuItem<int>(
-          child: e.value.getChild(),
-          value: e.key + mobileActionMenus.length,
-        ),
-      ),
-    ];
-    () async {
-      if (!mounted) return;
-      var index = await showMenu(
-        context: context,
-        position: RelativeRect.fromLTRB(x, y, x, y),
-        items: more,
-        elevation: 8,
-      );
-      if (!mounted) return;
-      if (index != null) {
-        if (index < mobileActionMenus.length) {
-          mobileActionMenus[index].onPressed?.call();
-        } else if (index < mobileActionMenus.length + more.length) {
-          menus[index - mobileActionMenus.length].onPressed?.call();
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Session actions'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final dark = theme.brightness == Brightness.dark;
+        final tokens =
+            theme.extension<AppDesignTokens>() ?? MyTheme.tokens(sheetCtx);
+
+        Widget section(String title, List<TTextMenu> actions) {
+          final visible = actions
+              .where((a) => !a.divider)
+              .toList(growable: false);
+          if (visible.isEmpty) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 6),
+                  child: Text(
+                    title,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: tokens.muted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.65 : 0.80,
+                    ),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                    border: Border.all(
+                      color: tokens.border.withValues(alpha: 0.85),
+                      width: 0.85,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < visible.length; i++) ...[
+                        if (i > 0)
+                          Divider(
+                            height: 1,
+                            thickness: 0.85,
+                            indent: 14,
+                            endIndent: 14,
+                            color: tokens.border.withValues(alpha: 0.55),
+                          ),
+                        ListTile(
+                          dense: true,
+                          minTileHeight: 46,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                          ),
+                          title: visible[i].getChild(),
+                          trailing: Icon(
+                            Icons.chevron_right_rounded,
+                            size: 18,
+                            color: tokens.muted,
+                          ),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.of(sheetCtx).pop();
+                            visible[i].onPressed?.call();
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
         }
-      }
-    }();
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.72,
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(
+                      alpha: dark ? 0.65 : 0.80,
+                    ),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                    border: Border.all(
+                      color: tokens.border.withValues(alpha: 0.85),
+                      width: 0.85,
+                    ),
+                  ),
+                  child: ListTile(
+                    dense: true,
+                    minTileHeight: 48,
+                    leading: Icon(
+                      CamelliaIcons.touch,
+                      size: 19,
+                      color: dark
+                          ? theme.colorScheme.secondary
+                          : theme.colorScheme.primary,
+                    ),
+                    title: Text(
+                      translate('Gesture Help'),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    trailing: Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: tokens.muted,
+                    ),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.of(sheetCtx).pop();
+                      setState(() => _showGestureHelp = true);
+                    },
+                  ),
+                ),
+              ),
+              section(translate('Device actions'), mobileActionMenus),
+              section(translate('Session actions'), menus),
+              const SizedBox(height: 14),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   void onPressedTextChat(String id) {
@@ -567,22 +826,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   Future<void> showChatOptions(String id) async {
-    onPressVoiceCall() => bind.sessionRequestVoiceCall(sessionId: sessionId);
-    onPressEndVoiceCall() => bind.sessionCloseVoiceCall(sessionId: sessionId);
-
-    makeTextMenu(
-      String label,
-      Widget icon,
-      VoidCallback onPressed, {
-      TextStyle? labelStyle,
-    }) => TTextMenu(
-      child: Text(translate(label), style: labelStyle),
-      trailingIcon: Transform.scale(
-        scale: (isDesktop || isWebDesktop) ? 0.8 : 1,
-        child: IgnorePointer(child: IconButton(onPressed: null, icon: icon)),
-      ),
-      onPressed: onPressed,
-    );
+    void onPressVoiceCall() =>
+        bind.sessionRequestVoiceCall(sessionId: sessionId);
+    void onPressEndVoiceCall() =>
+        bind.sessionCloseVoiceCall(sessionId: sessionId);
 
     final supportsVoiceCall =
         isAndroid &&
@@ -594,56 +841,127 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       VoiceCallStatus.waitingForResponse,
       VoiceCallStatus.connected,
     ].contains(gFFI.chatModel.voiceCallStatus.value);
-    final menus = [
-      makeTextMenu(
-        'Text chat',
-        Icon(CamelliaIcons.chat, color: Theme.of(context).colorScheme.primary),
-        () => onPressedTextChat(widget.id),
-      ),
-      if (isInVoice)
-        makeTextMenu(
-          'End voice call',
-          Icon(
-            CamelliaIcons.endCall,
-            color: CamelliaGlassTokens.of(context).statusAlert,
-          ),
-          onPressEndVoiceCall,
-          labelStyle: TextStyle(
-            color: CamelliaGlassTokens.of(context).statusAlert,
-          ),
-        )
-      else if (isAndroid && supportsVoiceCall)
-        makeTextMenu(
-          'Voice call',
-          Icon(
-            CamelliaIcons.voiceCall,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          onPressVoiceCall,
-        ),
-    ];
 
-    final menuItems = menus
-        .asMap()
-        .entries
-        .map((e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key))
-        .toList();
-    Future.delayed(Duration.zero, () async {
-      if (!mounted) return;
-      final size = MediaQuery.sizeOf(context);
-      final x = 120.0;
-      final y = size.height;
-      var index = await showMenu(
-        context: context,
-        position: RelativeRect.fromLTRB(x, y, x, y),
-        items: menuItems,
-        elevation: 8,
-      );
-      if (!mounted) return;
-      if (index != null && index < menus.length) {
-        menus[index].onPressed?.call();
-      }
-    });
+    await showGlassBottomSheet<void>(
+      context: context,
+      title: translate('Chat'),
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        final glass = CamelliaGlassTokens.of(sheetCtx);
+        final accent = theme.brightness == Brightness.dark
+            ? theme.colorScheme.secondary
+            : theme.colorScheme.primary;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(CamelliaIcons.chat, color: accent),
+                title: Text(translate('Text chat')),
+                onTap: () {
+                  Navigator.of(sheetCtx).pop();
+                  onPressedTextChat(widget.id);
+                },
+              ),
+              if (isInVoice)
+                ListTile(
+                  leading: Icon(
+                    CamelliaIcons.endCall,
+                    color: glass.statusAlert,
+                  ),
+                  title: Text(
+                    translate('End voice call'),
+                    style: TextStyle(
+                      color: glass.statusAlert,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    onPressEndVoiceCall();
+                  },
+                )
+              else if (isAndroid && supportsVoiceCall)
+                ListTile(
+                  leading: Icon(CamelliaIcons.voiceCall, color: accent),
+                  title: Text(translate('Voice call')),
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    onPressVoiceCall();
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CameraDockButton extends StatelessWidget {
+  const _CameraDockButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.active = false,
+    this.tabularLabel = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool active;
+  final bool tabularLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final accent = dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+    final color = active ? accent : theme.colorScheme.onSurfaceVariant;
+    final baseStyle = theme.textTheme.labelSmall?.copyWith(
+      color: color,
+      fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+    );
+
+    return Semantics(
+      button: true,
+      selected: active,
+      label: label,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: CamelliaMotion.resolve(context, CamelliaMotion.feedback),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+          decoration: BoxDecoration(
+            color: active
+                ? accent.withValues(alpha: dark ? 0.20 : 0.12)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 19, color: color),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.ellipsis,
+                style: tabularLabel
+                    ? CamelliaTypography.tabular(baseStyle)
+                    : baseStyle,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -672,184 +990,320 @@ void showOptions(
   String id,
   OverlayDialogManager dialogManager,
 ) async {
-  var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
-  final image = gFFI.ffiModel.getConnectionImageText();
-  if (image != null) {
-    displays.add(Padding(padding: const EdgeInsets.only(top: 8), child: image));
-  }
-  if (pi.displays.length > 1 && pi.currentDisplay != kAllDisplayValue) {
-    final cur = pi.currentDisplay;
-    final children = <Widget>[];
-    final scheme = Theme.of(context).colorScheme;
-    final numColorSelected = scheme.onPrimary;
-    final numColorUnselected = scheme.onSurfaceVariant;
-    final numBgSelected = scheme.primary.withValues(alpha: 0.72);
-    for (var i = 0; i < pi.displays.length; ++i) {
-      children.add(
-        InkWell(
-          onTap: () {
-            if (i == cur) return;
-            openMonitorInTheSameTab(i, gFFI, pi);
-            gFFI.dialogManager.dismissAll();
-          },
-          child: Ink(
-            width: 40,
-            height: 40,
+  final connectionSummary = gFFI.ffiModel.getConnectionImageText();
+  final hasMultipleCameras =
+      pi.displays.length > 1 && pi.currentDisplay != kAllDisplayValue;
+
+  final viewStyleRadios = await toolbarViewStyle(context, id, gFFI);
+  if (!context.mounted) return;
+  final imageQualityRadios = await toolbarImageQuality(context, id, gFFI);
+  if (!context.mounted) return;
+  final codecRadios = await toolbarCodec(context, id, gFFI);
+  if (!context.mounted) return;
+  final displayToggles = await toolbarDisplayToggle(context, id, gFFI);
+  if (!context.mounted) return;
+
+  final viewStyle =
+      (viewStyleRadios.isNotEmpty ? viewStyleRadios[0].groupValue : '').obs;
+  final imageQuality =
+      (imageQualityRadios.isNotEmpty ? imageQualityRadios[0].groupValue : '')
+          .obs;
+  final codec = (codecRadios.isNotEmpty ? codecRadios[0].groupValue : '').obs;
+  final rxToggleValues = displayToggles.map((e) => e.value.obs).toList();
+
+  await showGlassBottomSheet<void>(
+    context: context,
+    title: translate('Display Settings'),
+    builder: (sheetCtx) {
+      final theme = Theme.of(sheetCtx);
+      final dark = theme.brightness == Brightness.dark;
+      final tokens =
+          theme.extension<AppDesignTokens>() ?? MyTheme.tokens(sheetCtx);
+      final accent = dark
+          ? theme.colorScheme.secondary
+          : theme.colorScheme.primary;
+
+      Widget sectionFrame({
+        required String title,
+        required IconData icon,
+        required List<Widget> children,
+      }) {
+        if (children.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: DecoratedBox(
             decoration: BoxDecoration(
-              border: Border.all(color: Theme.of(context).hintColor),
-              borderRadius: BorderRadius.circular(2),
-              color: i == cur ? numBgSelected : null,
+              color: tokens.surfaceContainer.withValues(
+                alpha: dark ? 0.65 : 0.80,
+              ),
+              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+              border: Border.all(
+                color: tokens.border.withValues(alpha: 0.85),
+                width: 0.85,
+              ),
             ),
-            child: Center(
-              child: Text(
-                (i + 1).toString(),
-                style: TextStyle(
-                  color: i == cur ? numColorSelected : numColorUnselected,
-                  fontWeight: FontWeight.bold,
-                ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, size: 17, color: accent),
+                      const SizedBox(width: 8),
+                      Text(
+                        translate(title),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  ...children,
+                ],
               ),
             ),
           ),
-        ),
-      );
-    }
-    displays.add(
-      Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 8,
-          children: children,
-        ),
-      ),
-    );
-  }
-  if (displays.isNotEmpty) {
-    displays.add(const Divider(color: MyTheme.border));
-  }
+        );
+      }
 
-  List<TRadioMenu<String>> viewStyleRadios = await toolbarViewStyle(
-    context,
-    id,
-    gFFI,
-  );
-  List<TRadioMenu<String>> imageQualityRadios = await toolbarImageQuality(
-    context,
-    id,
-    gFFI,
-  );
-  List<TRadioMenu<String>> codecRadios = await toolbarCodec(context, id, gFFI);
-  List<TToggleMenu> displayToggles = await toolbarDisplayToggle(
-    context,
-    id,
-    gFFI,
-  );
+      Widget radioGroupSection(
+        String title,
+        IconData icon,
+        List<TRadioMenu<String>> entries,
+        RxString selected, {
+        Widget? footer,
+      }) {
+        if (entries.isEmpty) return const SizedBox.shrink();
+        return Obx(
+          () => sectionFrame(
+            title: title,
+            icon: icon,
+            children: [
+              Column(
+                children: [
+                  for (final entry in entries)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(
+                          CamelliaRadius.control,
+                        ),
+                        onTap: entry.onChanged == null
+                            ? null
+                            : () {
+                                HapticFeedback.selectionClick();
+                                entry.onChanged?.call(entry.value);
+                                selected.value = entry.value;
+                              },
+                        child: AnimatedContainer(
+                          duration: CamelliaMotion.resolve(
+                            sheetCtx,
+                            CamelliaMotion.hover,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 9,
+                          ),
+                          decoration: BoxDecoration(
+                            color: selected.value == entry.value
+                                ? accent.withValues(alpha: dark ? 0.18 : 0.10)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.control,
+                            ),
+                            border: Border.all(
+                              color: selected.value == entry.value
+                                  ? accent.withValues(alpha: 0.55)
+                                  : Colors.transparent,
+                              width: 0.85,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: DefaultTextStyle.merge(
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: selected.value == entry.value
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                  ),
+                                  child: entry.child,
+                                ),
+                              ),
+                              Icon(
+                                CamelliaIcons.check,
+                                size: 17,
+                                color: selected.value == entry.value
+                                    ? accent
+                                    : Colors.transparent,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              ?footer,
+            ],
+          ),
+        );
+      }
 
-  dialogManager
-      .show(
-        (setState, close, context) {
-          var viewStyle =
-              (viewStyleRadios.isNotEmpty ? viewStyleRadios[0].groupValue : '')
-                  .obs;
-          var imageQuality =
-              (imageQualityRadios.isNotEmpty
-                      ? imageQualityRadios[0].groupValue
-                      : '')
-                  .obs;
-          var codec =
-              (codecRadios.isNotEmpty ? codecRadios[0].groupValue : '').obs;
-          final radios = [
-            for (var e in viewStyleRadios)
-              Obx(
-                () => getRadio<String>(
-                  e.child,
-                  e.value,
-                  viewStyle.value,
-                  e.onChanged != null
-                      ? (v) {
-                          e.onChanged?.call(v);
-                          if (v != null) viewStyle.value = v;
-                        }
-                      : null,
-                ),
-              ),
-            const Divider(color: MyTheme.border),
-            for (var e in imageQualityRadios)
-              Obx(
-                () => getRadio<String>(
-                  e.child,
-                  e.value,
-                  imageQuality.value,
-                  e.onChanged != null
-                      ? (v) {
-                          e.onChanged?.call(v);
-                          if (v != null) imageQuality.value = v;
-                        }
-                      : null,
-                ),
-              ),
-            const Divider(color: MyTheme.border),
-            for (var e in codecRadios)
-              Obx(
-                () => getRadio<String>(
-                  e.child,
-                  e.value,
-                  codec.value,
-                  e.onChanged != null
-                      ? (v) {
-                          e.onChanged?.call(v);
-                          if (v != null) codec.value = v;
-                        }
-                      : null,
-                ),
-              ),
-            if (codecRadios.isNotEmpty) const Divider(color: MyTheme.border),
-          ];
-
-          final rxToggleValues = displayToggles
-              .map((e) => e.value.obs)
-              .toList();
-          final displayTogglesList = displayToggles
-              .asMap()
-              .entries
-              .map(
-                (e) => Obx(
-                  () => CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
-                    value: rxToggleValues[e.key].value,
-                    onChanged: e.value.onChanged != null
-                        ? (v) {
-                            e.value.onChanged?.call(v);
-                            if (v != null) rxToggleValues[e.key].value = v;
-                          }
-                        : null,
-                    title: e.value.child,
+      final cameraWidgets = <Widget>[
+        if (connectionSummary != null)
+          Padding(
+            padding: EdgeInsets.only(bottom: hasMultipleCameras ? 10 : 0),
+            child: connectionSummary,
+          ),
+        if (hasMultipleCameras)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (var i = 0; i < pi.displays.length; i++)
+                GestureDetector(
+                  onTap: () {
+                    if (i == pi.currentDisplay) return;
+                    HapticFeedback.selectionClick();
+                    Navigator.of(sheetCtx).pop();
+                    openMonitorInTheSameTab(i, gFFI, pi);
+                  },
+                  child: AnimatedContainer(
+                    duration: CamelliaMotion.resolve(
+                      sheetCtx,
+                      CamelliaMotion.feedback,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: i == pi.currentDisplay
+                          ? accent.withValues(alpha: dark ? 0.22 : 0.14)
+                          : tokens.surface,
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: i == pi.currentDisplay
+                            ? accent.withValues(alpha: 0.65)
+                            : tokens.border.withValues(alpha: 0.85),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          CamelliaIcons.camera,
+                          size: 15,
+                          color: i == pi.currentDisplay ? accent : tokens.muted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${i + 1}',
+                          style: CamelliaTypography.tabular(
+                            theme.textTheme.labelMedium?.copyWith(
+                              color: i == pi.currentDisplay
+                                  ? accent
+                                  : theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              )
-              .toList();
-          final toggles = [...displayTogglesList];
+            ],
+          ),
+      ];
 
-          var popupDialogMenus = List<Widget>.empty(growable: true);
-          if (popupDialogMenus.isNotEmpty) {
-            popupDialogMenus.add(const Divider(color: MyTheme.border));
-          }
-
-          return CustomAlertDialog(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: displays + radios + popupDialogMenus + toggles,
+      final toggleWidgets = <Widget>[
+        for (var i = 0; i < displayToggles.length; i++)
+          Obx(
+            () => SwitchListTile.adaptive(
+              dense: true,
+              value: rxToggleValues[i].value,
+              onChanged: displayToggles[i].onChanged == null
+                  ? null
+                  : (next) {
+                      HapticFeedback.selectionClick();
+                      displayToggles[i].onChanged?.call(next);
+                      rxToggleValues[i].value = next;
+                    },
+              secondary: Icon(
+                CamelliaIcons.display,
+                size: 18,
+                color: tokens.muted,
+              ),
+              title: DefaultTextStyle.merge(
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+                child: displayToggles[i].child,
+              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4),
             ),
-          );
-        },
-        clickMaskDismiss: true,
-        backDismiss: true,
-      )
-      .then((value) {
-        _disableAndroidSoftKeyboard();
-      });
+          ),
+      ];
+
+      return ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetCtx).height * 0.76,
+        ),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          shrinkWrap: true,
+          children: [
+            if (cameraWidgets.isNotEmpty)
+              sectionFrame(
+                title: 'View camera',
+                icon: CamelliaIcons.camera,
+                children: cameraWidgets,
+              ),
+            radioGroupSection(
+              'View Mode',
+              Icons.fit_screen_rounded,
+              viewStyleRadios,
+              viewStyle,
+              footer: Obx(
+                () => viewStyle.value == kRemoteViewStyleCustom
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: MobileCustomScaleControls(ffi: gFFI),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+            radioGroupSection(
+              'Image Quality',
+              Icons.high_quality_outlined,
+              imageQualityRadios,
+              imageQuality,
+            ),
+            radioGroupSection(
+              'Codec',
+              Icons.video_settings_outlined,
+              codecRadios,
+              codec,
+            ),
+            if (toggleWidgets.isNotEmpty)
+              sectionFrame(
+                title: 'General',
+                icon: CamelliaIcons.settings,
+                children: toggleWidgets,
+              ),
+          ],
+        ),
+      );
+    },
+  );
+  _disableAndroidSoftKeyboard();
 }
 
 class FABLocation extends FloatingActionButtonLocation {

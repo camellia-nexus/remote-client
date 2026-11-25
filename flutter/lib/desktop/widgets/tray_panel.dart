@@ -1,8 +1,8 @@
-// ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common.dart';
+import 'package:camellia_remote_app/common/formatter/id_formatter.dart';
+import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
@@ -15,7 +15,8 @@ class CamelliaTrayPanel extends StatelessWidget {
 
   static Future<void> show(BuildContext context, {Offset? anchor}) async {
     final renderBox = context.findRenderObject() as RenderBox?;
-    final targetPosition = anchor ??
+    final targetPosition =
+        anchor ??
         (renderBox != null
             ? renderBox.localToGlobal(Offset.zero)
             : const Offset(20, 40));
@@ -23,27 +24,30 @@ class CamelliaTrayPanel extends StatelessWidget {
     await showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.2),
-      builder: (ctx) => Stack(
-        children: [
-          Positioned(
-            left: targetPosition.dx.clamp(16.0, MediaQuery.sizeOf(ctx).width - 336.0),
-            top: targetPosition.dy.clamp(16.0, MediaQuery.sizeOf(ctx).height - 380.0),
-            child: const Material(
-              color: Colors.transparent,
-              child: SizedBox(
-                width: 320,
-                child: CamelliaTrayPanel(),
+      builder: (ctx) {
+        final size = MediaQuery.sizeOf(ctx);
+        final maxLeft = (size.width - 332.0).clamp(12.0, double.infinity);
+        final maxTop = (size.height - 380.0).clamp(12.0, double.infinity);
+        return Stack(
+          children: [
+            Positioned(
+              left: targetPosition.dx.clamp(12.0, maxLeft),
+              top: targetPosition.dy.clamp(12.0, maxTop),
+              child: const Material(
+                color: Colors.transparent,
+                child: SizedBox(width: 320, child: CamelliaTrayPanel()),
               ),
             ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
 
     return Obx(() {
@@ -65,130 +69,160 @@ class CamelliaTrayPanel extends StatelessWidget {
               SvcStatus.notReady => translate('not_ready_status'),
             };
 
-      final myId = gFFI.serverModel.serverId.text;
+      final myId = gFFI.serverModel.serverId.text.trim();
       final activeConnections = gFFI.serverModel.clients.length;
+      final rawSessionsText = translate('{count} active sessions');
+      final sessionsLabel = rawSessionsText
+          .replaceAll('{count}', '$activeConnections')
+          .replaceAll('{\$activeConnections}', '$activeConnections');
 
-      return GlassCard(
-        layer: CamelliaGlassLayer.floating,
+      return GlassSurface(
+        layer: CamelliaGlassLayer.modal,
+        elevated: true,
         borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        padding: const EdgeInsets.all(16),
+        borderTopColor: glass.specularTop,
+        borderBottomColor: tokens.border,
+        strokeWidth: 0.85,
+        padding: const EdgeInsets.all(14),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Top Header: Branding + Status Badge
+            // Top Header: Studio Brand Mark + Status Badge
             Row(
               children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [CamelliaColors.indigo, CamelliaColors.azure],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                  ),
-                  child: const Icon(Icons.hub_rounded, color: Colors.white, size: 16),
-                ),
+                const CamelliaBrandMark(size: 26, withPlate: true),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     translate('Camellia Remote'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
                     ),
                   ),
                 ),
+                const SizedBox(width: 8),
                 GlassBadge(
                   label: statusLabel,
                   tone: statusTone,
                   showDot: true,
-                  pulse: !stopped && status == SvcStatus.ready,
+                  pulse: false,
+                  compact: true,
                 ),
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
 
-            // Local Device ID Card
-            GlassCard(
-              layer: CamelliaGlassLayer.canvas,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        translate('Your ID'),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        myId.isNotEmpty ? myId : '---',
-                        style: CamelliaTypography.tabular(
-                          theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
+            // Local Device ID Hardware Key Inset
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: tokens.surfaceContainer.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                border: Border.all(color: tokens.border, width: 0.85),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            translate('Your ID'),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
+                          const SizedBox(height: 2),
+                          Text(
+                            myId.isNotEmpty ? formatID(myId) : '---',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: CamelliaTypography.tabular(
+                              theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const Spacer(),
-                  GlassIconButton(
-                    icon: Icons.copy_rounded,
-                    size: 32,
-                    iconSize: 16,
-                    tooltip: translate('Copy ID'),
-                    onPressed: () {
-                      if (myId.isNotEmpty) {
-                        Clipboard.setData(ClipboardData(text: myId));
-                        showToast(translate('Copied'));
-                      }
-                    },
-                  ),
-                ],
+                    ),
+                    GlassIconButton(
+                      icon: CamelliaIcons.copy,
+                      size: 32,
+                      iconSize: 15,
+                      tooltip: translate('Copy ID'),
+                      onPressed: myId.isNotEmpty && myId != '-'
+                          ? () {
+                              Clipboard.setData(ClipboardData(text: myId));
+                              showToast(translate('Copied'));
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 10),
 
             // Active Connections indicator
             if (activeConnections > 0) ...[
-              Row(
-                children: [
-                  Icon(
-                    Icons.sensors_rounded,
-                    size: 14,
-                    color: glass.statusOnline,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: glass.statusOnline.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                  border: Border.all(
+                    color: glass.statusOnline.withValues(alpha: 0.25),
+                    width: 0.85,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    translate('{count} active sessions').replaceAll(
-                      '{count}',
-                      activeConnections.toString(),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.sensors_rounded,
+                      size: 14,
+                      color: glass.statusOnline,
                     ),
-                    style: CamelliaTypography.tabular(
-                      theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        sessionsLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 10),
             ],
 
-            const Divider(height: 1),
-            const SizedBox(height: 8),
+            Container(height: 0.85, color: tokens.border),
+            const SizedBox(height: 6),
 
             // Quick Actions List
             _TrayActionRow(
-              icon: Icons.launch_rounded,
+              icon: Icons.open_in_new_rounded,
               label: translate('Open Main Window'),
               onTap: () async {
                 Navigator.of(context, rootNavigator: true).pop();
@@ -199,7 +233,9 @@ class CamelliaTrayPanel extends StatelessWidget {
             _TrayActionRow(
               icon: stopped ? Icons.play_arrow_rounded : Icons.stop_rounded,
               iconColor: stopped ? glass.statusOnline : glass.statusAlert,
-              label: stopped ? translate('Start Service') : translate('Stop service'),
+              label: stopped
+                  ? translate('Start service')
+                  : translate('Stop service'),
               onTap: () {
                 Navigator.of(context, rootNavigator: true).pop();
                 gFFI.serverModel.toggleService();
@@ -249,29 +285,38 @@ class _TrayActionRow extends StatelessWidget {
     final theme = Theme.of(context);
     final glass = CamelliaGlassTokens.of(context);
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(CamelliaRadius.control),
-      hoverColor: glass.hoverOverlay,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 16,
-              color: iconColor ?? theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                label,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w500,
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(CamelliaRadius.control),
+        hoverColor: glass.hoverOverlay,
+        highlightColor: Colors.transparent,
+        splashColor: Colors.transparent,
+        splashFactory: NoSplash.splashFactory,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: iconColor ?? theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

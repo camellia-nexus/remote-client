@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,11 +6,11 @@ import '../../common.dart';
 import '../../ui/camellia_design.dart';
 import '../../ui/glass_components.dart';
 
-/// Liquid Glass settings primitives shared across Desktop, Mobile, and Web.
+/// Precision Studio settings primitives shared across Desktop, Mobile, and Web.
 ///
 /// Keeping these primitives in-tree ensures every settings surface shares the
-/// same frosted material depth, specular rim, focus ring, and accessibility
-/// ergonomics as the rest of Camellia Remote.
+/// same frosted material depth, 0.85px hairline rim, focus ring, and
+/// accessibility ergonomics across Camellia Remote.
 class SettingsThemeData {
   const SettingsThemeData({
     required this.settingsListBackground,
@@ -29,17 +30,18 @@ class SettingsThemeData {
   });
 
   factory SettingsThemeData.adaptive(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
-    final scheme = Theme.of(context).colorScheme;
+    final scheme = theme.colorScheme;
     final accent = isDark ? scheme.secondary : scheme.primary;
     return SettingsThemeData(
       settingsListBackground: Colors.transparent,
       settingsSectionBackground: glass.floatingTint,
-      dividerColor: glass.specularBottom.withValues(alpha: isDark ? 0.55 : 0.7),
+      dividerColor: glass.specularBottom.withValues(alpha: isDark ? 0.55 : 0.72),
       tileHighlightColor: accent.withValues(alpha: isDark ? 0.14 : 0.08),
-      titleTextColor: accent,
+      titleTextColor: scheme.onSurface,
       leadingIconsColor: accent,
       trailingTextColor: scheme.onSurfaceVariant,
       tileDescriptionTextColor: scheme.onSurfaceVariant,
@@ -48,17 +50,13 @@ class SettingsThemeData {
       inactiveSubtitleColor: tokens.muted.withValues(alpha: 0.52),
       inactiveSwitchColor: tokens.muted.withValues(alpha: 0.34),
       titleTextStyle:
-          Theme.of(
-            context,
-          ).textTheme.labelLarge?.copyWith(
+          theme.textTheme.labelLarge?.copyWith(
             fontWeight: FontWeight.w700,
-            letterSpacing: 0.2,
+            letterSpacing: 0.15,
           ) ??
           const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
       tileTextStyle:
-          Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600) ??
+          theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600) ??
           const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
     );
   }
@@ -108,7 +106,7 @@ class SettingsList extends StatelessWidget {
         itemBuilder: (context, index) => Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
+            constraints: const BoxConstraints(maxWidth: 780),
             child: sections[index],
           ),
         ),
@@ -127,52 +125,138 @@ class SettingsList extends StatelessWidget {
 }
 
 class SettingsSection extends StatelessWidget {
-  const SettingsSection({super.key, this.title, required this.tiles});
+  const SettingsSection({
+    super.key,
+    this.title,
+    this.subtitle,
+    this.trailing,
+    required this.tiles,
+  });
 
   final Widget? title;
+  final Widget? subtitle;
+  final Widget? trailing;
   final List<AbstractSettingsTile> tiles;
 
   @override
   Widget build(BuildContext context) {
     if (tiles.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
     final settingsTheme = _SettingsTheme.of(context);
+    final hasHeader = title != null || subtitle != null || trailing != null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title != null)
+        if (hasHeader)
           Padding(
-            padding: const EdgeInsetsDirectional.only(start: 6, bottom: 9),
-            child: DefaultTextStyle.merge(
-              style: settingsTheme.titleTextStyle.copyWith(
-                color: settingsTheme.titleTextColor,
-              ),
-              child: title!,
+            padding: const EdgeInsetsDirectional.fromSTEB(6, 0, 4, 9),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (title != null)
+                        DefaultTextStyle.merge(
+                          style: settingsTheme.titleTextStyle.copyWith(
+                            color: settingsTheme.titleTextColor,
+                          ),
+                          child: title!,
+                        ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        DefaultTextStyle.merge(
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: settingsTheme.tileDescriptionTextColor,
+                          ),
+                          child: subtitle!,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (trailing != null) ...[
+                  const SizedBox(width: 12),
+                  trailing!,
+                ],
+              ],
             ),
           ),
         GlassSurface(
           layer: CamelliaGlassLayer.floating,
           tintColor: settingsTheme.settingsSectionBackground,
           borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+          strokeWidth: 0.85,
           child: Material(
             type: MaterialType.transparency,
-            child: Column(
-              children: [
-                for (var index = 0; index < tiles.length; index++) ...[
-                  tiles[index],
-                  if (index != tiles.length - 1)
-                    Divider(
-                      height: 1,
-                      thickness: 0.85,
-                      indent: 62,
-                      endIndent: 12,
-                      color: settingsTheme.dividerColor,
-                    ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+              child: Column(
+                children: [
+                  for (var index = 0; index < tiles.length; index++) ...[
+                    tiles[index],
+                    if (index != tiles.length - 1)
+                      Divider(
+                        height: 1,
+                        thickness: 0.85,
+                        indent: (tiles[index] is SettingsTile &&
+                                (tiles[index] as SettingsTile).leading != null)
+                            ? 62
+                            : 14,
+                        endIndent: 14,
+                        color: settingsTheme.dividerColor,
+                      ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Centered, width-constrained group card built on [SettingsSection] for
+/// unified desktop and responsive preferences panes.
+class SettingsGroup extends StatelessWidget {
+  const SettingsGroup({
+    super.key,
+    this.title,
+    this.subtitle,
+    this.trailing,
+    required this.tiles,
+    this.maxWidth = 780,
+    this.margin = const EdgeInsets.fromLTRB(0, 14, 0, 0),
+  });
+
+  final String? title;
+  final String? subtitle;
+  final Widget? trailing;
+  final List<AbstractSettingsTile> tiles;
+  final double maxWidth;
+  final EdgeInsetsGeometry margin;
+
+  @override
+  Widget build(BuildContext context) {
+    if (tiles.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: margin,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: SettingsSection(
+            title: title != null ? Text(title!) : null,
+            subtitle: subtitle != null ? Text(subtitle!) : null,
+            trailing: trailing,
+            tiles: tiles,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -222,9 +306,9 @@ class SettingsTile extends AbstractSettingsTile {
     required this.onToggle,
     this.description,
     this.leading,
+    this.trailing,
     this.enabled = true,
-  }) : trailing = null,
-       value = null,
+  }) : value = null,
        onPressed = null;
 
   final Widget title;
@@ -286,6 +370,35 @@ class SettingsTile extends AbstractSettingsTile {
             ],
           );
 
+    final Widget? resolvedTrailing;
+    if (_isSwitch) {
+      final switchControl = Switch.adaptive(
+        value: initialValue!,
+        onChanged: enabled && onToggle != null
+            ? (v) {
+                HapticFeedback.selectionClick();
+                onToggle?.call(v);
+              }
+            : null,
+      );
+      resolvedTrailing = trailing == null
+          ? switchControl
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                trailing!,
+                const SizedBox(width: 8),
+                switchControl,
+              ],
+            );
+    } else {
+      resolvedTrailing = _SettingsTileTrailing(
+        value: value,
+        trailing: trailing,
+        color: settingsTheme.trailingTextColor,
+      );
+    }
+
     final tile = ListTile(
       enabled: enabled,
       titleAlignment: ListTileTitleAlignment.center,
@@ -308,21 +421,7 @@ class SettingsTile extends AbstractSettingsTile {
               ),
             ),
       title: contentWidget,
-      trailing: _isSwitch
-          ? Switch.adaptive(
-              value: initialValue!,
-              onChanged: enabled
-                  ? (v) {
-                      HapticFeedback.selectionClick();
-                      onToggle?.call(v);
-                    }
-                  : null,
-            )
-          : _SettingsTileTrailing(
-              value: value,
-              trailing: trailing,
-              color: settingsTheme.trailingTextColor,
-            ),
+      trailing: resolvedTrailing,
       onTap: !interactive
           ? null
           : () {

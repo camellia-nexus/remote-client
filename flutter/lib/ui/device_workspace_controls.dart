@@ -1,6 +1,7 @@
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
+import '../common.dart' show AppDesignTokens, AppVisual;
 import 'camellia_design.dart';
 import 'glass_components.dart';
 
@@ -61,6 +62,7 @@ class _DeviceOptionMenuButtonState<T> extends State<DeviceOptionMenuButton<T>> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final AppDesignTokens tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
     final dark = theme.brightness == Brightness.dark;
     final activeAccent = dark ? scheme.secondary : scheme.primary;
@@ -87,16 +89,20 @@ class _DeviceOptionMenuButtonState<T> extends State<DeviceOptionMenuButton<T>> {
             enabled: widget.enabled,
             position: PopupMenuPosition.under,
             borderRadius: radius,
-            splashRadius: 0,
             offset: const Offset(0, 6),
             padding: EdgeInsets.zero,
+            color: tokens.surfaceElevated,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+              side: BorderSide(color: tokens.border, width: 0.85),
+            ),
             constraints: const BoxConstraints(minWidth: 184, maxWidth: 224),
             onSelected: widget.onSelected,
             itemBuilder: (context) => [
               for (final option in widget.options)
                 PopupMenuItem<T>(
                   value: option.value,
-                  height: 40,
+                  height: 38,
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Semantics(
                     selected: option.value == widget.selectedValue,
@@ -156,6 +162,7 @@ class _DeviceOptionMenuButtonState<T> extends State<DeviceOptionMenuButton<T>> {
                         ? Color.alphaBlend(glass.hoverOverlay, glass.floatingTint)
                         : glass.floatingTint,
                     borderRadius: radius,
+                    border: Border.all(color: tokens.border, width: 0.85),
                   ),
                   child: Center(
                     child: Icon(

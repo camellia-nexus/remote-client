@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
 import 'package:camellia_remote_app/models/ab_model.dart';
@@ -302,10 +301,7 @@ class UserModel {
     } catch (e) {
       debugPrint("login: jsonDecode resp body failed: ${e.toString()}");
       if (resp.statusCode != 200 && resp.statusCode != 401) {
-        BotToast.showText(
-          contentColor: Colors.red,
-          text: 'HTTP ${resp.statusCode}',
-        );
+        showToast('${translate('Connection error')} (HTTP ${resp.statusCode})');
       }
       rethrow;
     }

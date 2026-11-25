@@ -240,14 +240,10 @@ class _ChatEmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(CamelliaIcons.chat, size: 26, color: accent),
+            CamelliaStateIllustration(
+              glyph: CamelliaGlyph.chat,
+              accentColor: accent,
+              size: 52,
             ),
             const SizedBox(height: 12),
             Text(
@@ -288,53 +284,24 @@ class _ChatInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-      child: GlassSurface(
-        layer: CamelliaGlassLayer.floating,
+      child: GlassInput(
+        controller: chatModel.textController,
+        focusNode: chatModel.inputNode,
+        hintText: translate('Write a message'),
+        showClearButton: false,
+        minHeight: 42,
         borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-        padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: chatModel.textController,
-                focusNode: chatModel.inputNode,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _send(),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurface,
-                ),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: translate('Write a message'),
-                  hintStyle: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant.withValues(
-                      alpha: 0.78,
-                    ),
-                  ),
-                  filled: false,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 9),
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            GlassIconButton(
-              icon: Icons.send_rounded,
-              size: 36,
-              iconSize: 18,
-              selected: true,
-              tooltip: translate('Send'),
-              onPressed: _send,
-            ),
-          ],
+        textInputAction: TextInputAction.send,
+        onSubmitted: (_) => _send(),
+        trailing: GlassIconButton(
+          icon: Icons.send_rounded,
+          size: 32,
+          iconSize: 16,
+          selected: true,
+          tooltip: translate('Send'),
+          onPressed: _send,
         ),
       ),
     );
