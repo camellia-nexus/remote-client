@@ -88,8 +88,9 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   bool _layoutUpdatePending = false;
   bool _postImageDismissScheduled = false;
   bool _postImageDismissed = false;
+  String? _connectingLoadingTag;
 
-  var _blockableOverlayState = BlockableOverlayState();
+  final _blockableOverlayState = BlockableOverlayState();
 
   final FocusNode _rawKeyFocusNode = FocusNode(debugLabel: "rawkeyFocusNode");
 
@@ -133,11 +134,15 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       connToken: widget.connToken,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      _ffi.dialogManager.showLoading(
-        translate('Connecting...'),
-        onCancel: closeConnection,
-      );
+      if (_ffi.ffiModel.pi.isSet.isFalse ||
+          _ffi.ffiModel.waitForFirstImage.isTrue) {
+        _connectingLoadingTag = _ffi.dialogManager.showLoading(
+          translate('Connecting...'),
+          onCancel: closeConnection,
+        );
+      }
     });
     WakelockManager.enable(_uniqueKey);
 
@@ -395,15 +400,14 @@ class _ViewCameraPageState extends State<ViewCameraPage>
               if (!mounted) return;
               if (DateTime.now().difference(togglePrivacyModeTime) >
                   const Duration(milliseconds: 3000)) {
-                _ffi.dialogManager.dismissAll();
-                setState(() {
-                  _postImageDismissed = true;
-                  _blockableOverlayState = BlockableOverlayState()
-                    ..applyFfi(_ffi);
-                });
-              } else {
-                _postImageDismissed = true;
+                final loadingTag = _connectingLoadingTag;
+                if (loadingTag != null) {
+                  _connectingLoadingTag = null;
+                  _ffi.dialogManager.dismissByTag(loadingTag);
+                }
+                _ffi.dialogManager.dismissByTag('$sessionId-waiting-for-image');
               }
+              _postImageDismissed = true;
             });
           }
           // Block the whole `bodyWidget()` when dialog shows.
@@ -840,96 +844,104 @@ class _CameraControlsPill extends StatelessWidget {
     final resLabel = rect != null && rect.width > 0 && rect.height > 0
         ? '${rect.width.toInt()}×${rect.height.toInt()}'
         : '';
-    return Obx(() {
-      final count = pi.displaysCount.value;
-      final currentIdx = pi.currentDisplay;
-      final fps =
-          int.tryParse(ffi.qualityMonitorModel.data.fps?.trim() ?? '') ?? 0;
-      return GlassSurface(
-        layer: CamelliaGlassLayer.modal,
-        elevated: true,
-        strokeWidth: 0.85,
-        borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                color: glass.statusOnline,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 7),
-            Icon(
-              CamelliaIcons.camera,
-              size: 15,
-              color: theme.colorScheme.onSurface,
-            ),
-            const SizedBox(width: 6),
-            if (count > 1)
-              InkWell(
-                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                onTap: () {
-                  final next = (currentIdx + 1) % count;
-                  bind.sessionSwitchDisplay(
-                    isDesktop: true,
-                    sessionId: ffi.sessionId,
-                    value: Int32List.fromList([next]),
-                  );
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: 2,
+    return ListenableBuilder(
+      listenable: ffi.qualityMonitorModel,
+      builder: (context, _) {
+        final fps =
+            int.tryParse(ffi.qualityMonitorModel.data.fps?.trim() ?? '') ?? 0;
+        return Obx(() {
+          final count = pi.displaysCount.value;
+          final rawIdx = CurrentDisplayState.find(ffi.id).value;
+          final currentIdx = (count > 0 && rawIdx >= 0 && rawIdx < count)
+              ? rawIdx
+              : 0;
+          return GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            elevated: true,
+            strokeWidth: 0.85,
+            borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: glass.statusOnline,
+                    shape: BoxShape.circle,
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${translate('View Camera')} ${currentIdx + 1}/$count',
-                        style: CamelliaTypography.tabular(
-                          theme.textTheme.labelSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                ),
+                const SizedBox(width: 7),
+                Icon(
+                  CamelliaIcons.camera,
+                  size: 15,
+                  color: theme.colorScheme.onSurface,
+                ),
+                const SizedBox(width: 6),
+                if (count > 1)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                    onTap: () {
+                      final next = (currentIdx + 1) % count;
+                      bind.sessionSwitchDisplay(
+                        isDesktop: true,
+                        sessionId: ffi.sessionId,
+                        value: Int32List.fromList([next]),
+                      );
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 2,
                       ),
-                      const SizedBox(width: 2),
-                      const Icon(Icons.swap_horiz_rounded, size: 14),
-                    ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '${translate('View Camera')} ${currentIdx + 1}/$count',
+                            style: CamelliaTypography.tabular(
+                              theme.textTheme.labelSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          const Icon(Icons.swap_horiz_rounded, size: 14),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  Text(
+                    translate('View Camera'),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-              )
-            else
-              Text(
-                translate('View Camera'),
-                style: theme.textTheme.labelSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            if (resLabel.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              GlassBadge(
-                label: resLabel,
-                tone: GlassBadgeTone.neutral,
-                tabularNums: true,
-                compact: true,
-              ),
-            ],
-            if (fps > 0) ...[
-              const SizedBox(width: 6),
-              GlassBadge(
-                label: '$fps FPS',
-                tone: GlassBadgeTone.online,
-                tabularNums: true,
-                compact: true,
-              ),
-            ],
-          ],
-        ),
-      );
-    });
+                if (resLabel.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  GlassBadge(
+                    label: resLabel,
+                    tone: GlassBadgeTone.neutral,
+                    tabularNums: true,
+                    compact: true,
+                  ),
+                ],
+                if (fps > 0) ...[
+                  const SizedBox(width: 6),
+                  GlassBadge(
+                    label: '$fps FPS',
+                    tone: GlassBadgeTone.online,
+                    tabularNums: true,
+                    compact: true,
+                  ),
+                ],
+              ],
+            ),
+          );
+        });
+      },
+    );
   }
 }

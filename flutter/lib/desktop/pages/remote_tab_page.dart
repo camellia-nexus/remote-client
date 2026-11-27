@@ -62,16 +62,15 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         if (remotePage is RemotePage) {
           final ffi = remotePage.ffi;
           bind.setCurSessionId(sessionId: ffi.sessionId);
-          bind.sessionSetCustomFps(sessionId: ffi.sessionId, fps: 0);
-          bind.sessionRefresh(sessionId: ffi.sessionId, display: _display ?? 0);
-        }
-        for (final tab in tabController.state.value.tabs) {
-          if (tab.key != id) {
-            final page = tabController.widget(tab.key);
-            if (page is RemotePage) {
-              bind.sessionSetCustomFps(sessionId: page.ffi.sessionId, fps: 2);
-            }
-          }
+          final currentDisplay = ffi.ffiModel.pi.currentDisplay;
+          final refreshDisplay =
+              currentDisplay >= 0 && currentDisplay != kAllDisplayValue
+              ? currentDisplay
+              : 0;
+          bind.sessionRefresh(
+            sessionId: ffi.sessionId,
+            display: refreshDisplay,
+          );
         }
         WindowController.fromWindowId(
           params['windowId'],
@@ -84,15 +83,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           label: peerId!,
           selectedIcon: selectedIcon,
           unselectedIcon: unselectedIcon,
-          onTabCloseButton: () async {
-            if (await desktopTryShowTabAuditDialogCloseCancelled(
-              id: peerId!,
-              tabController: tabController,
-            )) {
-              return;
-            }
-            tabController.closeBy(peerId!);
-          },
+          onTabCloseButton: () => _closeTab(peerId!),
           page: RemotePage(
             key: ValueKey(peerId),
             id: peerId!,
@@ -114,6 +105,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       params['password'] = null;
     }
     tabController.onRemoved = (_, id) => onRemoveId(id);
+    tabController.onTeardownTabs = _teardownTabs;
     rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
   }
 
@@ -149,7 +141,8 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           if (tabController.state.value.tabs.length <= 1) return;
           final key = tab.key;
           final remotePage = tabController.widget(key);
-          final sessionId = (remotePage is RemotePage) ? remotePage.sessionId : 0;
+          if (remotePage is! RemotePage) return;
+          final sessionId = remotePage.ffi.sessionId;
           await DesktopMultiWindow.invokeMethod(
             kMainWindowId,
             kWindowEventMoveTabToNewWindow,
@@ -383,57 +376,59 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         label: translate('Close'),
         icon: CamelliaIcons.close,
         destructive: true,
-        onTap: () async {
+        onTap: () {
           closeMenu();
-          if (await desktopTryShowTabAuditDialogCloseCancelled(
-            id: key,
-            tabController: tabController,
-          )) {
-            return;
-          }
-          tabController.closeBy(key);
+          unawaited(_closeTab(key));
         },
       ),
     ]);
     return items;
   }
 
-  void onRemoveId(String id) async {
-    if (tabController.state.value.tabs.isEmpty) {
-      Future<void> loopCloseWindow() async {
-        int c = 0;
-        final wId = windowId();
-        try {
-          await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-            "id": wId,
-          });
-        } catch (e) {
-          debugPrint("Failed to notify main window on remote window close: $e");
-        }
-        final windowController = WindowController.fromWindowId(wId);
-        try {
-          await windowController.setPreventClose(false);
-        } catch (e) {
-          debugPrint("Failed to setPreventClose in loopCloseWindow: $e");
-        }
-        while (c < 20 && tabController.state.value.tabs.isEmpty) {
-          try {
-            await windowController.close();
-          } catch (e) {
-            debugPrint("Failed to close in loopCloseWindow: $e");
-            break;
-          }
-          await Future.delayed(const Duration(milliseconds: 100));
-          c++;
-        }
+  Future<void> _teardownTabs(List<TabInfo> tabs) async {
+    final futures = <Future<void>>[];
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is RemotePage) {
+        futures.add(
+          page.teardown().catchError((e) {
+            debugPrint('[RemoteTabPage] Teardown failed for ${tab.key}: $e');
+          }),
+        );
       }
-
-      loopCloseWindow();
     }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
+  }
+
+  Future<void> _closeTab(String id) async {
+    if (await desktopTryShowTabAuditDialogCloseCancelled(
+      id: id,
+      tabController: tabController,
+    )) {
+      return;
+    }
+    final page = tabController.widget(id);
+    if (page is RemotePage) {
+      try {
+        await page.teardown().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        debugPrint('[RemoteTabPage] Teardown failed for $id: $e');
+      }
+    }
+    tabController.closeBy(id);
+  }
+
+  void onRemoveId(String id) {
     ConnectionTypeState.delete(id);
     // Clean up relative mouse mode state for this peer.
     stateGlobal.relativeMouseModeState.remove(id);
     _update_remote_count();
+    if (!tabController.suppressEmptyWindowClose &&
+        tabController.state.value.tabs.isEmpty) {
+      unawaited(tabController.closeWindow(skipConfirm: true));
+    }
   }
 
   int windowId() {
@@ -449,26 +444,18 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
       )) {
         return false;
       }
-      tabController.clear();
       return true;
     }
     if (connLength <= 0) {
-      tabController.clear();
       return true;
     }
-    final bool res;
     if (!option2bool(
       kOptionEnableConfirmClosingTabs,
       bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
     )) {
-      res = true;
-    } else {
-      res = await closeConfirmDialog(isSessionWindow: true);
+      return true;
     }
-    if (res) {
-      tabController.clear();
-    }
-    return res;
+    return await closeConfirmDialog(isSessionWindow: true);
   }
 
   _update_remote_count() =>
@@ -514,15 +501,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
           label: id,
           selectedIcon: selectedIcon,
           unselectedIcon: unselectedIcon,
-          onTabCloseButton: () async {
-            if (await desktopTryShowTabAuditDialogCloseCancelled(
-              id: id,
-              tabController: tabController,
-            )) {
-              return;
-            }
-            tabController.closeBy(id);
-          },
+          onTabCloseButton: () => _closeTab(id),
           page: RemotePage(
             key: ValueKey(id),
             id: id,
@@ -543,7 +522,7 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
     } else if (call.method == kWindowDisableGrabKeyboard) {
       // no-op
     } else if (call.method == "onDestroy") {
-      tabController.clear();
+      await tabController.closeWindow(skipConfirm: true);
     } else if (call.method == kWindowActionRebuild) {
       reloadCurrentWindow();
     } else if (call.method == kWindowEventActiveSession) {

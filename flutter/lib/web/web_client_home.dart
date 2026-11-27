@@ -50,7 +50,6 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
   bool _isFieldFocused = false;
   bool _copiedMyId = false;
   bool _fullscreenPreferred = false;
-  bool _pointerLockPreferred = false;
   bool _clipboardChecked = false;
   Timer? _statusTimer;
   Timer? _copyResetTimer;
@@ -96,22 +95,12 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
   void _hydrateWebSessionPreferences() {
     _fullscreenPreferred =
         bind.getLocalFlutterOption(k: kWebPrefFullscreenOnConnect) == 'Y';
-    _pointerLockPreferred =
-        bind.getLocalFlutterOption(k: kWebPrefPointerLock) == 'Y';
   }
 
   Future<void> _setFullscreenPreferred(bool enable) async {
     setState(() => _fullscreenPreferred = enable);
     await bind.setLocalFlutterOption(
       k: kWebPrefFullscreenOnConnect,
-      v: enable ? 'Y' : 'N',
-    );
-  }
-
-  Future<void> _setPointerLockPreferred(bool enable) async {
-    setState(() => _pointerLockPreferred = enable);
-    await bind.setLocalFlutterOption(
-      k: kWebPrefPointerLock,
       v: enable ? 'Y' : 'N',
     );
   }
@@ -204,6 +193,50 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
     });
   }
 
+  /// Extracts a clean remote ID from clipboard text.
+  /// Preserves single-token hostnames/aliases containing letters or dots
+  /// untouched, handles multi-line `ID: ...` snippets without bleeding
+  /// passwords across lines, and normalizes spaced/dashed numeric IDs.
+  String _extractRemoteIdFromClipboard(String raw) {
+    final lines = raw
+        .split(RegExp(r'[\r\n]+'))
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return '';
+
+    String targetLine = lines.first;
+    final idLabelPattern = RegExp(
+      r'(?<![A-Za-z0-9])id\s*[:：]\s*(.+)$',
+      caseSensitive: false,
+    );
+    for (final line in lines) {
+      final match = idLabelPattern.firstMatch(line);
+      if (match != null) {
+        final labeled = match.group(1)?.trim() ?? '';
+        if (labeled.isNotEmpty) {
+          targetLine = labeled;
+          break;
+        }
+      }
+    }
+
+    if (RegExp(r'^[\d \-]+$').hasMatch(targetLine)) {
+      return targetLine.replaceAll(RegExp(r'[ \-]+'), '');
+    }
+    if (!targetLine.contains(RegExp(r'\s')) &&
+        RegExp(r'[A-Za-z.]').hasMatch(targetLine)) {
+      return targetLine;
+    }
+    final numericMatch = RegExp(
+      r'(?<![A-Za-z0-9])\d[\d \-]{4,}\d(?![A-Za-z0-9])',
+    ).firstMatch(targetLine);
+    if (numericMatch != null) {
+      return numericMatch.group(0)!.replaceAll(RegExp(r'[ \-]+'), '');
+    }
+    return targetLine.split(RegExp(r'\s+')).first;
+  }
+
   /// Strips spaces and dashes from formatted IDs (e.g. `123 456 789` -> `123456789`)
   /// while preserving single-token hostnames/aliases cleanly.
   Future<void> _smartPasteRemoteId() async {
@@ -214,18 +247,8 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
         showToast(translate('Clipboard is empty'));
         return;
       }
-      final cleanedDigits = raw.replaceAll(RegExp(r'[\s\-]+'), '');
-      final numericMatch = RegExp(r'\d[\d\s\-]{4,}\d').firstMatch(raw);
-      final String candidate;
-      if (RegExp(r'^[\d\s\-]+$').hasMatch(raw) && cleanedDigits.isNotEmpty) {
-        candidate = cleanedDigits;
-      } else if (numericMatch != null) {
-        candidate = numericMatch.group(0)!.replaceAll(RegExp(r'[\s\-]+'), '');
-      } else {
-        candidate = raw.split(RegExp(r'\s+')).first;
-      }
-
-      if (!mounted) return;
+      final candidate = _extractRemoteIdFromClipboard(raw);
+      if (candidate.isEmpty || !mounted) return;
       setState(() {
         _idController.id = candidate;
         _clipboardChecked = true;
@@ -321,29 +344,16 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
                   trailing: Switch.adaptive(
                     value: _fullscreenPreferred,
                     onChanged: (v) async {
-                      setSheetState(() {});
                       await _setFullscreenPreferred(v);
+                      if (sheetCtx.mounted) {
+                        setSheetState(() {});
+                      }
                       _applyFullscreenMode(v);
                       showToast(
                         v
                             ? translate('Fullscreen enabled for sessions')
                             : translate('Windowed session mode'),
                       );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 10),
-                _BrowserCapabilityRow(
-                  icon: CamelliaIcons.mouse,
-                  title: translate('Pointer Lock (Relative Mouse)'),
-                  subtitle: translate(
-                    'Captures cursor for 3D apps and precision navigation. Press Esc to release pointer.',
-                  ),
-                  trailing: Switch.adaptive(
-                    value: _pointerLockPreferred,
-                    onChanged: (v) async {
-                      setSheetState(() {});
-                      await _setPointerLockPreferred(v);
                     },
                   ),
                 ),
@@ -516,24 +526,22 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
                           children: [
                             _buildTopBar(context, isCompact: false),
                             const SizedBox(height: 14),
-                            IntrinsicHeight(
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Expanded(
-                                    flex: isExpanded ? 8 : 7,
-                                    child: _buildConnectionHero(
-                                      context,
-                                      compact: false,
-                                    ),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: isExpanded ? 8 : 7,
+                                  child: _buildConnectionHero(
+                                    context,
+                                    compact: false,
                                   ),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    flex: isExpanded ? 4 : 5,
-                                    child: _buildSessionStatusCard(context),
-                                  ),
-                                ],
-                              ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  flex: isExpanded ? 4 : 5,
+                                  child: _buildSessionStatusCard(context),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 14),
                             Expanded(child: _buildPeersPanel(context)),
@@ -817,7 +825,7 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
               size: 36,
               iconSize: 18,
               tooltip: translate('Browser Session Controls'),
-              selected: _fullscreenPreferred || _pointerLockPreferred,
+              selected: _fullscreenPreferred,
               onPressed: _openBrowserCapabilitiesSheet,
             ),
             const SizedBox(width: 6),
@@ -878,9 +886,6 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
     }
     if (_fullscreenPreferred) {
       _applyFullscreenMode(true);
-    }
-    if (_pointerLockPreferred) {
-      gFFI.inputModel.setRelativeMouseMode(true);
     }
     connect(
       context,
@@ -1340,8 +1345,8 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
       subtitle: translate('Encrypted browser control node'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           DecoratedBox(
             decoration: BoxDecoration(
@@ -1431,14 +1436,6 @@ class _WebClientHomePageState extends State<WebClientHomePage> {
                 compact: true,
                 onTap: _openBrowserCapabilitiesSheet,
               ),
-              if (_pointerLockPreferred)
-                GlassBadge(
-                  label: translate('Relative mouse mode'),
-                  icon: CamelliaIcons.mouse,
-                  tone: GlassBadgeTone.brand,
-                  compact: true,
-                  onTap: _openBrowserCapabilitiesSheet,
-                ),
               GlassBadge(
                 label: '${translate('Codec')}: $codecLabel',
                 icon: Icons.video_settings_outlined,

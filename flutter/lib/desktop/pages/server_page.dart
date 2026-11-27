@@ -399,23 +399,15 @@ class ConnectionManagerState extends State<ConnectionManager>
     final tabController = gFFI.serverModel.tabController;
     final connLength = tabController.length;
     if (connLength <= 1) {
-      windowManager.close();
       return true;
-    } else {
-      final bool res;
-      if (!option2bool(
-        kOptionEnableConfirmClosingTabs,
-        bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
-      )) {
-        res = true;
-      } else {
-        res = await closeConfirmDialog(isSessionWindow: true);
-      }
-      if (res) {
-        windowManager.close();
-      }
-      return res;
     }
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      return true;
+    }
+    return await closeConfirmDialog(isSessionWindow: true);
   }
 }
 
@@ -1295,7 +1287,7 @@ class _CmControlPanel extends StatelessWidget {
                   icon: const Icon(CamelliaIcons.check, size: 17),
                   onPressed: () => checkClickTime(client.id, () {
                     handleAccept(context);
-                    if (model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
+                    if (!model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
                       windowManager.minimize();
                     }
                   }),
@@ -1320,7 +1312,7 @@ class _CmControlPanel extends StatelessWidget {
                     icon: const Icon(CamelliaIcons.eye, size: 17),
                     onPressed: () => checkClickTime(client.id, () {
                       handleAcceptViewOnly(context);
-                      if (model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
+                      if (!model.hideCm && !gFFI.chatModel.isShowCMSidePage) {
                         windowManager.minimize();
                       }
                     }),

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,7 +34,9 @@ class ServerPage extends StatefulWidget implements PageShape {
       ? [const ServerAccessMenuButton()]
       : [];
 
-  ServerPage({super.key});
+  final ValueListenable<bool>? isActive;
+
+  ServerPage({super.key, this.isActive});
 
   @override
   State<StatefulWidget> createState() => _ServerPageState();
@@ -254,10 +257,10 @@ class _ServerPageState extends State<ServerPage> {
     return SingleChildScrollView(
       controller: gFFI.serverModel.controller,
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-      child: const AdaptiveContent(
+      child: AdaptiveContent(
         maxWidth: 760,
         padding: EdgeInsets.zero,
-        child: ServerWorkspaceSection(),
+        child: ServerWorkspaceSection(isActive: widget.isActive),
       ),
     );
   }
@@ -265,33 +268,93 @@ class _ServerPageState extends State<ServerPage> {
 
 /// Embeddable incoming-access area used by the single mobile workspace.
 class ServerWorkspaceSection extends StatefulWidget {
-  const ServerWorkspaceSection({super.key});
+  const ServerWorkspaceSection({super.key, this.isActive});
+
+  final ValueListenable<bool>? isActive;
 
   @override
   State<ServerWorkspaceSection> createState() => _ServerWorkspaceSectionState();
 }
 
-class _ServerWorkspaceSectionState extends State<ServerWorkspaceSection> {
+class _ServerWorkspaceSectionState extends State<ServerWorkspaceSection>
+    with WidgetsBindingObserver {
   Timer? _updateTimer;
+  bool _appResumed = true;
+
+  bool get _isPollingActive => _appResumed && (widget.isActive?.value ?? true);
 
   @override
   void initState() {
     super.initState();
-    _updateTimer = periodic_immediate(const Duration(seconds: 3), () async {
+    WidgetsBinding.instance.addObserver(this);
+    widget.isActive?.addListener(_onActivityChanged);
+    checkService();
+    gFFI.serverModel.checkAndroidPermission();
+    _syncPolling();
+  }
+
+  @override
+  void didUpdateWidget(covariant ServerWorkspaceSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive != widget.isActive) {
+      oldWidget.isActive?.removeListener(_onActivityChanged);
+      widget.isActive?.addListener(_onActivityChanged);
+      _onActivityChanged();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _appResumed = true;
+      checkService();
+      _syncPolling();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _appResumed = false;
+      _stopPolling();
+    }
+  }
+
+  void _onActivityChanged() {
+    if (_isPollingActive) {
+      checkService();
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _syncPolling() {
+    if (_isPollingActive) {
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _startPolling() {
+    _updateTimer ??= periodic_immediate(const Duration(seconds: 3), () async {
       await gFFI.serverModel.fetchID();
     });
-    gFFI.serverModel.checkAndroidPermission();
+  }
+
+  void _stopPolling() {
+    _updateTimer?.cancel();
+    _updateTimer = null;
   }
 
   @override
   void dispose() {
-    _updateTimer?.cancel();
+    widget.isActive?.removeListener(_onActivityChanged);
+    WidgetsBinding.instance.removeObserver(this);
+    _stopPolling();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    checkService();
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Consumer<ServerModel>(

@@ -64,12 +64,14 @@ class GestureHelp extends StatefulWidget {
     required this.onTouchModeChange,
     required this.virtualMouseMode,
     this.inputModel,
+    this.onClose,
   });
 
   final bool touchMode;
   final OnTouchModeChange onTouchModeChange;
   final VirtualMouseMode virtualMouseMode;
   final InputModel? inputModel;
+  final VoidCallback? onClose;
 
   @override
   State<StatefulWidget> createState() => _GestureHelpState();
@@ -265,6 +267,17 @@ class _GestureHelpState extends State<GestureHelp> {
                     ),
                   ),
                 ),
+                if (widget.onClose != null)
+                  GlassIconButton(
+                    icon: CamelliaIcons.close,
+                    tooltip: translate('Close'),
+                    size: 32,
+                    iconSize: 16,
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      widget.onClose?.call();
+                    },
+                  ),
               ],
             ),
             const SizedBox(height: 10),

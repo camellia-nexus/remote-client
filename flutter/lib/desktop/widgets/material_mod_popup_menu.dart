@@ -347,10 +347,10 @@ class PopupMenuItemState<T, W extends PopupMenuItem<T>> extends State<W> {
   /// the menu route.
   @protected
   void handleTap() {
-    widget.onTap?.call();
     if (widget.closeOnTap && Navigator.canPop(context)) {
       Navigator.pop<T>(context, widget.value);
     }
+    widget.onTap?.call();
   }
 
   @override

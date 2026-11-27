@@ -366,12 +366,70 @@ class DesktopTabController {
   Function(int, String)? onRemoved;
   Function(String)? onSelected;
   Future<void> Function()? onCloseWindow;
+  Future<void> Function(List<TabInfo> tabs)? onTeardownTabs;
+  bool suppressEmptyWindowClose = false;
+  Future<void> Function({bool skipConfirm})? _windowCloseHandler;
 
   DesktopTabController({
     required this.tabType,
     this.onRemoved,
     this.onSelected,
   });
+
+  void bindWindowCloseHandler(
+    Future<void> Function({bool skipConfirm}) handler,
+  ) {
+    _windowCloseHandler = handler;
+  }
+
+  void unbindWindowCloseHandler(
+    Future<void> Function({bool skipConfirm}) handler,
+  ) {
+    if (identical(_windowCloseHandler, handler)) {
+      _windowCloseHandler = null;
+    }
+  }
+
+  Future<void> closeWindow({bool skipConfirm = false}) async {
+    final handler = _windowCloseHandler;
+    if (handler != null) {
+      await handler(skipConfirm: skipConfirm);
+      return;
+    }
+    final wId = kWindowId;
+    if (wId == null) return;
+    final activeTabs = List<TabInfo>.from(state.value.tabs);
+    suppressEmptyWindowClose = true;
+    try {
+      if (onTeardownTabs != null) {
+        await onTeardownTabs!(activeTabs).timeout(
+          const Duration(seconds: 4),
+          onTimeout: () {},
+        );
+      }
+    } catch (e) {
+      debugPrint('[DesktopTabController] Fallback teardown error: $e');
+    }
+    if (state.value.tabs.isNotEmpty) {
+      clear();
+    }
+    try {
+      await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+        "id": wId,
+      });
+    } catch (e) {
+      debugPrint('[DesktopTabController] Failed to notify main window hide: $e');
+    }
+    final wc = WindowController.fromWindowId(wId);
+    try {
+      await wc.setPreventClose(false);
+    } catch (_) {}
+    try {
+      await wc.close();
+    } catch (e) {
+      debugPrint('[DesktopTabController] Failed to close window $wId: $e');
+    }
+  }
 
   int get length => state.value.tabs.length;
 
@@ -601,6 +659,7 @@ class _DesktopTabState extends State<DesktopTab>
   Timer? _macOSFollowupCloseTimer;
   int _macOSCheckRestoreCounter = 0;
   int _macOSCloseGeneration = 0;
+  bool _isClosingWindow = false;
 
   bool get showLogo => widget.showLogo;
   bool get showTitle => widget.showTitle;
@@ -639,6 +698,11 @@ class _DesktopTabState extends State<DesktopTab>
     super.initState();
     DesktopMultiWindow.addListener(this);
     windowManager.addListener(this);
+    if (!isMainWindow) {
+      controller.bindWindowCloseHandler(_closeSubWindow);
+      controller.onCloseWindow ??= () =>
+          controller.closeWindow(skipConfirm: true);
+    }
 
     Future.delayed(const Duration(milliseconds: 500), () {
       if (!mounted) return;
@@ -671,6 +735,7 @@ class _DesktopTabState extends State<DesktopTab>
 
   @override
   void dispose() {
+    controller.unbindWindowCloseHandler(_closeSubWindow);
     DesktopMultiWindow.removeListener(this);
     windowManager.removeListener(this);
     _macOSCloseGeneration++;
@@ -746,38 +811,124 @@ class _DesktopTabState extends State<DesktopTab>
     super.onWindowResized();
   }
 
+  Future<void> _exitMacOSFullScreenIfNeeded(WindowController wc) async {
+    try {
+      if (!await wc.isFullScreen()) return;
+      await wc.setFullscreen(false);
+      stateGlobal.setFullscreen(false, procWnd: false);
+      for (int i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(milliseconds: 30));
+        if (!mounted) return;
+        if (!await wc.isFullScreen()) break;
+      }
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 700));
+    } catch (e) {
+      debugPrint('[DesktopTab] Failed to exit macOS fullscreen: $e');
+    }
+  }
+
+  Future<void> _defaultTeardownTabs(List<TabInfo> tabs) async {
+    final futures = <Future<void>>[];
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is RemotePage) {
+        futures.add(page.teardown());
+      } else if (page is ViewCameraPage) {
+        futures.add(page.teardown());
+      }
+    }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
+  }
+
+  Future<void> _closeSubWindow({
+    bool skipConfirm = false,
+    bool bringToFront = false,
+  }) async {
+    if (_isClosingWindow) return;
+    final wId = kWindowId;
+    if (wId == null) return;
+    _isClosingWindow = true;
+
+    try {
+      final wc = WindowController.fromWindowId(wId);
+      if (!skipConfirm && onWindowCloseButton != null && controller.length > 0) {
+        if (bringToFront && (isWindows || isLinux)) {
+          try {
+            await wc.show();
+            await wc.focus();
+          } catch (_) {}
+        }
+        final confirmed = await onWindowCloseButton!();
+        if (!confirmed) {
+          _isClosingWindow = false;
+          return;
+        }
+      }
+
+      await _saveFrame(flush: true);
+
+      if (isMacOS) {
+        await _exitMacOSFullScreenIfNeeded(wc);
+      }
+
+      final activeTabs = List<TabInfo>.from(controller.state.value.tabs);
+      controller.suppressEmptyWindowClose = true;
+      try {
+        if (controller.onTeardownTabs != null) {
+          await controller.onTeardownTabs!(activeTabs).timeout(
+            const Duration(seconds: 4),
+            onTimeout: () {
+              debugPrint('[DesktopTab] Tab teardown timed out on window $wId');
+            },
+          );
+        } else {
+          await _defaultTeardownTabs(activeTabs).timeout(
+            const Duration(seconds: 4),
+            onTimeout: () {
+              debugPrint(
+                '[DesktopTab] Default tab teardown timed out on window $wId',
+              );
+            },
+          );
+        }
+      } catch (e) {
+        debugPrint('[DesktopTab] Tab teardown error on window $wId: $e');
+      }
+
+      if (controller.state.value.tabs.isNotEmpty) {
+        controller.clear();
+      }
+
+      try {
+        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
+          "id": wId,
+        });
+      } catch (e) {
+        debugPrint('[DesktopTab] Failed to notify main window on close: $e');
+      }
+
+      try {
+        await wc.setPreventClose(false);
+      } catch (e) {
+        debugPrint('[DesktopTab] Failed to setPreventClose(false): $e');
+      }
+      try {
+        await wc.close();
+      } catch (e) {
+        debugPrint('[DesktopTab] Failed to close window $wId: $e');
+      }
+    } catch (e) {
+      debugPrint('[DesktopTab] Error in _closeSubWindow: $e');
+      _isClosingWindow = false;
+    }
+  }
+
   @override
   void onWindowClose() async {
     mainWindowClose() async => await windowManager.hide();
-    notMainWindowClose(WindowController windowController) async {
-      if (controller.length != 0) {
-        debugPrint("close not empty multiwindow from taskbar");
-        if (isWindows || isLinux) {
-          try {
-            await windowController.show();
-            await windowController.focus();
-          } catch (_) {}
-          final res = await onWindowCloseButton?.call() ?? true;
-          if (!res) return;
-        }
-        controller.clear();
-      }
-      if (kWindowId != null) {
-        try {
-          await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-            "id": kWindowId!,
-          });
-        } catch (e) {
-          debugPrint('Failed to notify main window on close: $e');
-        }
-      }
-      if (controller.length == 0) {
-        try {
-          await windowController.setPreventClose(false);
-        } catch (_) {}
-        await windowController.close();
-      }
-    }
 
     macOSWindowClose(
       Future<bool> Function() checkFullscreen,
@@ -819,9 +970,8 @@ class _DesktopTabState extends State<DesktopTab>
       );
     }
 
-    await _saveFrame(flush: true);
-
     if (isMainWindow) {
+      await _saveFrame(flush: true);
       if (rustDeskWinManager.getActiveWindows().contains(kMainWindowId)) {
         await rustDeskWinManager.unregisterActiveWindow(kMainWindowId);
       }
@@ -835,23 +985,7 @@ class _DesktopTabState extends State<DesktopTab>
         await mainWindowClose();
       }
     } else if (kWindowId != null) {
-      final wc = WindowController.fromWindowId(kWindowId!);
-      if (isMacOS) {
-        if (await onWindowCloseButton?.call() ?? true) {
-          if (await wc.isFullScreen()) {
-            await wc.setFullscreen(false);
-            stateGlobal.setFullscreen(false, procWnd: false);
-            await macOSWindowClose(
-              () async => await wc.isFullScreen(),
-              () async => await notMainWindowClose(wc),
-            );
-          } else {
-            await notMainWindowClose(wc);
-          }
-        }
-      } else {
-        await notMainWindowClose(wc);
-      }
+      await _closeSubWindow(bringToFront: true);
     }
     super.onWindowClose();
   }
@@ -1031,6 +1165,7 @@ class _DesktopTabState extends State<DesktopTab>
           showMaximize: showMaximize,
           showClose: showClose,
           onClose: onWindowCloseButton,
+          onSubWindowClose: isMainWindow ? null : () => _closeSubWindow(),
           labelGetter: labelGetter,
         ).paddingOnly(left: 6),
       ],
@@ -1048,6 +1183,7 @@ class WindowActionPanel extends StatefulWidget {
   final bool showClose;
   final Widget? tail;
   final Future<bool> Function()? onClose;
+  final Future<void> Function()? onSubWindowClose;
 
   final RxList<String> invisibleTabKeys;
   final LabelGetter? labelGetter;
@@ -1063,6 +1199,7 @@ class WindowActionPanel extends StatefulWidget {
     this.showMaximize = true,
     this.showClose = true,
     this.onClose,
+    this.onSubWindowClose,
     this.labelGetter,
   }) : super(key: key);
 
@@ -1147,24 +1284,20 @@ class WindowActionPanelState extends State<WindowActionPanel> {
                   message: 'Close',
                   icon: CamelliaIcons.close,
                   onTap: () async {
+                    if (!widget.isMainWindow &&
+                        widget.onSubWindowClose != null) {
+                      await widget.onSubWindowClose!();
+                      return;
+                    }
                     final res = await widget.onClose?.call() ?? true;
                     if (res) {
                       Future.delayed(Duration.zero, () async {
                         if (widget.isMainWindow) {
                           await windowManager.close();
-                        } else if (kWindowId != null) {
-                          try {
-                            await rustDeskWinManager.call(
-                              WindowType.Main,
-                              kWindowEventHide,
-                              {"id": kWindowId!},
-                            );
-                          } catch (_) {}
-                          final wc = WindowController.fromWindowId(kWindowId!);
-                          try {
-                            await wc.setPreventClose(false);
-                          } catch (_) {}
-                          await wc.close();
+                        } else {
+                          await widget.tabController.closeWindow(
+                            skipConfirm: true,
+                          );
                         }
                       });
                     }
@@ -1464,23 +1597,35 @@ class _ListView extends StatelessWidget {
                     selectedBorderColor: selectedBorderColor,
                   ),
                 );
+                if (onTabDetach == null) {
+                  return child;
+                }
                 double dragOffsetY = 0.0;
+                bool detached = false;
                 return GestureDetector(
                   onPanStart: (e) {
                     dragOffsetY = 0.0;
+                    detached = false;
                   },
                   onPanUpdate: (details) {
+                    if (detached) return;
                     dragOffsetY += details.delta.dy;
-                    if (dragOffsetY > 65.0 && onTabDetach != null) {
+                    if (dragOffsetY > 65.0) {
+                      detached = true;
                       dragOffsetY = 0.0;
-                      onTabDetach?.call(index, tab);
+                      onTabDetach!(index, tab);
                     }
                   },
                   onPanEnd: (details) {
-                    if (details.velocity.pixelsPerSecond.dy > 120 &&
-                        onTabDetach != null) {
-                      onTabDetach?.call(index, tab);
+                    if (detached) return;
+                    if (details.velocity.pixelsPerSecond.dy > 120) {
+                      detached = true;
+                      onTabDetach!(index, tab);
                     }
+                  },
+                  onPanCancel: () {
+                    dragOffsetY = 0.0;
+                    detached = false;
                   },
                   child: child,
                 );

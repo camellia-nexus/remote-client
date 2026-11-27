@@ -28,15 +28,24 @@ if command -v flutter_rust_bridge_codegen >/dev/null 2>&1; then
   installed_version="$(flutter_rust_bridge_codegen --version | awk '{print $NF}')"
 fi
 
-cargo_home_dir="${CARGO_HOME:-$HOME/.cargo}"
-crate_cached="false"
-if compgen -G "${cargo_home_dir}/registry/cache/*/flutter_rust_bridge_codegen-${frb_codegen_version}.crate" >/dev/null; then
-  crate_cached="true"
+provenance_artifacts_present="false"
+if python3 -c "
+import os, sys
+from pathlib import Path
+
+target_version = '$frb_codegen_version'
+cargo_home = Path(os.environ.get('CARGO_HOME') or (Path.home() / '.cargo'))
+crate_matches = list(cargo_home.glob(f'registry/cache/**/flutter_rust_bridge_codegen-{target_version}.crate'))
+lock_matches = list(cargo_home.glob(f'registry/src/**/flutter_rust_bridge_codegen-{target_version}/Cargo.lock'))
+sys.exit(0 if (crate_matches and lock_matches) else 1)
+"; then
+  provenance_artifacts_present="true"
 fi
 
-# A binary restored from a partial Cargo cache cannot be provenance-verified
-# without its source crate, so reinstall whenever the crate archive is absent.
-if [[ "${installed_version}" != "${frb_codegen_version}" || "${crate_cached}" != "true" ]]; then
+# A binary restored from a warm or partial Cargo cache (e.g. without
+# registry/src/) cannot be provenance-verified without both its crate archive
+# and extracted Cargo.lock, so reinstall whenever either artifact is absent.
+if [[ "${installed_version}" != "${frb_codegen_version}" || "${provenance_artifacts_present}" != "true" ]]; then
   echo "Installing flutter_rust_bridge_codegen ${frb_codegen_version} with --locked..."
   cargo install flutter_rust_bridge_codegen --version "${frb_codegen_version}" --locked --force
 fi

@@ -42,6 +42,8 @@ const String _kSettingPageControllerTag = 'settingPageController';
 const String _kSettingPageTabKeyTag = 'settingPageTabKey';
 const String _kPortRegex =
     r'^$|^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$';
+final RegExp _kPortRegExp = RegExp(_kPortRegex);
+final RegExp _kAutoDisconnectTimeoutRegExp = RegExp(r'^$|^(0|[1-9]\d{0,3})$');
 
 class _TabInfo {
   final SettingsTabKey key;
@@ -91,20 +93,39 @@ class DesktopSettingPage extends StatefulWidget {
   @override
   State<DesktopSettingPage> createState() => _DesktopSettingPageState();
 
-  static void switch2page(SettingsTabKey page) {
+  static CamelliaDesktopShellState? _findShell(BuildContext? context) {
+    if (context == null) return null;
+    final ancestor = CamelliaDesktopShell.of(context);
+    if (ancestor != null) return ancestor;
+    CamelliaDesktopShellState? found;
+    void visit(Element element) {
+      if (found != null) return;
+      if (element is StatefulElement &&
+          element.state is CamelliaDesktopShellState) {
+        found = element.state as CamelliaDesktopShellState;
+        return;
+      }
+      element.visitChildren(visit);
+    }
+
+    if (context is Element) {
+      context.visitChildren(visit);
+    }
+    return found;
+  }
+
+  static void switch2page(SettingsTabKey page, {BuildContext? context}) {
     try {
       final int index = tabKeys.indexOf(page);
       if (index == -1) {
         return;
       }
-      final context = globalKey.currentContext;
-      if (context != null) {
-        final shell = CamelliaDesktopShell.of(context);
-        if (shell != null) {
-          shell.setDestination(DesktopNavDestination.settings);
-        }
-      }
+      final resolvedContext = context ?? globalKey.currentContext;
+      final shell = _findShell(resolvedContext);
       pendingInitialTabKey = page;
+      if (shell != null) {
+        shell.setDestination(DesktopNavDestination.settings);
+      }
       if (Get.isRegistered<PageController>(tag: _kSettingPageControllerTag)) {
         final PageController controller = Get.find<PageController>(
           tag: _kSettingPageControllerTag,
@@ -115,13 +136,25 @@ class DesktopSettingPage extends StatefulWidget {
         selected.value = page;
         if (controller.hasClients) {
           controller.jumpToPage(index);
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (Get.isRegistered<PageController>(
+              tag: _kSettingPageControllerTag,
+            )) {
+              final nextController = Get.find<PageController>(
+                tag: _kSettingPageControllerTag,
+              );
+              if (nextController.hasClients) {
+                nextController.jumpToPage(index);
+              }
+            }
+          });
         }
       } else {
-        if (context == null) return;
-        final shell = CamelliaDesktopShell.of(context);
+        if (resolvedContext == null) return;
         if (shell == null) {
           showSettingsOverlay<void>(
-            context: context,
+            context: resolvedContext,
             title: translate('Settings'),
             builder: (_) => DesktopSettingPage(initialTabkey: page),
           );
@@ -157,6 +190,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         WidgetsBindingObserver {
   late PageController controller;
   late Rx<SettingsTabKey> selectedTab;
+  final GlobalKey _pageViewKey = GlobalKey();
 
   @override
   bool get wantKeepAlive => true;
@@ -375,6 +409,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                       10,
                     ),
                     child: PageView(
+                      key: _pageViewKey,
                       controller: controller,
                       physics: const NeverScrollableScrollPhysics(),
                       children: _children(),
@@ -774,12 +809,6 @@ class _GeneralState extends State<_General> {
   }
 
   Widget theme() {
-    final current = switch (MyTheme.getThemePreference()) {
-      CamelliaThemePreference.light => 'light',
-      CamelliaThemePreference.dark => 'dark',
-      CamelliaThemePreference.midnight => 'midnight',
-      CamelliaThemePreference.system => 'system',
-    };
     Future<void> onChanged(String value) async {
       await MyTheme.changeThemePreference(
         MyTheme.themePreferenceFromString(value),
@@ -787,124 +816,149 @@ class _GeneralState extends State<_General> {
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
-    final currentStyle = MyTheme.getThemeStyle().name;
     Future<void> onStyleChanged(String value) async {
       await MyTheme.changeThemeStyle(CamelliaThemeStyle.fromString(value));
     }
 
-    return SettingsGroup(
-      title: translate('Theme'),
-      subtitle: translate('Choose interface brightness and surface aesthetic'),
-      tiles: [
-        CustomSettingsTile(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    translate('Appearance Mode'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 460;
-                    return GlassSegmentedControl<String>(
-                      compact: compact,
-                      expand: true,
-                      selected: current,
-                      items: [
-                        GlassSegmentItem(
-                          value: 'light',
-                          icon: Icons.light_mode_rounded,
-                          label: compact ? null : translate('Light'),
-                          tooltip: translate('Light'),
-                        ),
-                        GlassSegmentItem(
-                          value: 'dark',
-                          icon: Icons.dark_mode_rounded,
-                          label: compact ? null : translate('Dark'),
-                          tooltip: translate('Dark'),
-                        ),
-                        GlassSegmentItem(
-                          value: 'midnight',
-                          icon: Icons.nights_stay_rounded,
-                          label: compact ? null : translate('OLED Midnight'),
-                          tooltip: translate('OLED Midnight'),
-                        ),
-                        GlassSegmentItem(
-                          value: 'system',
-                          icon: Icons.brightness_auto_rounded,
-                          label: compact ? null : translate('Follow System'),
-                          tooltip: translate('Follow System'),
-                        ),
-                      ],
-                      onChanged: isOptFixed ? (_) {} : onChanged,
-                    );
-                  },
-                ),
-              ],
-            ),
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        MyTheme.themeNotifier,
+        MyTheme.themeStyleNotifier,
+      ]),
+      builder: (context, _) {
+        final current = switch (MyTheme.getThemePreference()) {
+          CamelliaThemePreference.light => 'light',
+          CamelliaThemePreference.dark => 'dark',
+          CamelliaThemePreference.midnight => 'midnight',
+          CamelliaThemePreference.system => 'system',
+        };
+        final currentStyle = MyTheme.getThemeStyle().name;
+
+        return SettingsGroup(
+          title: translate('Theme'),
+          subtitle: translate(
+            'Choose interface brightness and surface aesthetic',
           ),
-        ),
-        CustomSettingsTile(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    translate('Theme Style'),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
+          tiles: [
+            CustomSettingsTile(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        translate('Appearance Mode'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                  ),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 460;
+                        return GlassSegmentedControl<String>(
+                          compact: compact,
+                          expand: true,
+                          selected: current,
+                          items: [
+                            GlassSegmentItem(
+                              value: 'light',
+                              icon: Icons.light_mode_rounded,
+                              label: compact ? null : translate('Light'),
+                              tooltip: translate('Light'),
+                            ),
+                            GlassSegmentItem(
+                              value: 'dark',
+                              icon: Icons.dark_mode_rounded,
+                              label: compact ? null : translate('Dark'),
+                              tooltip: translate('Dark'),
+                            ),
+                            GlassSegmentItem(
+                              value: 'midnight',
+                              icon: Icons.nights_stay_rounded,
+                              label: compact
+                                  ? null
+                                  : translate('OLED Midnight'),
+                              tooltip: translate('OLED Midnight'),
+                            ),
+                            GlassSegmentItem(
+                              value: 'system',
+                              icon: Icons.brightness_auto_rounded,
+                              label: compact
+                                  ? null
+                                  : translate('Follow System'),
+                              tooltip: translate('Follow System'),
+                            ),
+                          ],
+                          onChanged: isOptFixed ? (_) {} : onChanged,
+                        );
+                      },
+                    ),
+                  ],
                 ),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 460;
-                    return GlassSegmentedControl<String>(
-                      compact: compact,
-                      expand: true,
-                      selected: currentStyle,
-                      items: [
-                        GlassSegmentItem(
-                          value: 'auroraFrost',
-                          icon: Icons.auto_awesome_rounded,
-                          label: compact ? null : translate('Aurora Frost'),
-                          tooltip: translate('Aurora Frost'),
-                        ),
-                        GlassSegmentItem(
-                          value: 'obsidianCyber',
-                          icon: Icons.space_dashboard_rounded,
-                          label: compact ? null : translate('Obsidian Cyber'),
-                          tooltip: translate('Obsidian Cyber'),
-                        ),
-                        GlassSegmentItem(
-                          value: 'nordicTitanium',
-                          icon: Icons.texture_rounded,
-                          label: compact ? null : translate('Nordic Titanium'),
-                          tooltip: translate('Nordic Titanium'),
-                        ),
-                      ],
-                      onChanged: onStyleChanged,
-                    );
-                  },
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
-      ],
+            CustomSettingsTile(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        translate('Theme Style'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 460;
+                        return GlassSegmentedControl<String>(
+                          compact: compact,
+                          expand: true,
+                          selected: currentStyle,
+                          items: [
+                            GlassSegmentItem(
+                              value: 'auroraFrost',
+                              icon: Icons.auto_awesome_rounded,
+                              label: compact ? null : translate('Aurora Frost'),
+                              tooltip: translate('Aurora Frost'),
+                            ),
+                            GlassSegmentItem(
+                              value: 'obsidianCyber',
+                              icon: Icons.space_dashboard_rounded,
+                              label: compact
+                                  ? null
+                                  : translate('Obsidian Cyber'),
+                              tooltip: translate('Obsidian Cyber'),
+                            ),
+                            GlassSegmentItem(
+                              value: 'nordicTitanium',
+                              icon: Icons.texture_rounded,
+                              label: compact
+                                  ? null
+                                  : translate('Nordic Titanium'),
+                              tooltip: translate('Nordic Titanium'),
+                            ),
+                          ],
+                          onChanged: onStyleChanged,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1627,7 +1681,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
       _ => _AccessMode.custom,
     };
     final (String initialKey, bool? fakeValue) = switch (mode) {
-      _AccessMode.custom => ('', null),
+      _AccessMode.custom => (defaultOptionAccessMode, null),
       _AccessMode.full => ('full', true),
       _AccessMode.view => ('view', false),
     };
@@ -1928,24 +1982,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
       kOptionEnableDirectServer,
       bind.mainGetOptionSync(key: kOptionEnableDirectServer),
     );
-    if (!directIpEnabled) _directIpApplyEnabled.value = false;
-    if (!_directIpApplyEnabled.value) {
-      _directIpController.text = bind.mainGetOptionSync(
-        key: kOptionDirectAccessPort,
-      );
-    }
     final bool isDirectPortFixed = isOptionFixed(kOptionDirectAccessPort);
 
     final bool autoDisconnectEnabled = option2bool(
       kOptionAllowAutoDisconnect,
       bind.mainGetOptionSync(key: kOptionAllowAutoDisconnect),
     );
-    if (!autoDisconnectEnabled) _autoDisconnectApplyEnabled.value = false;
-    if (!_autoDisconnectApplyEnabled.value) {
-      _autoDisconnectController.text = bind.mainGetOptionSync(
-        key: kOptionAutoDisconnectTimeout,
-      );
-    }
     final bool isAutoDisconnectFixed = isOptionFixed(
       kOptionAutoDisconnectTimeout,
     );
@@ -1985,7 +2027,15 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
           label: 'Enable direct IP access',
           optionKey: kOptionEnableDirectServer,
           enabled: enabled,
-          update: (_) {
+          update: (enabledNow) {
+            if (!enabledNow) {
+              _directIpApplyEnabled.value = false;
+            }
+            if (!_directIpApplyEnabled.value) {
+              _directIpController.text = bind.mainGetOptionSync(
+                key: kOptionDirectAccessPort,
+              );
+            }
             if (mounted) setState(() {});
           },
         ),
@@ -2011,7 +2061,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                       vertical: 0,
                     ),
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(_kPortRegex)),
+                      TextInputFormatter.withFunction(
+                        (oldValue, newValue) =>
+                            _kPortRegExp.hasMatch(newValue.text)
+                            ? newValue
+                            : oldValue,
+                      ),
                     ],
                     onChanged: (_) => _directIpApplyEnabled.value = true,
                   ).workaroundFreezeLinuxMint(),
@@ -2068,7 +2123,15 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
           label: 'auto_disconnect_option_tip',
           optionKey: kOptionAllowAutoDisconnect,
           enabled: enabled,
-          update: (_) {
+          update: (enabledNow) {
+            if (!enabledNow) {
+              _autoDisconnectApplyEnabled.value = false;
+            }
+            if (!_autoDisconnectApplyEnabled.value) {
+              _autoDisconnectController.text = bind.mainGetOptionSync(
+                key: kOptionAutoDisconnectTimeout,
+              );
+            }
             if (mounted) setState(() {});
           },
         ),
@@ -2094,8 +2157,13 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                       vertical: 0,
                     ),
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(
-                        RegExp(r'^$|^(0|[1-9]\d{0,3})$'),
+                      TextInputFormatter.withFunction(
+                        (oldValue, newValue) =>
+                            _kAutoDisconnectTimeoutRegExp.hasMatch(
+                              newValue.text,
+                            )
+                            ? newValue
+                            : oldValue,
                       ),
                     ],
                     onChanged: (_) => _autoDisconnectApplyEnabled.value = true,
@@ -2148,7 +2216,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 'Require a local security PIN before unlocking protected settings',
               ),
             ),
-            enabled: enabled && !isWhitelistFixed,
+            enabled: enabled,
             initialValue: hasPin,
             onToggle: (_) {
               changeUnlockPinDialog(() {
@@ -2220,7 +2288,9 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
           ),
           enabled: !locked,
           trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-          onPressed: (_) => showServerSettings(gFFI.dialogManager, setState),
+          onPressed: (_) => showServerSettings(gFFI.dialogManager, (fn) {
+            if (mounted) setState(fn);
+          }),
         ),
       );
     }
@@ -3140,7 +3210,9 @@ class _AboutState extends State<_About> {
           final diagnostics = <String>[
             'Camellia Remote v$appVer',
             '${translate("Build Date")}: $buildDate',
-            'OS: ${Platform.operatingSystem} (${Platform.operatingSystemVersion})',
+            isWeb
+                ? 'OS: Web'
+                : 'OS: ${Platform.operatingSystem} (${Platform.operatingSystemVersion})',
             if (!isWeb && fingerprint.isNotEmpty)
               '${translate("Fingerprint")}: $fingerprint',
           ].join('\n');

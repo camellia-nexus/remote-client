@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 
 import '../../common.dart' hide Dialog;
 import '../../common/formatter/id_formatter.dart';
@@ -220,25 +221,32 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
   Timer? _hoverExitTimer;
   bool _hoverExpanded = false;
   bool _isDragging = false;
+  bool _isSidebarHovered = false;
   bool _isDividerHovered = false;
 
   void _handleSidebarMouseEnter(PointerEnterEvent event) {
+    _isSidebarHovered = true;
     _hoverExitTimer?.cancel();
     _hoverEnterTimer?.cancel();
     if (_isDragging) return;
     _hoverEnterTimer = Timer(const Duration(milliseconds: 100), () {
-      if (mounted && !_hoverExpanded && !_isDragging) {
+      if (mounted && !_hoverExpanded && !_isDragging && _isSidebarHovered) {
         setState(() => _hoverExpanded = true);
       }
     });
   }
 
   void _handleSidebarMouseExit(PointerExitEvent event) {
+    _isSidebarHovered = false;
     _hoverEnterTimer?.cancel();
     _hoverExitTimer?.cancel();
     if (_isDragging || _isDividerHovered) return;
     _hoverExitTimer = Timer(const Duration(milliseconds: 200), () {
-      if (mounted && _hoverExpanded && !_isDragging && !_isDividerHovered) {
+      if (mounted &&
+          _hoverExpanded &&
+          !_isDragging &&
+          !_isSidebarHovered &&
+          !_isDividerHovered) {
         setState(() => _hoverExpanded = false);
       }
     });
@@ -252,10 +260,14 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
 
   void _onDividerDragEnd() {
     _isDragging = false;
-    if (!_isDividerHovered) {
+    if (!_isSidebarHovered && !_isDividerHovered) {
       _hoverExitTimer?.cancel();
       _hoverExitTimer = Timer(const Duration(milliseconds: 200), () {
-        if (mounted && _hoverExpanded && !_isDragging && !_isDividerHovered) {
+        if (mounted &&
+            _hoverExpanded &&
+            !_isDragging &&
+            !_isSidebarHovered &&
+            !_isDividerHovered) {
           setState(() => _hoverExpanded = false);
         }
       });
@@ -270,10 +282,14 @@ class CamelliaDesktopShellState extends State<CamelliaDesktopShell> {
 
   void _onDividerExit(PointerExitEvent event) {
     _isDividerHovered = false;
-    if (!_isDragging && _hoverExpanded) {
+    if (!_isDragging && _hoverExpanded && !_isSidebarHovered) {
       _hoverExitTimer?.cancel();
       _hoverExitTimer = Timer(const Duration(milliseconds: 220), () {
-        if (mounted && _hoverExpanded && !_isDragging && !_isDividerHovered) {
+        if (mounted &&
+            _hoverExpanded &&
+            !_isDragging &&
+            !_isSidebarHovered &&
+            !_isDividerHovered) {
           setState(() => _hoverExpanded = false);
         }
       });
@@ -1073,54 +1089,69 @@ class _CollapsedStatusIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _resolveStatusDotColor(glass);
-    final statusLabel = _resolveStatusLabel();
+    return Obx(() {
+      final stopped = Get.isRegistered<RxBool>(tag: 'stop-service')
+          ? Get.find<RxBool>(tag: 'stop-service').value
+          : false;
+      final status = stateGlobal.svcStatus.value;
+      final statusColor = _resolveStatusDotColor(
+        glass,
+        status: status,
+        stopped: stopped,
+      );
+      final statusLabel = _resolveStatusLabel(status: status, stopped: stopped);
 
-    return Tooltip(
-      key: const ValueKey('status-pill-rail'),
-      message: statusLabel,
-      child: Center(
-        child: Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: statusColor,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: statusColor.withValues(alpha: 0.45),
-                blurRadius: 6,
-                spreadRadius: 1,
-              ),
-            ],
+      return Tooltip(
+        key: const ValueKey('status-pill-rail'),
+        message: statusLabel,
+        child: Center(
+          child: Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: statusColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: statusColor.withValues(alpha: 0.45),
+                  blurRadius: 6,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
-  Color _resolveStatusDotColor(CamelliaGlassTokens glass) {
-    try {
-      return switch (stateGlobal.svcStatus.value) {
-        SvcStatus.ready => glass.statusOnline,
-        SvcStatus.connecting => glass.statusConnecting,
-        SvcStatus.notReady => glass.statusAlert,
-      };
-    } catch (_) {
-      return glass.statusAlert;
+  Color _resolveStatusDotColor(
+    CamelliaGlassTokens glass, {
+    required SvcStatus status,
+    required bool stopped,
+  }) {
+    if (stopped) {
+      return glass.statusHighLatency;
     }
+    return switch (status) {
+      SvcStatus.ready => glass.statusOnline,
+      SvcStatus.connecting => glass.statusConnecting,
+      SvcStatus.notReady => glass.statusAlert,
+    };
   }
 
-  String _resolveStatusLabel() {
-    try {
-      return switch (stateGlobal.svcStatus.value) {
-        SvcStatus.ready => translate('Ready'),
-        SvcStatus.connecting => translate('connecting_status'),
-        SvcStatus.notReady => translate('not_ready_status'),
-      };
-    } catch (_) {
-      return translate('not_ready_status');
+  String _resolveStatusLabel({
+    required SvcStatus status,
+    required bool stopped,
+  }) {
+    if (stopped) {
+      return translate('Service is not running');
     }
+    return switch (status) {
+      SvcStatus.ready => translate('Ready'),
+      SvcStatus.connecting => translate('connecting_status'),
+      SvcStatus.notReady => translate('not_ready_status'),
+    };
   }
 }
 

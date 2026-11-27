@@ -1075,9 +1075,8 @@ class RefreshWidgetState extends State<RefreshWidget> {
   bool hover = false;
   StreamSubscription<bool>? _spinningSubscription;
 
-  @override
-  void initState() {
-    super.initState();
+  void _subscribeSpinning() {
+    _spinningSubscription?.cancel();
     _spinningSubscription = widget.spinning?.listen((v) {
       if (v && mounted) {
         setState(() {
@@ -1085,6 +1084,20 @@ class RefreshWidgetState extends State<RefreshWidget> {
         });
       }
     });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeSpinning();
+  }
+
+  @override
+  void didUpdateWidget(covariant RefreshWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.spinning != widget.spinning) {
+      _subscribeSpinning();
+    }
   }
 
   @override

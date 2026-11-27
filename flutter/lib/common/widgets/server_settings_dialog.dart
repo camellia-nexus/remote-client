@@ -85,11 +85,13 @@ void showServerSettingsWithValue(
   try {
     await dialogManager.show((setState, close, context) {
       void onCancel() {
+        if (isClosed) return;
         isClosed = true;
         close();
       }
 
       void clearAll() {
+        if (isClosed) return;
         for (final c in controllers) {
           c.clear();
         }
@@ -125,6 +127,7 @@ void showServerSettingsWithValue(
       Future<void> onOk() async {
         if (await submit()) {
           if (isClosed) return;
+          isClosed = true;
           close();
           showToast(translate('Successful'));
           upSetState?.call(() {});
@@ -143,7 +146,11 @@ void showServerSettingsWithValue(
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
-            children: ServerConfigImportExportWidgets(controllers, errMsgs),
+            children: ServerConfigImportExportWidgets(
+              controllers,
+              errMsgs,
+              isClosed: () => isClosed,
+            ),
           ),
           onClose: onCancel,
         ),
@@ -247,9 +254,14 @@ void showServerSettingsWithValue(
     });
   } finally {
     isClosed = true;
-    for (final c in controllers) {
-      c.dispose();
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final c in controllers) {
+        c.dispose();
+      }
+      for (final m in errMsgs) {
+        m.close();
+      }
+    });
   }
 }
 

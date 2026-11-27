@@ -115,15 +115,13 @@ void setPrivacyModeDialog(
   RxString privacyModeState, {
   BuildContext? sheetContext,
 }) async {
-  Widget buildOptionTiles(
-    BuildContext context,
-    void Function(VoidCallback) refresh,
-  ) {
+  final rxStates = privacyModeList.map((e) => e.value.obs).toList();
+
+  Widget buildOptionTiles(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     final tokens =
         theme.extension<AppDesignTokens>() ?? MyTheme.tokens(context);
-    final rxStates = privacyModeList.map((e) => e.value.obs).toList();
 
     return Obx(() {
       final _ = privacyModeState.value;
@@ -163,7 +161,6 @@ void setPrivacyModeDialog(
                           HapticFeedback.selectionClick();
                           privacyModeList[i].onChanged?.call(next);
                           rxStates[i].value = next;
-                          refresh(() {});
                         },
                 ),
               ),
@@ -177,11 +174,9 @@ void setPrivacyModeDialog(
     await showGlassBottomSheet<void>(
       context: sheetContext,
       title: translate('Privacy mode'),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-          child: buildOptionTiles(ctx, setSheetState),
-        ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        child: buildOptionTiles(ctx),
       ),
     );
     return;
@@ -198,7 +193,7 @@ void setPrivacyModeDialog(
         ),
         content: ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 280, maxWidth: 420),
-          child: buildOptionTiles(context, setState),
+          child: buildOptionTiles(context),
         ),
         actions: [
           GlassButton(

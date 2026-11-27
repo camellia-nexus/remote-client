@@ -44,6 +44,13 @@ class PortForwardPage extends StatefulWidget {
 
   FFI get ffi => (_lastState.value! as _PortForwardPageState)._ffi;
 
+  Future<void> teardown() async {
+    final state = _lastState.value as _PortForwardPageState?;
+    if (state != null) {
+      await state.teardown();
+    }
+  }
+
   @override
   State<PortForwardPage> createState() {
     final state = _PortForwardPageState();
@@ -60,7 +67,7 @@ class _PortForwardPageState extends State<PortForwardPage>
   final _overlayKeyState = OverlayKeyState();
   RxList<_PortForward> pfs = RxList.empty(growable: true);
   late FFI _ffi;
-  Worker? _connReadyWorker;
+  bool _teardownCalled = false;
 
   @override
   void initState() {
@@ -83,36 +90,29 @@ class _PortForwardPageState extends State<PortForwardPage>
     if (!widget.isRDP) {
       refreshTunnelConfig();
     }
-    _connReadyWorker = ever<bool>(_ffi.ffiModel.pi.isSet, (bool ready) {
-      if (ready && mounted) {
-        _ffi.dialogManager.dismissAll();
-        if (!widget.isRDP) {
-          refreshTunnelConfig();
-        }
-      }
-    });
     debugPrint("Port forward page init success with id ${widget.id}");
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (_ffi.ffiModel.pi.isSet.isFalse) {
-        _ffi.dialogManager.showLoading(
-          translate('Connecting...'),
-          onCancel: closeConnection,
-        );
-      }
       widget.tabController.onSelected?.call(widget.id);
     });
   }
 
+  Future<void> teardown() async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    await _ffi.close();
+    _ffi.dialogManager.dismissAll();
+    await deleteIfMatching<FFI>('pf_${widget.id}', _ffi);
+  }
+
   @override
   void dispose() {
-    _connReadyWorker?.dispose();
     localPortController.dispose();
     remoteHostController.dispose();
     remotePortController.dispose();
-    _ffi.close();
-    _ffi.dialogManager.dismissAll();
-    deleteIfMatching<FFI>('pf_${widget.id}', _ffi);
+    if (!_teardownCalled) {
+      teardown();
+    }
     super.dispose();
   }
 
@@ -152,9 +152,9 @@ class _PortForwardPageState extends State<PortForwardPage>
   Widget buildPrompt(BuildContext context) {
     final glass = CamelliaGlassTokens.of(context);
     return Obx(() {
-      final connected = _ffi.ffiModel.pi.isSet.isTrue;
+      final isListening = pfs.isNotEmpty || widget.isRDP;
       return Offstage(
-        offstage: pfs.isEmpty && !widget.isRDP && !connected,
+        offstage: !isListening,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
           child: GlassSurface(
@@ -170,12 +170,8 @@ class _PortForwardPageState extends State<PortForwardPage>
             child: Row(
               children: [
                 TelemetryPill(
-                  label: connected
-                      ? translate('Listening ...')
-                      : translate('Connecting...'),
-                  statusColor: connected
-                      ? glass.statusOnline
-                      : glass.statusConnecting,
+                  label: translate('Listening ...'),
+                  statusColor: glass.statusOnline,
                   icon: Icons.lan_rounded,
                   compact: true,
                 ),

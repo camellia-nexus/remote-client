@@ -6,6 +6,7 @@ import 'package:camellia_remote_app/common/widgets/brand_shell.dart';
 import 'package:camellia_remote_app/models/state_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
+import 'package:camellia_remote_app/utils/multi_window_manager.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -50,220 +51,244 @@ class CamelliaTrayPanel extends StatelessWidget {
     final tokens = AppVisual.tokens(context);
     final glass = CamelliaGlassTokens.of(context);
 
-    return Obx(() {
-      final status = stateGlobal.svcStatus.value;
-      final stopped = gFFI.serverModel.isStart == false;
-      final statusTone = stopped
-          ? GlassBadgeTone.warning
-          : switch (status) {
-              SvcStatus.ready => GlassBadgeTone.online,
-              SvcStatus.connecting => GlassBadgeTone.connecting,
-              SvcStatus.notReady => GlassBadgeTone.danger,
-            };
+    return ListenableBuilder(
+      listenable: gFFI.serverModel,
+      builder: (context, _) {
+        return Obx(() {
+          final status = stateGlobal.svcStatus.value;
+          final svcStopped = Get.isRegistered<RxBool>(tag: 'stop-service')
+              ? Get.find<RxBool>(tag: 'stop-service').value
+              : false;
+          final statusTone = svcStopped
+              ? GlassBadgeTone.warning
+              : switch (status) {
+                  SvcStatus.ready => GlassBadgeTone.online,
+                  SvcStatus.connecting => GlassBadgeTone.connecting,
+                  SvcStatus.notReady => GlassBadgeTone.danger,
+                };
 
-      final statusLabel = stopped
-          ? translate('Service is not running')
-          : switch (status) {
-              SvcStatus.ready => translate('Ready'),
-              SvcStatus.connecting => translate('connecting_status'),
-              SvcStatus.notReady => translate('not_ready_status'),
-            };
+          final statusLabel = svcStopped
+              ? translate('Service is not running')
+              : switch (status) {
+                  SvcStatus.ready => translate('Ready'),
+                  SvcStatus.connecting => translate('connecting_status'),
+                  SvcStatus.notReady => translate('not_ready_status'),
+                };
 
-      final myId = gFFI.serverModel.serverId.text.trim();
-      final activeConnections = gFFI.serverModel.clients.length;
-      final rawSessionsText = translate('{count} active sessions');
-      final sessionsLabel = rawSessionsText
-          .replaceAll('{count}', '$activeConnections')
-          .replaceAll('{\$activeConnections}', '$activeConnections');
+          final myId = gFFI.serverModel.serverId.text.trim();
+          final activeConnections = gFFI.serverModel.clients.length;
+          final sessionsLabel = translate(
+            '{} active sessions',
+          ).replaceAll('{}', '$activeConnections');
 
-      return GlassSurface(
-        layer: CamelliaGlassLayer.modal,
-        elevated: true,
-        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        borderTopColor: glass.specularTop,
-        borderBottomColor: tokens.border,
-        strokeWidth: 0.85,
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Top Header: Studio Brand Mark + Status Badge
-            Row(
+          return GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            elevated: true,
+            borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+            borderTopColor: glass.specularTop,
+            borderBottomColor: tokens.border,
+            strokeWidth: 0.85,
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const CamelliaBrandMark(size: 26, withPlate: true),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    translate('Camellia Remote'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GlassBadge(
-                  label: statusLabel,
-                  tone: statusTone,
-                  showDot: true,
-                  pulse: false,
-                  compact: true,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // Local Device ID Hardware Key Inset
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: tokens.surfaceContainer.withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                border: Border.all(color: tokens.border, width: 0.85),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 9,
-                ),
-                child: Row(
+                // Top Header: Studio Brand Mark + Status Badge
+                Row(
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            translate('Your ID'),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            myId.isNotEmpty ? formatID(myId) : '---',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: CamelliaTypography.tabular(
-                              theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 0.6,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    GlassIconButton(
-                      icon: CamelliaIcons.copy,
-                      size: 32,
-                      iconSize: 15,
-                      tooltip: translate('Copy ID'),
-                      onPressed: myId.isNotEmpty && myId != '-'
-                          ? () {
-                              Clipboard.setData(ClipboardData(text: myId));
-                              showToast(translate('Copied'));
-                            }
-                          : null,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-
-            // Active Connections indicator
-            if (activeConnections > 0) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: glass.statusOnline.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(CamelliaRadius.control),
-                  border: Border.all(
-                    color: glass.statusOnline.withValues(alpha: 0.25),
-                    width: 0.85,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.sensors_rounded,
-                      size: 14,
-                      color: glass.statusOnline,
-                    ),
-                    const SizedBox(width: 7),
+                    const CamelliaBrandMark(size: 26, withPlate: true),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        sessionsLabel,
+                        translate('Camellia Remote'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: CamelliaTypography.tabular(
-                          theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
                         ),
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    GlassBadge(
+                      label: statusLabel,
+                      tone: statusTone,
+                      showDot: true,
+                      pulse: false,
+                      compact: true,
+                    ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 10),
-            ],
+                const SizedBox(height: 12),
 
-            Container(height: 0.85, color: tokens.border),
-            const SizedBox(height: 6),
+                // Local Device ID Hardware Key Inset
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: tokens.surfaceContainer.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                    border: Border.all(color: tokens.border, width: 0.85),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                translate('Your ID'),
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                myId.isNotEmpty ? formatID(myId) : '---',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: CamelliaTypography.tabular(
+                                  theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.6,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        GlassIconButton(
+                          icon: CamelliaIcons.copy,
+                          size: 32,
+                          iconSize: 15,
+                          tooltip: translate('Copy ID'),
+                          onPressed: myId.isNotEmpty && myId != '-'
+                              ? () {
+                                  Clipboard.setData(ClipboardData(text: myId));
+                                  showToast(translate('Copied'));
+                                }
+                              : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
 
-            // Quick Actions List
-            _TrayActionRow(
-              icon: Icons.open_in_new_rounded,
-              label: translate('Open Main Window'),
-              onTap: () async {
-                Navigator.of(context, rootNavigator: true).pop();
-                await windowManager.show();
-                await windowManager.focus();
-              },
+                // Active Connections indicator
+                if (activeConnections > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: glass.statusOnline.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(
+                        CamelliaRadius.control,
+                      ),
+                      border: Border.all(
+                        color: glass.statusOnline.withValues(alpha: 0.25),
+                        width: 0.85,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.sensors_rounded,
+                          size: 14,
+                          color: glass.statusOnline,
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            sessionsLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: CamelliaTypography.tabular(
+                              theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+
+                Container(height: 0.85, color: tokens.border),
+                const SizedBox(height: 6),
+
+                // Quick Actions List
+                _TrayActionRow(
+                  icon: Icons.open_in_new_rounded,
+                  label: translate('Open Main Window'),
+                  onTap: () async {
+                    Navigator.of(context, rootNavigator: true).pop();
+                    await windowOnTop(null);
+                  },
+                ),
+                _TrayActionRow(
+                  icon: svcStopped
+                      ? Icons.play_arrow_rounded
+                      : Icons.stop_rounded,
+                  iconColor: svcStopped
+                      ? glass.statusOnline
+                      : glass.statusAlert,
+                  label: svcStopped
+                      ? translate('Start service')
+                      : translate('Stop service'),
+                  onTap: () async {
+                    Navigator.of(context, rootNavigator: true).pop();
+                    await start_service(svcStopped);
+                  },
+                ),
+                if (activeConnections > 0)
+                  _TrayActionRow(
+                    icon: Icons.link_off_rounded,
+                    iconColor: glass.statusAlert,
+                    label: translate('Disconnect All Sessions'),
+                    onTap: () async {
+                      Navigator.of(context, rootNavigator: true).pop();
+                      await gFFI.serverModel.closeAll();
+                      await rustDeskWinManager.closeAllSubWindows();
+                    },
+                  ),
+                _TrayActionRow(
+                  icon: Icons.power_settings_new_rounded,
+                  iconColor: glass.statusAlert,
+                  label: translate('Quit'),
+                  onTap: () async {
+                    Navigator.of(context, rootNavigator: true).pop();
+                    if (isDesktop) {
+                      try {
+                        await saveWindowPosition(WindowType.Main, flush: true);
+                      } catch (e) {
+                        debugPrint('Error saving main window position: $e');
+                      }
+                    }
+                    await rustDeskWinManager.closeAllSubWindows();
+                    await windowManager.setPreventClose(false);
+                    await windowManager.close();
+                    if (isMacOS) {
+                      supervisedMacOSTerminate();
+                    }
+                  },
+                ),
+              ],
             ),
-            _TrayActionRow(
-              icon: stopped ? Icons.play_arrow_rounded : Icons.stop_rounded,
-              iconColor: stopped ? glass.statusOnline : glass.statusAlert,
-              label: stopped
-                  ? translate('Start service')
-                  : translate('Stop service'),
-              onTap: () {
-                Navigator.of(context, rootNavigator: true).pop();
-                gFFI.serverModel.toggleService();
-              },
-            ),
-            if (activeConnections > 0)
-              _TrayActionRow(
-                icon: Icons.link_off_rounded,
-                iconColor: glass.statusAlert,
-                label: translate('Disconnect All Sessions'),
-                onTap: () {
-                  Navigator.of(context, rootNavigator: true).pop();
-                  gFFI.close();
-                },
-              ),
-            _TrayActionRow(
-              icon: Icons.power_settings_new_rounded,
-              iconColor: glass.statusAlert,
-              label: translate('Quit'),
-              onTap: () async {
-                Navigator.of(context, rootNavigator: true).pop();
-                await windowManager.close();
-              },
-            ),
-          ],
-        ),
-      );
-    });
+          );
+        });
+      },
+    );
   }
 }
 

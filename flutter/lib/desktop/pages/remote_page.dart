@@ -124,7 +124,7 @@ class _RemotePageState extends State<RemotePage>
   late RxBool _keyboardEnabled;
   final _uniqueKey = UniqueKey();
 
-  var _blockableOverlayState = BlockableOverlayState();
+  final _blockableOverlayState = BlockableOverlayState();
 
   final FocusNode _rawKeyFocusNode = FocusNode(debugLabel: "rawkeyFocusNode");
 
@@ -144,6 +144,7 @@ class _RemotePageState extends State<RemotePage>
   final Rxn<bool> _relMouseBannerActive = Rxn<bool>();
   bool _postImageDismissScheduled = false;
   bool _postImageDismissed = false;
+  String? _connectingLoadingTag;
   bool _waylandKeyboardModeNormalized = false;
   bool _waylandKeyboardModeNormalizing = false;
 
@@ -201,9 +202,15 @@ class _RemotePageState extends State<RemotePage>
       displays: widget.displays,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      _ffi.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      if (_ffi.ffiModel.pi.isSet.isFalse ||
+          _ffi.ffiModel.waitForFirstImage.isTrue) {
+        _connectingLoadingTag = _ffi.dialogManager.showLoading(
+          translate('Connecting...'),
+          onCancel: closeConnection,
+        );
+      }
     });
     WakelockManager.enable(_uniqueKey);
     if (isLinux) {
@@ -880,15 +887,14 @@ class _RemotePageState extends State<RemotePage>
               if (!mounted) return;
               if (DateTime.now().difference(togglePrivacyModeTime) >
                   const Duration(milliseconds: 3000)) {
-                _ffi.dialogManager.dismissAll();
-                setState(() {
-                  _postImageDismissed = true;
-                  _blockableOverlayState = BlockableOverlayState()
-                    ..applyFfi(_ffi);
-                });
-              } else {
-                _postImageDismissed = true;
+                final loadingTag = _connectingLoadingTag;
+                if (loadingTag != null) {
+                  _connectingLoadingTag = null;
+                  _ffi.dialogManager.dismissByTag(loadingTag);
+                }
+                _ffi.dialogManager.dismissByTag('$sessionId-waiting-for-image');
               }
+              _postImageDismissed = true;
             });
           }
           // Block the whole `bodyWidget()` when dialog shows.

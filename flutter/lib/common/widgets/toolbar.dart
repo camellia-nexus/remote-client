@@ -1216,7 +1216,9 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
       sessionId: sessionId,
       arg: option,
     );
-    peerMuteState.value = value;
+    if (peerMuteState.value != value) {
+      scheduleMicrotask(() => peerMuteState.value = value);
+    }
     v.add(
       TToggleMenu(
         value: value,

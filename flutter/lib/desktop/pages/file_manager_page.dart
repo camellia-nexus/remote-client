@@ -27,10 +27,10 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 
 class _FilePaneDragData {
-  const _FilePaneDragData({required this.isLocal, required this.entries});
+  const _FilePaneDragData({required this.isLocal, required this.anchorEntry});
 
   final bool isLocal;
-  final List<Entry> entries;
+  final Entry anchorEntry;
 }
 
 /// status of location bar
@@ -77,6 +77,13 @@ class FileManagerPage extends StatefulWidget {
 
   FFI get ffi => (_lastState.value! as _FileManagerPageState)._ffi;
 
+  Future<void> teardown() async {
+    final state = _lastState.value as _FileManagerPageState?;
+    if (state != null) {
+      await state.teardown();
+    }
+  }
+
   @override
   State<StatefulWidget> createState() {
     final state = _FileManagerPageState();
@@ -97,6 +104,7 @@ class _FileManagerPageState extends State<FileManagerPage>
   final _uniqueKey = UniqueKey();
 
   late FFI _ffi;
+  bool _teardownCalled = false;
 
   FileModel get model => _ffi.fileModel;
   JobController get jobController => model.jobController;
@@ -136,16 +144,27 @@ class _FileManagerPageState extends State<FileManagerPage>
     WidgetsBinding.instance.addObserver(this);
   }
 
+  Future<void> teardown() async {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
+    final ffi = _ffi;
+    try {
+      await model.close();
+    } catch (e) {
+      debugPrint('FileManagerPage model.close error: $e');
+    }
+    await ffi.close();
+    ffi.dialogManager.dismissAll();
+    WakelockManager.disable(_uniqueKey);
+    await deleteIfMatching<FFI>('ft_${widget.id}', ffi);
+  }
+
   @override
   void dispose() {
     _transferScrollController.dispose();
-    final ffi = _ffi;
-    model.close().whenComplete(() {
-      ffi.close();
-      ffi.dialogManager.dismissAll();
-      WakelockManager.disable(_uniqueKey);
-      deleteIfMatching<FFI>('ft_${widget.id}', ffi);
-    });
+    if (!_teardownCalled) {
+      unawaited(teardown());
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1221,8 +1240,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                 tooltip: translate('Delete'),
                 onPressed: SelectedItems.valid(selectedItems.items)
                     ? () async {
-                        await controller.removeAction(selectedItems);
-                        selectedItems.clear();
+                        final confirmed = await controller.removeAction(
+                          selectedItems,
+                        );
+                        if (confirmed) {
+                          selectedItems.clear();
+                        }
                       }
                     : null,
               ),
@@ -1454,8 +1477,10 @@ class _FileManagerViewState extends State<FileManagerView> {
             destructive: true,
             onTap: () async {
               closeMenu();
-              await controller.removeAction(selectedItems);
-              selectedItems.clear();
+              final confirmed = await controller.removeAction(selectedItems);
+              if (confirmed) {
+                selectedItems.clear();
+              }
             },
           ),
         const FrostedMenuDivider(),
@@ -1552,15 +1577,34 @@ class _FileManagerViewState extends State<FileManagerView> {
         );
       },
       child: DragTarget<_FilePaneDragData>(
-        onWillAcceptWithDetails: (details) =>
-            details.data.isLocal != isLocal && details.data.entries.isNotEmpty,
+        onWillAcceptWithDetails: (details) {
+          final data = details.data;
+          if (data.isLocal == isLocal) return false;
+          final targetPath = controller.directory.value.path;
+          if (targetPath.isEmpty ||
+              (controller.options.value.isWindows && targetPath == '/')) {
+            return false;
+          }
+          final sourceController = data.isLocal
+              ? _ffi.fileModel.localController
+              : _ffi.fileModel.remoteController;
+          return _resolveDragEntries(
+            sourceController,
+            data.anchorEntry,
+          ).isNotEmpty;
+        },
         onAcceptWithDetails: (details) {
           final data = details.data;
           final sourceController = data.isLocal
               ? _ffi.fileModel.localController
               : _ffi.fileModel.remoteController;
+          final entriesToSend = _resolveDragEntries(
+            sourceController,
+            data.anchorEntry,
+          );
+          if (entriesToSend.isEmpty) return;
           final tempSelected = SelectedItems(isLocal: data.isLocal);
-          for (final e in data.entries) {
+          for (final e in entriesToSend) {
             tempSelected.add(e);
           }
           sourceController.sendFiles(tempSelected, controller.directoryData());
@@ -1770,58 +1814,64 @@ class _FileManagerViewState extends State<FileManagerView> {
                 );
 
                 if (entry.isDrive) return rowContent;
-                final dragItems = selectedItems.items.contains(entry)
-                    ? selectedItems.items.toList(growable: false)
-                    : <Entry>[entry];
-                return Draggable<_FilePaneDragData>(
+                return LongPressDraggable<_FilePaneDragData>(
+                  delay: const Duration(milliseconds: 220),
                   data: _FilePaneDragData(
                     isLocal: isLocal,
-                    entries: dragItems,
+                    anchorEntry: entry,
                   ),
-                  feedback: Material(
-                    type: MaterialType.transparency,
-                    child: GlassSurface(
-                      layer: CamelliaGlassLayer.modal,
-                      elevated: true,
-                      strokeWidth: 0.85,
-                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CamelliaVectorIcon(
-                            CamelliaGlyph.folder,
-                            size: 16,
-                            color: accent,
-                          ),
-                          const SizedBox(width: 8),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 180),
-                            child: Text(
-                              entry.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
+                  feedback: Obx(() {
+                    final dragCount = _resolveDragEntries(
+                      controller,
+                      entry,
+                    ).length;
+                    return Material(
+                      type: MaterialType.transparency,
+                      child: GlassSurface(
+                        layer: CamelliaGlassLayer.modal,
+                        elevated: true,
+                        strokeWidth: 0.85,
+                        borderRadius: BorderRadius.circular(
+                          CamelliaRadius.pill,
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CamelliaVectorIcon(
+                              CamelliaGlyph.folder,
+                              size: 16,
+                              color: accent,
+                            ),
+                            const SizedBox(width: 8),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 180),
+                              child: Text(
+                                entry.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                          if (dragItems.length > 1) ...[
-                            const SizedBox(width: 8),
-                            GlassBadge(
-                              label: '${dragItems.length}',
-                              tone: GlassBadgeTone.brand,
-                              tabularNums: true,
-                              compact: true,
-                            ),
+                            if (dragCount > 1) ...[
+                              const SizedBox(width: 8),
+                              GlassBadge(
+                                label: '$dragCount',
+                                tone: GlassBadgeTone.brand,
+                                tabularNums: true,
+                                compact: true,
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  }),
                   child: rowContent,
                 );
               }
@@ -1877,6 +1927,17 @@ class _FileManagerViewState extends State<FileManagerView> {
         },
       ),
     );
+  }
+
+  List<Entry> _resolveDragEntries(
+    FileController sourceController,
+    Entry anchorEntry,
+  ) {
+    final selected = sourceController.selectedItems.items;
+    if (selected.contains(anchorEntry)) {
+      return selected.where((e) => !e.isDrive).toList(growable: false);
+    }
+    return anchorEntry.isDrive ? const [] : <Entry>[anchorEntry];
   }
 
   onSearchText(String searchText, bool isLocal) {

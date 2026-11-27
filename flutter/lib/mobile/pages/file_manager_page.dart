@@ -281,9 +281,21 @@ class _FileManagerPageState extends State<FileManagerPage> {
           variant: GlassButtonVariant.ghost,
           minHeight: 32,
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          onPressed: () {
+          onPressed: () async {
+            final snapshot = List<JobProgress>.from(
+              model.jobController.jobTable,
+            );
+            for (final job in snapshot) {
+              if (job.state == JobState.inProgress ||
+                  job.state == JobState.paused ||
+                  job.state == JobState.none) {
+                await model.jobController.cancelJob(job.id);
+              }
+            }
             model.jobController.jobTable.clear();
-            Navigator.of(context).maybePop();
+            if (mounted) {
+              Navigator.of(context).maybePop();
+            }
           },
           child: Text(translate('Clear')),
         ),
@@ -471,9 +483,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
           clientClose(gFFI.sessionId, gFFI);
         }
       },
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
+      child: AppAmbientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
           backgroundColor: Colors.transparent,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
@@ -560,26 +573,22 @@ class _FileManagerPageState extends State<FileManagerPage> {
             ),
           ],
         ),
-        body: CamelliaBackdrop(
-          child: Column(
+          body: Column(
             children: [
               Expanded(
-                child: showLocal
-                    ? FileManagerView(
-                        controller: model.localController,
-                        selectMode: selectMode,
-                        onCreateFolder: _showCreateFolderDialog,
-                      )
-                    : FileManagerView(
-                        controller: model.remoteController,
-                        selectMode: selectMode,
-                        onCreateFolder: _showCreateFolderDialog,
-                      ),
+                child: FileManagerView(
+                  key: ValueKey<bool>(showLocal),
+                  controller: showLocal
+                      ? model.localController
+                      : model.remoteController,
+                  selectMode: selectMode,
+                  onCreateFolder: _showCreateFolderDialog,
+                ),
               ),
             ],
           ),
+          bottomSheet: bottomSheet(),
         ),
-        bottomSheet: bottomSheet(),
       ),
     );
   }

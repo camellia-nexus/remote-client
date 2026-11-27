@@ -16,6 +16,7 @@ class QRViewController {
   Future<void> pauseCamera() async {}
   Future<void> resumeCamera() async {}
   Future<void> toggleFlash() async {}
+  Future<bool?> getFlashStatus() async => false;
   Future<void> flipCamera() async {}
 
   void dispose() {

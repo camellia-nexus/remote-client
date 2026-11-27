@@ -310,33 +310,40 @@ class ChatModel with ChangeNotifier {
   toggleCMSidePage() async {
     if (_togglingCMSidePage) return false;
     _togglingCMSidePage = true;
-    if (_isShowCMSidePage) {
-      _isShowCMSidePage = !_isShowCMSidePage;
-      notifyListeners();
-      await windowManager.show();
-      await windowManager.setSizeAlignment(
-        kConnectionManagerWindowSizeClosedChat,
-        Alignment.topRight,
-      );
-    } else {
-      final currentSelectedTab =
-          gFFI.serverModel.tabController.state.value.selectedTabInfo;
-      final client = parent.target?.serverModel.clients.firstWhereOrNull(
-        (client) => client.id.toString() == currentSelectedTab.key,
-      );
-      if (client != null) {
-        client.unreadChatMessageCount.value = 0;
+    try {
+      if (_isShowCMSidePage) {
+        _isShowCMSidePage = !_isShowCMSidePage;
+        notifyListeners();
+        await windowManager.show();
+        await windowManager.setSizeAlignment(
+          kConnectionManagerWindowSizeClosedChat,
+          Alignment.topRight,
+        );
+      } else {
+        final tabState = gFFI.serverModel.tabController.state.value;
+        if (tabState.tabs.isNotEmpty &&
+            tabState.selected >= 0 &&
+            tabState.selected < tabState.tabs.length) {
+          final currentSelectedTab = tabState.selectedTabInfo;
+          final client = parent.target?.serverModel.clients.firstWhereOrNull(
+            (client) => client.id.toString() == currentSelectedTab.key,
+          );
+          if (client != null) {
+            client.unreadChatMessageCount.value = 0;
+          }
+        }
+        requestChatInputFocus();
+        await windowManager.show();
+        await windowManager.setSizeAlignment(
+          kConnectionManagerWindowSizeOpenChat,
+          Alignment.topRight,
+        );
+        _isShowCMSidePage = !_isShowCMSidePage;
+        notifyListeners();
       }
-      requestChatInputFocus();
-      await windowManager.show();
-      await windowManager.setSizeAlignment(
-        kConnectionManagerWindowSizeOpenChat,
-        Alignment.topRight,
-      );
-      _isShowCMSidePage = !_isShowCMSidePage;
-      notifyListeners();
+    } finally {
+      _togglingCMSidePage = false;
     }
-    _togglingCMSidePage = false;
   }
 
   changeCurrentKey(MessageKey key) {
@@ -597,14 +604,22 @@ class ChatModel with ChangeNotifier {
   }
 
   void onVoiceCallClosed(String reason) {
+    final prev = _voiceCallStatus.value;
     _voiceCallStatus.value = VoiceCallStatus.notStarted;
-    final trimmed = reason.trim();
-    if (trimmed.isNotEmpty) {
-      showToast(
-        translate(trimmed),
-        icon: CamelliaIcons.endCall,
-        tone: AppTone.info,
-      );
+    if (prev != VoiceCallStatus.notStarted) {
+      final trimmed = reason.trim();
+      final message = trimmed.isNotEmpty
+          ? translate(trimmed)
+          : (prev == VoiceCallStatus.waitingForResponse
+                ? translate('Voice call declined')
+                : '');
+      if (message.isNotEmpty) {
+        showToast(
+          message,
+          icon: CamelliaIcons.endCall,
+          tone: AppTone.info,
+        );
+      }
     }
     if (isAndroid) {
       // We can always invoke "on_voice_call_closed"

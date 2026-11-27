@@ -253,15 +253,18 @@ Widget customImageQualitySetting() {
 
 List<Widget> ServerConfigImportExportWidgets(
   List<TextEditingController> controllers,
-  List<RxString> errMsgs,
-) {
+  List<RxString> errMsgs, {
+  bool Function()? isClosed,
+}) {
   void import() {
     Clipboard.getData(Clipboard.kTextPlain).then((value) {
+      if (isClosed?.call() == true) return;
       importConfig(controllers, errMsgs, value?.text);
     });
   }
 
   void export() {
+    if (isClosed?.call() == true) return;
     final text = ServerConfig(
       idServer: controllers[0].text.trim(),
       relayServer: controllers[1].text.trim(),
@@ -342,6 +345,7 @@ class TrackpadSpeedWidget extends StatefulWidget {
 }
 
 class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
+  static final RegExp _kTrackpadSpeedRegex = RegExp(r'^$|^[0-9]{1,4}$');
   final TextEditingController _controller = TextEditingController();
   late final Debouncer<int> debouncerSpeed;
 
@@ -405,7 +409,12 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
             minHeight: 38,
             keyboardType: TextInputType.number,
             inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'^$|^[0-9]{1,4}$')),
+              TextInputFormatter.withFunction(
+                (oldValue, newValue) =>
+                    _kTrackpadSpeedRegex.hasMatch(newValue.text)
+                    ? newValue
+                    : oldValue,
+              ),
             ],
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 10,

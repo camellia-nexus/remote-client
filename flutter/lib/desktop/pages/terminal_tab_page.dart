@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui' as ui;
 
@@ -49,6 +50,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       ).setTitle(getWindowNameWithId(titleId));
     };
     tabController.onRemoved = (_, id) => onRemoveId(id);
+    tabController.onTeardownTabs = _teardownTabs;
     tabController.onCloseWindow = _closeWindowFromConnection;
     final terminalId = params['terminalId'] ?? _nextTerminalId++;
     final isTerminalRunAsAdmin = params['isTerminalRunAsAdmin'] ?? false;
@@ -161,6 +163,10 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       } catch (e) {
         debugPrint('[TerminalTabPage] Session cleanup failed for $tabKey: $e');
       }
+      final page = tabController.widget(tabKey);
+      if (page is TerminalPage) {
+        page.teardown();
+      }
       tabController.closeBy(tabKey);
     } catch (e) {
       debugPrint('[TerminalTabPage] Error closing tab $tabKey: $e');
@@ -169,35 +175,33 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     }
   }
 
-  Future<void> _closeAllTabs() async {
+  Future<void> _teardownTabs(List<TabInfo> tabs) async {
     _windowClosing = true;
     final tabPages = <String, bool>{};
-    for (final tab in tabController.state.value.tabs) {
+    for (final tab in tabs) {
       if (tab.page is TerminalPage) {
         tabPages[tab.key] = (tab.page as TerminalPage).isTerminalRunAsAdmin;
       }
     }
-    final tabKeys = tabController.state.value.tabs.map((t) => t.key).toList();
-    tabController.clear();
-    final futures = tabKeys
-        .where((tabKey) => !_closingTabs.contains(tabKey))
-        .map((tabKey) async {
+    final futures = tabs
+        .where((tab) => !_closingTabs.contains(tab.key))
+        .map((tab) async {
           try {
             await _closeTerminalSessionIfNeeded(
-              tabKey,
+              tab.key,
               persistAll: true,
-              knownAdminMode: tabPages[tabKey],
+              knownAdminMode: tabPages[tab.key],
             );
           } catch (e) {
             debugPrint(
-              '[TerminalTabPage] Session cleanup failed for $tabKey: $e',
+              '[TerminalTabPage] Session cleanup failed for ${tab.key}: $e',
             );
           }
         })
         .toList();
     if (futures.isNotEmpty) {
       await Future.wait(futures).timeout(
-        const Duration(seconds: 4),
+        const Duration(seconds: 3),
         onTimeout: () {
           debugPrint(
             '[TerminalTabPage] Session cleanup timed out for batch close',
@@ -205,6 +209,12 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
           return [];
         },
       );
+    }
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is TerminalPage) {
+        page.teardown();
+      }
     }
   }
 
@@ -364,7 +374,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       } else if (call.method == kWindowEventRestoreTerminalSessions) {
         _restoreSessions(call.arguments);
       } else if (call.method == "onDestroy") {
-        await _closeAllTabs();
+        await tabController.closeWindow(skipConfirm: true);
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
       } else if (call.method == kWindowEventActiveSession) {
@@ -601,35 +611,15 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
           );
   }
 
-  void onRemoveId(String id) async {
-    if (tabController.state.value.tabs.isEmpty) {
-      final wId = windowId();
-      try {
-        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-          "id": wId,
-        });
-      } catch (_) {}
-      final wc = WindowController.fromWindowId(wId);
-      try {
-        await wc.setPreventClose(false);
-      } catch (_) {}
-      await wc.close();
+  void onRemoveId(String id) {
+    if (!tabController.suppressEmptyWindowClose &&
+        tabController.state.value.tabs.isEmpty) {
+      unawaited(tabController.closeWindow(skipConfirm: true));
     }
   }
 
   Future<void> _closeWindowFromConnection() async {
-    await _closeAllTabs();
-    final wId = windowId();
-    try {
-      await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-        "id": wId,
-      });
-    } catch (_) {}
-    final wc = WindowController.fromWindowId(wId);
-    try {
-      await wc.setPreventClose(false);
-    } catch (_) {}
-    await wc.close();
+    await tabController.closeWindow(skipConfirm: true);
   }
 
   int windowId() {
@@ -655,26 +645,18 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       )) {
         return false;
       }
-      await _closeAllTabs();
       return true;
     }
     if (connLength <= 0) {
-      await _closeAllTabs();
       return true;
     }
-    final bool res;
     if (!option2bool(
       kOptionEnableConfirmClosingTabs,
       bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
     )) {
-      res = true;
-    } else {
-      res = await closeConfirmDialog(isSessionWindow: true);
+      return true;
     }
-    if (res) {
-      await _closeAllTabs();
-    }
-    return res;
+    return await closeConfirmDialog(isSessionWindow: true);
   }
 }
 

@@ -38,191 +38,208 @@ void changeSocks5Proxy({OverlayDialogManager? dialogManager}) async {
 
   var isInProgress = false;
   var isClosed = false;
-  dm.show((setState, close, context) {
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
+  var disposed = false;
+
+  void scheduleDispose() {
+    if (disposed) return;
+    disposed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       proxyController.clear();
       userController.clear();
       pwdController.clear();
       proxyController.dispose();
       userController.dispose();
       pwdController.dispose();
-      close();
-    }
+      obscure.close();
+    });
+  }
 
-    void clearAll() {
-      proxyController.clear();
-      userController.clear();
-      pwdController.clear();
-      setState(() {
-        proxyMsg = '';
-        password = '';
-      });
-    }
-
-    Future<void> submit() async {
-      if (isInProgress || isClosed || isOptFixed) return;
-      setState(() {
-        proxyMsg = '';
-        isInProgress = true;
-      });
-      void cancelLoading() {
+  try {
+    await dm.show((setState, close, context) {
+      void safeClose() {
         if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
+      void clearAll() {
+        if (isClosed) return;
+        proxyController.clear();
+        userController.clear();
+        pwdController.clear();
         setState(() {
-          isInProgress = false;
+          proxyMsg = '';
+          password = '';
         });
       }
 
-      proxy = proxyController.text.trim();
-      username = userController.text.trim();
-      password = pwdController.text.trim();
-
-      if (proxy.isNotEmpty) {
-        String domainPort = proxy;
-        if (domainPort.contains('://')) {
-          domainPort = domainPort.split('://')[1];
+      Future<void> submit() async {
+        if (isInProgress || isClosed || isOptFixed) return;
+        setState(() {
+          proxyMsg = '';
+          isInProgress = true;
+        });
+        void cancelLoading() {
+          if (isClosed) return;
+          setState(() {
+            isInProgress = false;
+          });
         }
-        proxyMsg = translate(
-          await bind.mainTestIfValidServer(
-            server: domainPort,
-            testWithProxy: false,
-          ),
+
+        proxy = proxyController.text.trim();
+        username = userController.text.trim();
+        password = pwdController.text.trim();
+
+        if (proxy.isNotEmpty) {
+          String domainPort = proxy;
+          if (domainPort.contains('://')) {
+            domainPort = domainPort.split('://')[1];
+          }
+          proxyMsg = translate(
+            await bind.mainTestIfValidServer(
+              server: domainPort,
+              testWithProxy: false,
+            ),
+          );
+          if (isClosed) return;
+          if (proxyMsg.isNotEmpty) {
+            cancelLoading();
+            return;
+          }
+        }
+        if (isClosed) return;
+        await bind.mainSetSocks(
+          proxy: proxy,
+          username: username,
+          password: password,
         );
         if (isClosed) return;
-        if (proxyMsg.isNotEmpty) {
-          cancelLoading();
-          return;
-        }
+        safeClose();
       }
-      if (isClosed) return;
-      await bind.mainSetSocks(
-        proxy: proxy,
-        username: username,
-        password: password,
+
+      final responsiveMinWidth = math.max(
+        0.0,
+        math.min(MediaQuery.sizeOf(context).width - 48, 460.0),
       );
-      safeClose();
-    }
+      final theme = Theme.of(context);
 
-    final responsiveMinWidth = math.max(
-      0.0,
-      math.min(MediaQuery.sizeOf(context).width - 48, 460.0),
-    );
-    final theme = Theme.of(context);
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.tunnel,
-        title: translate('Socks5/Http(s) Proxy'),
-        subtitle: translate('default_proxy_tip'),
-        onClose: safeClose,
-      ),
-      content: ConstrainedBox(
-        constraints: BoxConstraints(
-          minWidth: responsiveMinWidth,
-          maxWidth: 480.0,
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.tunnel,
+          title: translate('Socks5/Http(s) Proxy'),
+          subtitle: translate('default_proxy_tip'),
+          onClose: safeClose,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (isInProgress) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                child: const LinearProgressIndicator(minHeight: 2.5),
-              ),
-              const SizedBox(height: 12),
-            ],
-            GlassInput(
-              labelText: translate('Server'),
-              hintText: 'socks5://127.0.0.1:1080',
-              prefixIcon: Icons.dns_outlined,
-              controller: proxyController,
-              autofocus: true,
-              enabled: !isOptFixed,
-              tabularNums: true,
-              errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
-              onChanged: (_) {
-                if (proxyMsg.isNotEmpty) {
-                  setState(() => proxyMsg = '');
-                }
-              },
-              onSubmitted: (_) => submit(),
-            ).workaroundFreezeLinuxMint(),
-            const SizedBox(height: 12),
-            GlassInput(
-              labelText: translate('Username'),
-              hintText: translate('Optional'),
-              prefixIcon: Icons.person_outline_rounded,
-              controller: userController,
-              enabled: !isOptFixed,
-              onSubmitted: (_) => submit(),
-            ).workaroundFreezeLinuxMint(),
-            const SizedBox(height: 12),
-            Obx(
-              () => GlassInput(
-                labelText: translate('Password'),
-                hintText: password == kStoredPasswordSentinel
-                    ? translate('Unchanged')
-                    : translate('Optional'),
-                prefixIcon: CamelliaIcons.lock,
-                obscureText: obscure.value,
-                showClearButton: false,
-                controller: pwdController,
+        content: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: responsiveMinWidth,
+            maxWidth: 480.0,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (isInProgress) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                  child: const LinearProgressIndicator(minHeight: 2.5),
+                ),
+                const SizedBox(height: 12),
+              ],
+              GlassInput(
+                labelText: translate('Server'),
+                hintText: 'socks5://127.0.0.1:1080',
+                prefixIcon: Icons.dns_outlined,
+                controller: proxyController,
+                autofocus: true,
                 enabled: !isOptFixed,
-                inputFormatters: [
-                  LengthLimitingTextInputFormatter(maxEncryptLen),
-                ],
+                tabularNums: true,
+                errorText: proxyMsg.isNotEmpty ? proxyMsg : null,
+                onChanged: (_) {
+                  if (!isClosed && proxyMsg.isNotEmpty) {
+                    setState(() => proxyMsg = '');
+                  }
+                },
                 onSubmitted: (_) => submit(),
-                trailing: Tooltip(
-                  message: translate(
-                    obscure.value ? 'Show password' : 'Hide password',
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                    onTap: () => obscure.value = !obscure.value,
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Icon(
-                        obscure.value
-                            ? CamelliaIcons.eyeOff
-                            : CamelliaIcons.eye,
-                        size: 17,
-                        color: theme.colorScheme.onSurfaceVariant,
+              ).workaroundFreezeLinuxMint(),
+              const SizedBox(height: 12),
+              GlassInput(
+                labelText: translate('Username'),
+                hintText: translate('Optional'),
+                prefixIcon: Icons.person_outline_rounded,
+                controller: userController,
+                enabled: !isOptFixed,
+                onSubmitted: (_) => submit(),
+              ).workaroundFreezeLinuxMint(),
+              const SizedBox(height: 12),
+              Obx(
+                () => GlassInput(
+                  labelText: translate('Password'),
+                  hintText: password == kStoredPasswordSentinel
+                      ? translate('Unchanged')
+                      : translate('Optional'),
+                  prefixIcon: CamelliaIcons.lock,
+                  obscureText: obscure.value,
+                  showClearButton: false,
+                  controller: pwdController,
+                  enabled: !isOptFixed,
+                  inputFormatters: [
+                    LengthLimitingTextInputFormatter(maxEncryptLen),
+                  ],
+                  onSubmitted: (_) => submit(),
+                  trailing: Tooltip(
+                    message: translate(
+                      obscure.value ? 'Show password' : 'Hide password',
+                    ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                      onTap: () => obscure.value = !obscure.value,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          obscure.value
+                              ? CamelliaIcons.eyeOff
+                              : CamelliaIcons.eye,
+                          size: 17,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ).workaroundFreezeLinuxMint(),
+                ).workaroundFreezeLinuxMint(),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          if (!isOptFixed)
+            GlassButton(
+              variant: GlassButtonVariant.ghost,
+              minHeight: 38,
+              onPressed: isInProgress ? null : clearAll,
+              child: Text(translate('Clear')),
             ),
-          ],
-        ),
-      ),
-      actions: [
-        if (!isOptFixed)
           GlassButton(
-            variant: GlassButtonVariant.ghost,
+            variant: GlassButtonVariant.secondary,
             minHeight: 38,
-            onPressed: isInProgress ? null : clearAll,
-            child: Text(translate('Clear')),
+            onPressed: safeClose,
+            child: Text(translate('Cancel')),
           ),
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: safeClose,
-          child: Text(translate('Cancel')),
-        ),
-        if (!isOptFixed)
-          GlassButton(
-            variant: GlassButtonVariant.primary,
-            minHeight: 38,
-            loading: isInProgress,
-            onPressed: isInProgress ? null : submit,
-            child: Text(translate('OK')),
-          ),
-      ],
-      onSubmit: isOptFixed ? null : submit,
-      onCancel: safeClose,
-    );
-  });
+          if (!isOptFixed)
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              minHeight: 38,
+              loading: isInProgress,
+              onPressed: isInProgress ? null : submit,
+              child: Text(translate('OK')),
+            ),
+        ],
+        onSubmit: isOptFixed ? null : submit,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    scheduleDispose();
+  }
 }

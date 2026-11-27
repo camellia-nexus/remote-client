@@ -712,7 +712,7 @@ Future<bool> handleLoginResponseStatic({
             isEmailVerification,
           );
           if (res == true) {
-            if (!isWeb && closeCallback != null) closeCallback(false);
+            if (!isWeb && closeCallback != null) closeCallback(true);
             return true;
           }
         }
@@ -729,13 +729,14 @@ Future<bool> handleLoginResponseStatic({
 
 // call this directly
 Future<bool?> loginDialog() async {
+  bool dialogClosed = false;
   final username = TextEditingController(
     text: UserModel.getLocalUserInfo()?['name'] ?? '',
   );
   final password = TextEditingController();
   final userFocusNode = FocusNode()..requestFocus();
-  Timer(const Duration(milliseconds: 100), () {
-    if (userFocusNode.canRequestFocus) {
+  final focusTimer = Timer(const Duration(milliseconds: 100), () {
+    if (!dialogClosed && userFocusNode.canRequestFocus) {
       userFocusNode.requestFocus();
     }
   });
@@ -748,6 +749,7 @@ Future<bool?> loginDialog() async {
 
   void Function(void Function())? dialogSetState;
   void onUsernameChanged() {
+    if (dialogClosed) return;
     if (usernameMsg != null || authBannerMsg != null) {
       dialogSetState?.call(() {
         usernameMsg = null;
@@ -757,6 +759,7 @@ Future<bool?> loginDialog() async {
   }
 
   void onPasswordChanged() {
+    if (dialogClosed) return;
     if (passwordMsg != null || authBannerMsg != null) {
       dialogSetState?.call(() {
         passwordMsg = null;
@@ -770,10 +773,11 @@ Future<bool?> loginDialog() async {
 
   final loginOptions = [].obs;
   Future.delayed(Duration.zero, () async {
-    loginOptions.value = await UserModel.queryOidcLoginOptions();
+    final opts = await UserModel.queryOidcLoginOptions();
+    if (!dialogClosed) {
+      loginOptions.value = opts;
+    }
   });
-
-  bool dialogClosed = false;
 
   try {
     final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
@@ -782,6 +786,7 @@ Future<bool?> loginDialog() async {
       void safeClose([dynamic result]) {
         if (!dialogClosed) {
           dialogClosed = true;
+          focusTimer.cancel();
           AuthGenerationTracker.invalidate();
           close(result is bool ? result : null);
         }
@@ -804,20 +809,24 @@ Future<bool?> loginDialog() async {
           closeCallback: closeCallback,
           requestGen: requestGen,
           onPasswordMsg: (msg) {
+            if (dialogClosed) return;
             authBannerMsg = msg;
             showToast(msg);
             if (context.mounted) {
               setState(() {});
             }
           },
-          isMounted: () => context.mounted,
+          isMounted: () => !dialogClosed && context.mounted,
           onProgressFinished: () {
-            setState(() => isInProgress = false);
+            if (!dialogClosed && context.mounted) {
+              setState(() => isInProgress = false);
+            }
           },
         );
       }
 
       Future<void> onLogin() async {
+        if (dialogClosed) return;
         if (username.text.trim().isEmpty) {
           if (context.mounted) {
             setState(() => usernameMsg = translate('Username missed'));
@@ -840,9 +849,13 @@ Future<bool?> loginDialog() async {
         }
         try {
           final myId = await bind.mainGetMyId();
-          if (requestGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || requestGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
           final myUuid = await bind.mainGetUuid();
-          if (requestGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || requestGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
           final resp = await gFFI.userModel.login(
             LoginRequest(
               username: username.text.trim(),
@@ -853,17 +866,22 @@ Future<bool?> loginDialog() async {
               type: HttpType.kAuthReqTypeAccount,
             ),
           );
-          if (requestGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || requestGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
           await handleLoginResponse(resp, true, safeClose, requestGen);
         } catch (err) {
-          if (requestGen == AuthGenerationTracker.currentAuthGen) {
+          if (!dialogClosed &&
+              requestGen == AuthGenerationTracker.currentAuthGen) {
             final friendly = friendlyAuthErrorMessage(err);
             authBannerMsg = friendly;
             passwordMsg = friendly;
             showToast(friendly);
           }
         }
-        if (requestGen == AuthGenerationTracker.currentAuthGen) {
+        if (!dialogClosed &&
+            (requestGen == AuthGenerationTracker.currentAuthGen ||
+                curOP.value == 'rustdesk')) {
           curOP.value = '';
           if (context.mounted) {
             setState(() => isInProgress = false);
@@ -984,18 +1002,25 @@ Future<bool?> loginDialog() async {
       );
     });
 
-    if (res != null) {
+    if (res == true) {
       await UserModel.updateOtherModels();
     }
 
     return res;
   } finally {
+    dialogClosed = true;
+    focusTimer.cancel();
     AuthGenerationTracker.invalidate();
     username.removeListener(onUsernameChanged);
     password.removeListener(onPasswordChanged);
-    username.dispose();
-    password.dispose();
-    userFocusNode.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      username.dispose();
+      password.clear();
+      password.dispose();
+      userFocusNode.dispose();
+      curOP.close();
+      loginOptions.close();
+    });
   }
 }
 
@@ -1053,8 +1078,9 @@ Future<bool?> verificationCodeDialog(
       }
 
       void onVerify() async {
+        if (dialogClosed) return;
         final verifyGen = AuthGenerationTracker.nextGen();
-        if (context.mounted) {
+        if (!dialogClosed && context.mounted) {
           setState(() {
             errorText = null;
             isInProgress = true;
@@ -1063,9 +1089,13 @@ Future<bool?> verificationCodeDialog(
 
         try {
           final myId = await bind.mainGetMyId();
-          if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || verifyGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
           final myUuid = await bind.mainGetUuid();
-          if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || verifyGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
           final resp = await gFFI.userModel.login(
             LoginRequest(
               verificationCode: code.text.trim(),
@@ -1078,17 +1108,25 @@ Future<bool?> verificationCodeDialog(
               type: HttpType.kAuthReqTypeEmailCode,
             ),
           );
-          if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
+          if (dialogClosed || verifyGen != AuthGenerationTracker.currentAuthGen) {
+            return;
+          }
 
           switch (resp.type) {
             case HttpType.kAuthResTypeToken:
               if (resp.access_token != null) {
-                if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
+                if (dialogClosed ||
+                    verifyGen != AuthGenerationTracker.currentAuthGen) {
+                  return;
+                }
                 await bind.mainSetLocalOption(
                   key: 'access_token',
                   value: resp.access_token!,
                 );
-                if (verifyGen != AuthGenerationTracker.currentAuthGen) return;
+                if (dialogClosed ||
+                    verifyGen != AuthGenerationTracker.currentAuthGen) {
+                  return;
+                }
                 safeClose(true);
                 return;
               }
@@ -1099,13 +1137,15 @@ Future<bool?> verificationCodeDialog(
               break;
           }
         } catch (err) {
-          if (verifyGen == AuthGenerationTracker.currentAuthGen) {
+          if (!dialogClosed &&
+              verifyGen == AuthGenerationTracker.currentAuthGen) {
             errorText = friendlyAuthErrorMessage(err);
             showToast(errorText!);
           }
         }
 
-        if (context.mounted &&
+        if (!dialogClosed &&
+            context.mounted &&
             verifyGen == AuthGenerationTracker.currentAuthGen) {
           setState(() => isInProgress = false);
         }
@@ -1117,7 +1157,9 @@ Future<bool?> verificationCodeDialog(
               errorText: errorText,
               readyCallback: onVerify,
               onChanged: () {
-                if (context.mounted) setState(() => errorText = null);
+                if (!dialogClosed && context.mounted) {
+                  setState(() => errorText = null);
+                }
               },
             )
           : Dialog2FaField(
@@ -1125,7 +1167,9 @@ Future<bool?> verificationCodeDialog(
               errorText: errorText,
               readyCallback: onVerify,
               onChanged: () {
-                if (context.mounted) setState(() => errorText = null);
+                if (!dialogClosed && context.mounted) {
+                  setState(() => errorText = null);
+                }
               },
             );
 
@@ -1191,10 +1235,13 @@ Future<bool?> verificationCodeDialog(
 
     return res;
   } finally {
+    dialogClosed = true;
     AuthGenerationTracker.invalidate();
-    code.clear();
-    code.dispose();
-    emailCtrl.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      code.clear();
+      code.dispose();
+      emailCtrl.dispose();
+    });
   }
 }
 

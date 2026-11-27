@@ -57,6 +57,29 @@ class HomePage extends StatefulWidget {
 class HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
   final Map<_MobileTabKind, Widget> _cachedTabPages = {};
+  final ValueNotifier<bool> _serverTabActive = ValueNotifier<bool>(false);
+
+  @override
+  void initState() {
+    super.initState();
+    _syncServerTabActive(_buildTabs());
+  }
+
+  @override
+  void dispose() {
+    _serverTabActive.dispose();
+    super.dispose();
+  }
+
+  void _syncServerTabActive(List<_MobileTabSpec> tabs) {
+    final active =
+        tabs.isNotEmpty &&
+        tabs[_selectedIndex.clamp(0, tabs.length - 1)].kind ==
+            _MobileTabKind.share;
+    if (_serverTabActive.value != active) {
+      _serverTabActive.value = active;
+    }
+  }
 
   List<_MobileTabSpec> _buildTabs() {
     final tabs = <_MobileTabSpec>[];
@@ -82,7 +105,7 @@ class HomePageState extends State<HomePage> {
           label: translate('Share screen'),
           icon: Icons.mobile_screen_share_outlined,
           selectedIcon: Icons.mobile_screen_share_rounded,
-          builder: (_) => ServerPage(),
+          builder: (_) => ServerPage(isActive: _serverTabActive),
         ),
       );
     }
@@ -132,6 +155,7 @@ class HomePageState extends State<HomePage> {
       setState(() {
         _cachedTabPages.clear();
       });
+      _syncServerTabActive(_buildTabs());
     }
   }
 
@@ -141,6 +165,7 @@ class HomePageState extends State<HomePage> {
     final idx = tabs.indexWhere((t) => t.kind == _MobileTabKind.chat);
     if (idx >= 0 && mounted) {
       setState(() => _selectedIndex = idx);
+      _syncServerTabActive(tabs);
     }
   }
 
@@ -150,6 +175,7 @@ class HomePageState extends State<HomePage> {
     if (index != _selectedIndex) {
       FocusManager.instance.primaryFocus?.unfocus();
       setState(() => _selectedIndex = index);
+      _syncServerTabActive(tabs);
     }
     if (previousKind == _MobileTabKind.chat &&
         tabs[index].kind != _MobileTabKind.chat) {
@@ -382,8 +408,8 @@ class _MobileStudioBottomBar extends StatelessWidget {
           heightFactor: 1.0,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
-            child: SizedBox(
-              height: height - 12,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: height - 12),
               child: Row(
                 children: [
                   for (var i = 0; i < tabs.length; i++)

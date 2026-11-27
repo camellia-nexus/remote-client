@@ -34,7 +34,6 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
   bool _langsLoaded = false;
   String? _langsError;
   bool _fullscreenOnConnect = false;
-  bool _pointerLockPreferred = false;
 
   @override
   void initState() {
@@ -42,8 +41,6 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
     _aboutFuture = _loadAboutInfo();
     _fullscreenOnConnect =
         bind.getLocalFlutterOption(k: kWebPrefFullscreenOnConnect) == 'Y';
-    _pointerLockPreferred =
-        bind.getLocalFlutterOption(k: kWebPrefPointerLock) == 'Y';
     _loadLanguages();
   }
 
@@ -738,30 +735,6 @@ class _WebClientSettingsPageState extends State<WebClientSettingsPage> {
               subtitle: Text(
                 translate(
                   'Maximizes remote canvas and reduces browser chrome. Press Esc to exit.',
-                ),
-                style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
-              ),
-            ),
-            SwitchListTile.adaptive(
-              contentPadding: EdgeInsets.zero,
-              value: _pointerLockPreferred,
-              onChanged: (v) async {
-                setState(() => _pointerLockPreferred = v);
-                await bind.setLocalFlutterOption(
-                  k: kWebPrefPointerLock,
-                  v: v ? 'Y' : 'N',
-                );
-              },
-              secondary: Icon(CamelliaIcons.mouse, color: tokens.muted),
-              title: Text(
-                translate('Pointer Lock (Relative Mouse)'),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              subtitle: Text(
-                translate(
-                  'Captures cursor for 3D apps and precision navigation. Press Esc to release pointer.',
                 ),
                 style: theme.textTheme.bodySmall?.copyWith(color: tokens.muted),
               ),

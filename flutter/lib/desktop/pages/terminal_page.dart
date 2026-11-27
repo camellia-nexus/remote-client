@@ -38,6 +38,14 @@ class TerminalPage extends StatefulWidget {
 
   FFI get ffi => (_lastState.value! as _TerminalPageState)._ffi;
 
+  OverlayKeyState? get overlayKeyState =>
+      (_lastState.value as _TerminalPageState?)?._overlayKeyState;
+
+  void teardown() {
+    final state = _lastState.value as _TerminalPageState?;
+    state?.teardown();
+  }
+
   @override
   State<TerminalPage> createState() {
     final state = _TerminalPageState();
@@ -60,6 +68,7 @@ class _TerminalPageState extends State<TerminalPage>
   final _overlayKeyState = OverlayKeyState();
   final FocusNode _terminalFocusNode = FocusNode(canRequestFocus: false);
   StreamSubscription<DesktopTabState>? _tabStateSubscription;
+  bool _teardownCalled = false;
 
   @override
   void initState() {
@@ -146,19 +155,52 @@ class _TerminalPageState extends State<TerminalPage>
     });
   }
 
-  @override
-  void dispose() {
-    // Cancel tab state subscription to prevent memory leak
+  void _rebindOrClearDialogOverlay() {
+    final tabState = widget.tabController.state.value;
+    OverlayKeyState? replacement;
+    if (tabState.selected >= 0 && tabState.selected < tabState.tabs.length) {
+      final selectedTab = tabState.tabs[tabState.selected];
+      if (selectedTab.key != widget.tabKey &&
+          selectedTab.page is TerminalPage) {
+        final page = selectedTab.page as TerminalPage;
+        if (page.id == widget.id &&
+            page.isTerminalRunAsAdmin == widget.isTerminalRunAsAdmin) {
+          replacement = page.overlayKeyState;
+        }
+      }
+    }
+    if (replacement == null) {
+      for (final tab in tabState.tabs) {
+        if (tab.key == widget.tabKey || tab.page is! TerminalPage) continue;
+        final page = tab.page as TerminalPage;
+        if (page.id == widget.id &&
+            page.isTerminalRunAsAdmin == widget.isTerminalRunAsAdmin) {
+          replacement = page.overlayKeyState;
+          if (replacement != null) break;
+        }
+      }
+    }
+    _ffi.dialogManager.setOverlayState(replacement ?? OverlayKeyState());
+  }
+
+  void teardown() {
+    if (_teardownCalled) return;
+    _teardownCalled = true;
     _tabStateSubscription?.cancel();
-    // Unregister terminal model from FFI
+    _tabStateSubscription = null;
+    _rebindOrClearDialogOverlay();
     _ffi.unregisterTerminalModel(widget.terminalId);
     _terminalModel.dispose();
-    _terminalFocusNode.dispose();
-    // Release connection reference instead of closing directly
     TerminalConnectionManager.releaseConnection(
       widget.id,
       isTerminalRunAsAdmin: widget.isTerminalRunAsAdmin,
     );
+  }
+
+  @override
+  void dispose() {
+    teardown();
+    _terminalFocusNode.dispose();
     super.dispose();
   }
 
@@ -220,11 +262,15 @@ class _TerminalPageState extends State<TerminalPage>
 
   Future<void> _copySelection() async {
     final selection = _terminalModel.terminalController.selection;
-    if (selection == null) return;
+    if (selection == null) {
+      _requestFocusIfSelected();
+      return;
+    }
     final text = _terminalModel.terminal.buffer.getText(selection);
     _terminalModel.terminalController.clearSelection();
     await Clipboard.setData(ClipboardData(text: text));
     showToast(translate('Copied'), tone: AppTone.info);
+    _requestFocusIfSelected();
   }
 
   Future<void> _pasteClipboard() async {

@@ -2064,29 +2064,31 @@ class _PulsingStatusDotState extends State<_PulsingStatusDot>
     with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.pulse) {
-      _startPulse();
+  bool get _shouldPulse => widget.pulse && !CamelliaMotion.reduceMotion(context);
+
+  void _syncPulse() {
+    if (_shouldPulse) {
+      _controller ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 1400),
+      )..repeat(reverse: true);
+    } else {
+      _controller?.dispose();
+      _controller = null;
     }
   }
 
-  void _startPulse() {
-    _controller ??= AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPulse();
   }
 
   @override
   void didUpdateWidget(covariant _PulsingStatusDot oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.pulse && !oldWidget.pulse) {
-      _startPulse();
-    } else if (!widget.pulse && oldWidget.pulse) {
-      _controller?.dispose();
-      _controller = null;
+    if (widget.pulse != oldWidget.pulse) {
+      _syncPulse();
     }
   }
 
@@ -2096,8 +2098,7 @@ class _PulsingStatusDotState extends State<_PulsingStatusDot>
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildCoreDot() {
     return Container(
       width: widget.size,
       height: widget.size,
@@ -2111,6 +2112,46 @@ class _PulsingStatusDotState extends State<_PulsingStatusDot>
           ),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final coreDot = _buildCoreDot();
+    if (controller == null) {
+      return coreDot;
+    }
+
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        final t = Curves.easeInOut.transform(controller.value);
+        final haloScale = 1.0 + t * 0.55;
+        final haloOpacity = 0.45 * (1.0 - t * 0.65);
+        return SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              Transform.scale(
+                scale: haloScale,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: widget.color.withValues(alpha: haloOpacity),
+                  ),
+                  child: SizedBox(width: widget.size, height: widget.size),
+                ),
+              ),
+              child!,
+            ],
+          ),
+        );
+      },
+      child: coreDot,
     );
   }
 }

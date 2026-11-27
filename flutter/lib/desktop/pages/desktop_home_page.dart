@@ -135,6 +135,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsProcessTrust = false;
   var watchIsInputMonitoring = false;
   Timer? _updateTimer;
+  Timer? _initialMaximizedTimer;
   final RxBool _block = false.obs;
   DesktopNavDestination _currentDestination = DesktopNavDestination.connect;
 
@@ -750,21 +751,26 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
     if (isDesktop) {
-      Future.delayed(const Duration(milliseconds: 300), () async {
-        if (!mounted) return;
-        try {
-          final maximized = await windowManager.isMaximized();
-          if (mounted && stateGlobal.isMaximized.value != maximized) {
-            stateGlobal.setMaximized(maximized);
-            setState(() {});
-          }
-        } catch (_) {}
-      });
+      _initialMaximizedTimer = Timer(
+        const Duration(milliseconds: 300),
+        () async {
+          if (!mounted) return;
+          try {
+            final maximized = await windowManager.isMaximized();
+            if (mounted && stateGlobal.isMaximized.value != maximized) {
+              stateGlobal.setMaximized(maximized);
+              setState(() {});
+            }
+          } catch (_) {}
+        },
+      );
     }
   }
 
   @override
   void dispose() {
+    _initialMaximizedTimer?.cancel();
+    rustDeskWinManager.unregisterActiveWindowListener(onActiveWindowChanged);
     windowManager.removeListener(this);
     _uniLinksSubscription?.cancel();
     if (Get.isRegistered<RxBool>(tag: 'stop-service')) {
@@ -1064,6 +1070,7 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       ? translate('password-hidden-tip')
       : (presetPassword ? translate('preset-password-in-use-tip') : '');
 
+  var isClosed = false;
   try {
     await gFFI.dialogManager.show((setState, close, context) {
       void updateCanSubmit() {
@@ -1071,7 +1078,7 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       }
 
       Future<void> submit() async {
-        if (!canSubmit || submitting) return;
+        if (isClosed || !canSubmit || submitting) return;
         setState(() {
           errMsg0 = '';
           errMsg1 = '';
@@ -1100,6 +1107,7 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
         final ok = await bind.mainSetPermanentPasswordWithResult(
           password: pass,
         );
+        if (isClosed) return;
         if (!ok) {
           setState(() {
             submitting = false;
@@ -1111,17 +1119,19 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
         if (pass.isNotEmpty) {
           notEmptyCallback?.call();
         }
+        isClosed = true;
         close();
       }
 
       Future<void> remove() async {
-        if (submitting) return;
+        if (isClosed || submitting) return;
         setState(() {
           submitting = true;
           errMsg0 = '';
           errMsg1 = '';
         });
         final ok = await bind.mainSetPermanentPasswordWithResult(password: '');
+        if (isClosed) return;
         if (!ok) {
           setState(() {
             submitting = false;
@@ -1130,6 +1140,7 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
           shakeController.shake();
           return;
         }
+        isClosed = true;
         close();
       }
 
@@ -1311,9 +1322,12 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       );
     });
   } finally {
-    p0.dispose();
-    p1.dispose();
-    shakeController.dispose();
-    rxPass.close();
+    isClosed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      p0.dispose();
+      p1.dispose();
+      shakeController.dispose();
+      rxPass.close();
+    });
   }
 }

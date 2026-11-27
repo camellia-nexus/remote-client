@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camellia_remote_app/common/widgets/dialog.dart';
@@ -19,7 +20,14 @@ import '../../models/peer_model.dart';
 import '../../models/platform_model.dart';
 
 typedef PopupMenuEntryBuilder =
-    Future<List<mod_menu.PopupMenuEntry<String>>> Function(BuildContext);
+    Future<List<mod_menu.PopupMenuEntry<String>>> Function(
+      BuildContext, {
+      Future<void> Function()? onFavoriteChanged,
+    });
+
+final RegExp _kRdpPortRegExp = RegExp(
+  r'^$|^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
+);
 
 enum PeerUiType { grid, tile, list }
 
@@ -49,6 +57,7 @@ class _PeerCard extends StatefulWidget {
 class _PeerCardState extends State<_PeerCard>
     with AutomaticKeepAliveClientMixin {
   Offset _lastPointerPos = Offset.zero;
+  int? _morePointerId;
   bool _hovered = false;
   bool _focused = false;
   bool? _isFavorite;
@@ -901,9 +910,20 @@ class _PeerCardState extends State<_PeerCard>
   Widget _actionMore(Peer peer) => Listener(
     behavior: HitTestBehavior.opaque,
     onPointerDown: (e) {
-      _lastPointerPos = e.position;
+      if (e.kind != PointerDeviceKind.mouse ||
+          (e.buttons & kPrimaryMouseButton) != 0) {
+        _morePointerId = e.pointer;
+        _lastPointerPos = e.position;
+      }
+    },
+    onPointerCancel: (e) {
+      if (_morePointerId == e.pointer) {
+        _morePointerId = null;
+      }
     },
     onPointerUp: (e) {
+      if (_morePointerId != e.pointer) return;
+      _morePointerId = null;
       if ((e.position - _lastPointerPos).distance <= 18.0) {
         _showPeerMenu(peer.id, anchor: e.position);
       }
@@ -912,6 +932,7 @@ class _PeerCardState extends State<_PeerCard>
       behavior: HitTestBehavior.opaque,
       onTap: () {},
       onDoubleTap: () {},
+      onSecondaryTapUp: (_) {},
       child: build_more(context),
     ),
   );
@@ -924,7 +945,10 @@ class _PeerCardState extends State<_PeerCard>
 
   Future<void> _showPeerMenu(String id, {Offset? anchor}) async {
     final pos = _resolveMenuRect(anchor ?? _lastPointerPos);
-    final items = await super.widget.popupMenuEntryBuilder(context);
+    final items = await super.widget.popupMenuEntryBuilder(
+      context,
+      onFavoriteChanged: _refreshFavoriteState,
+    );
     if (!mounted || items.isEmpty) return;
     await mod_menu.showMenu(
       context: context,
@@ -1048,8 +1072,9 @@ abstract class BasePeerCard extends StatelessWidget {
   }
 
   Future<List<mod_menu.PopupMenuEntry<String>>> _buildPopupMenuEntry(
-    BuildContext context,
-  ) async => (await _buildMenuItems(context))
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async => (await _buildMenuItems(context, onFavoriteChanged: onFavoriteChanged))
       .map(
         (e) => e.build(
           context,
@@ -1064,7 +1089,10 @@ abstract class BasePeerCard extends StatelessWidget {
       .toList();
 
   @protected
-  Future<List<MenuEntryBase<String>>> _buildMenuItems(BuildContext context);
+  Future<List<MenuEntryBase<String>>> _buildMenuItems(
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  });
 
   MenuEntryBase<String> _connectCommonAction(
     BuildContext context,
@@ -1367,7 +1395,10 @@ abstract class BasePeerCard extends StatelessWidget {
   }
 
   @protected
-  MenuEntryBase<String> _addFavAction(String id) {
+  MenuEntryBase<String> _addFavAction(
+    String id, {
+    Future<void> Function()? onFavoriteChanged,
+  }) {
     return MenuEntryButton<String>(
       childBuilder: (TextStyle? style) => Row(
         children: [
@@ -1390,6 +1421,7 @@ abstract class BasePeerCard extends StatelessWidget {
             favs.add(id);
             await bind.mainStoreFav(favs: favs);
           }
+          await onFavoriteChanged?.call();
           showToast(translate('Successful'));
         }();
       },
@@ -1401,8 +1433,9 @@ abstract class BasePeerCard extends StatelessWidget {
   @protected
   MenuEntryBase<String> _rmFavAction(
     String id,
-    Future<void> Function() reloadFunc,
-  ) {
+    Future<void> Function() reloadFunc, {
+    Future<void> Function()? onFavoriteChanged,
+  }) {
     return MenuEntryButton<String>(
       childBuilder: (TextStyle? style) => Row(
         children: [
@@ -1425,6 +1458,7 @@ abstract class BasePeerCard extends StatelessWidget {
             await bind.mainStoreFav(favs: favs);
             await reloadFunc();
           }
+          await onFavoriteChanged?.call();
           showToast(translate('Successful'));
         }();
       },
@@ -1462,8 +1496,9 @@ class RecentPeerCard extends BasePeerCard {
 
   @override
   Future<List<MenuEntryBase<String>>> _buildMenuItems(
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
       _transferFileAction(context),
@@ -1498,9 +1533,17 @@ class RecentPeerCard extends BasePeerCard {
     }
 
     if (!favs.contains(peer.id)) {
-      menuItems.add(_addFavAction(peer.id));
+      menuItems.add(
+        _addFavAction(peer.id, onFavoriteChanged: onFavoriteChanged),
+      );
     } else {
-      menuItems.add(_rmFavAction(peer.id, () async {}));
+      menuItems.add(
+        _rmFavAction(
+          peer.id,
+          () async {},
+          onFavoriteChanged: onFavoriteChanged,
+        ),
+      );
     }
 
     if (gFFI.userModel.userName.isNotEmpty) {
@@ -1523,8 +1566,9 @@ class FavoritePeerCard extends BasePeerCard {
 
   @override
   Future<List<MenuEntryBase<String>>> _buildMenuItems(
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
       _transferFileAction(context),
@@ -1556,9 +1600,13 @@ class FavoritePeerCard extends BasePeerCard {
       menuItems.add(_unrememberPasswordAction(peer.id));
     }
     menuItems.add(
-      _rmFavAction(peer.id, () async {
-        await bind.mainLoadFavPeers();
-      }),
+      _rmFavAction(
+        peer.id,
+        () async {
+          await bind.mainLoadFavPeers();
+        },
+        onFavoriteChanged: onFavoriteChanged,
+      ),
     );
 
     if (gFFI.userModel.userName.isNotEmpty) {
@@ -1581,8 +1629,9 @@ class DiscoveredPeerCard extends BasePeerCard {
 
   @override
   Future<List<MenuEntryBase<String>>> _buildMenuItems(
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
       _transferFileAction(context),
@@ -1611,9 +1660,17 @@ class DiscoveredPeerCard extends BasePeerCard {
     }
 
     if (!favs.contains(peer.id)) {
-      menuItems.add(_addFavAction(peer.id));
+      menuItems.add(
+        _addFavAction(peer.id, onFavoriteChanged: onFavoriteChanged),
+      );
     } else {
-      menuItems.add(_rmFavAction(peer.id, () async {}));
+      menuItems.add(
+        _rmFavAction(
+          peer.id,
+          () async {},
+          onFavoriteChanged: onFavoriteChanged,
+        ),
+      );
     }
 
     if (gFFI.userModel.userName.isNotEmpty) {
@@ -1636,8 +1693,9 @@ class AddressBookPeerCard extends BasePeerCard {
 
   @override
   Future<List<MenuEntryBase<String>>> _buildMenuItems(
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
       _transferFileAction(context),
@@ -1663,9 +1721,17 @@ class AddressBookPeerCard extends BasePeerCard {
     }
     final List favs = (await bind.mainGetFav()).toList();
     if (!favs.contains(peer.id)) {
-      menuItems.add(_addFavAction(peer.id));
+      menuItems.add(
+        _addFavAction(peer.id, onFavoriteChanged: onFavoriteChanged),
+      );
     } else {
-      menuItems.add(_rmFavAction(peer.id, () async {}));
+      menuItems.add(
+        _rmFavAction(
+          peer.id,
+          () async {},
+          onFavoriteChanged: onFavoriteChanged,
+        ),
+      );
     }
     if (gFFI.abModel.current.canWrite()) {
       menuItems.add(MenuEntryDivider());
@@ -1800,8 +1866,9 @@ class MyGroupPeerCard extends BasePeerCard {
 
   @override
   Future<List<MenuEntryBase<String>>> _buildMenuItems(
-    BuildContext context,
-  ) async {
+    BuildContext context, {
+    Future<void> Function()? onFavoriteChanged,
+  }) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
       _transferFileAction(context),
@@ -1827,9 +1894,17 @@ class MyGroupPeerCard extends BasePeerCard {
     }
     final List favs = (await bind.mainGetFav()).toList();
     if (!favs.contains(peer.id)) {
-      menuItems.add(_addFavAction(peer.id));
+      menuItems.add(
+        _addFavAction(peer.id, onFavoriteChanged: onFavoriteChanged),
+      );
     } else {
-      menuItems.add(_rmFavAction(peer.id, () async {}));
+      menuItems.add(
+        _rmFavAction(
+          peer.id,
+          () async {},
+          onFavoriteChanged: onFavoriteChanged,
+        ),
+      );
     }
     if (gFFI.userModel.userName.isNotEmpty) {
       menuItems.add(_addToAb(peer));
@@ -1853,145 +1928,162 @@ void _rdpDialog(String id) async {
   final passwordController = TextEditingController();
   final RxBool clearPassword = false.obs;
 
-  gFFI.dialogManager.show((setState, close, context) {
-    void cleanup() {
+  var isClosed = false;
+  var disposed = false;
+
+  void scheduleDispose() {
+    if (disposed) return;
+    disposed = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       passwordController.clear();
       passwordController.dispose();
       portController.dispose();
       userController.dispose();
       clearPassword.close();
-    }
+    });
+  }
 
-    void handleClose() {
-      cleanup();
-      close();
-    }
-
-    Future<void> submit() async {
-      final String portVal = portController.text.trim();
-      final String usernameVal = userController.text;
-      final String passwordVal = passwordController.text;
-      await bind.mainSetPeerOption(id: id, key: 'rdp_port', value: portVal);
-      await bind.mainSetPeerOption(
-        id: id,
-        key: 'rdp_username',
-        value: usernameVal,
-      );
-      if (hasStoredPassword) {
-        if (clearPassword.value) {
-          await bind.mainSetPeerOption(id: id, key: 'rdp_password', value: '');
-        } else if (passwordVal.isNotEmpty) {
-          await bind.mainSetPeerOption(
-            id: id,
-            key: 'rdp_password',
-            value: passwordVal,
-          );
-        }
-      } else {
-        if (passwordVal.isNotEmpty) {
-          await bind.mainSetPeerOption(
-            id: id,
-            key: 'rdp_password',
-            value: passwordVal,
-          );
-        }
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void handleClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
       }
-      showToast(translate('Successful'));
-      handleClose();
-    }
 
-    final limitFormatters = maxLength > 0
-        ? <TextInputFormatter>[LengthLimitingTextInputFormatter(maxLength)]
-        : const <TextInputFormatter>[];
+      Future<void> submit() async {
+        if (isClosed) return;
+        final String portVal = portController.text.trim();
+        final String usernameVal = userController.text;
+        final String passwordVal = passwordController.text;
+        await bind.mainSetPeerOption(id: id, key: 'rdp_port', value: portVal);
+        await bind.mainSetPeerOption(
+          id: id,
+          key: 'rdp_username',
+          value: usernameVal,
+        );
+        if (hasStoredPassword) {
+          if (clearPassword.value) {
+            await bind.mainSetPeerOption(id: id, key: 'rdp_password', value: '');
+          } else if (passwordVal.isNotEmpty) {
+            await bind.mainSetPeerOption(
+              id: id,
+              key: 'rdp_password',
+              value: passwordVal,
+            );
+          }
+        } else {
+          if (passwordVal.isNotEmpty) {
+            await bind.mainSetPeerOption(
+              id: id,
+              key: 'rdp_password',
+              value: passwordVal,
+            );
+          }
+        }
+        if (isClosed) return;
+        showToast(translate('Successful'));
+        handleClose();
+      }
 
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: Icons.desktop_windows_rounded,
-        title: translate('RDP Settings'),
-        subtitle: formatID(id),
-        onClose: handleClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(maxWidth: 460),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            GlassInput(
-              controller: portController,
-              autofocus: true,
-              tabularNums: true,
-              labelText: translate('Port'),
-              hintText: '3389',
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(
-                  RegExp(
-                    r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$',
+      final limitFormatters = maxLength > 0
+          ? <TextInputFormatter>[LengthLimitingTextInputFormatter(maxLength)]
+          : const <TextInputFormatter>[];
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: Icons.desktop_windows_rounded,
+          title: translate('RDP Settings'),
+          subtitle: formatID(id),
+          onClose: handleClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(maxWidth: 460),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              GlassInput(
+                controller: portController,
+                autofocus: true,
+                tabularNums: true,
+                labelText: translate('Port'),
+                hintText: '3389',
+                inputFormatters: [
+                  TextInputFormatter.withFunction(
+                    (oldValue, newValue) =>
+                        _kRdpPortRegExp.hasMatch(newValue.text)
+                        ? newValue
+                        : oldValue,
                   ),
-                ),
-              ],
-            ).workaroundFreezeLinuxMint(),
-            const SizedBox(height: 12),
-            GlassInput(
-              controller: userController,
-              labelText: translate('Username'),
-              hintText: translate('Username'),
-            ).workaroundFreezeLinuxMint(),
-            const SizedBox(height: 12),
-            Obx(
-              () => GlassInput(
-                controller: passwordController,
-                obscureText: true,
-                enabled: !clearPassword.value,
-                showClearButton: false,
-                labelText: translate('Password'),
-                hintText: hasStoredPassword
-                    ? (clearPassword.value
-                          ? translate('Password cleared')
-                          : '●●●●●● (${translate('Saved')})')
-                    : translate('Password'),
-                inputFormatters: limitFormatters,
-                trailing: hasStoredPassword
-                    ? IconButton(
-                        tooltip: clearPassword.value
-                            ? translate('Undo')
-                            : translate('Clear'),
-                        onPressed: () {
-                          clearPassword.value = !clearPassword.value;
-                          if (clearPassword.value) {
-                            passwordController.clear();
-                          }
-                        },
-                        icon: Icon(
-                          clearPassword.value
-                              ? Icons.undo_rounded
-                              : CamelliaIcons.close,
-                          size: 18,
-                        ),
-                      )
-                    : null,
+                ],
               ).workaroundFreezeLinuxMint(),
-            ),
-          ],
+              const SizedBox(height: 12),
+              GlassInput(
+                controller: userController,
+                labelText: translate('Username'),
+                hintText: translate('Username'),
+              ).workaroundFreezeLinuxMint(),
+              const SizedBox(height: 12),
+              Obx(
+                () => GlassInput(
+                  controller: passwordController,
+                  obscureText: true,
+                  enabled: !clearPassword.value,
+                  showClearButton: false,
+                  labelText: translate('Password'),
+                  hintText: hasStoredPassword
+                      ? (clearPassword.value
+                            ? translate('Password cleared')
+                            : '●●●●●● (${translate('Saved')})')
+                      : translate('Password'),
+                  inputFormatters: limitFormatters,
+                  trailing: hasStoredPassword
+                      ? IconButton(
+                          tooltip: clearPassword.value
+                              ? translate('Undo')
+                              : translate('Clear'),
+                          onPressed: () {
+                            if (isClosed) return;
+                            clearPassword.value = !clearPassword.value;
+                            if (clearPassword.value) {
+                              passwordController.clear();
+                            }
+                          },
+                          icon: Icon(
+                            clearPassword.value
+                                ? Icons.undo_rounded
+                                : CamelliaIcons.close,
+                            size: 18,
+                          ),
+                        )
+                      : null,
+                ).workaroundFreezeLinuxMint(),
+              ),
+            ],
+          ),
         ),
-      ),
-      actions: [
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          onPressed: handleClose,
-          child: Text(translate('Cancel')),
-        ),
-        GlassButton(
-          variant: GlassButtonVariant.primary,
-          onPressed: submit,
-          child: Text(translate('OK')),
-        ),
-      ],
-      onSubmit: submit,
-      onCancel: handleClose,
-    );
-  });
+        actions: [
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            onPressed: handleClose,
+            child: Text(translate('Cancel')),
+          ),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            onPressed: submit,
+            child: Text(translate('OK')),
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: handleClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    scheduleDispose();
+  }
 }
 
 /// Semantic online/offline indicator dot:

@@ -400,19 +400,18 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
             CamelliaThemePreference.light => ThemeMode.light,
             CamelliaThemePreference.dark ||
             CamelliaThemePreference.midnight => ThemeMode.dark,
-            CamelliaThemePreference.system => MyTheme.currentThemeMode(),
+            CamelliaThemePreference.system => ThemeMode.system,
           };
-          final activeTheme = resolvedMode == ThemeMode.light
-              ? MyTheme.lightTheme
-              : (pref == CamelliaThemePreference.midnight
-                  ? MyTheme.midnightTheme
-                  : MyTheme.darkTheme);
+          final lightTheme = MyTheme.lightTheme;
+          final darkTheme = pref == CamelliaThemePreference.midnight
+              ? MyTheme.midnightTheme
+              : MyTheme.darkTheme;
           return GetMaterialApp(
             navigatorKey: globalKey,
             debugShowCheckedModeBanner: false,
             title: title,
-            theme: activeTheme,
-            darkTheme: activeTheme,
+            theme: lightTheme,
+            darkTheme: darkTheme,
             themeMode: resolvedMode,
             scrollBehavior: const CamelliaScrollBehavior(),
             home: home,
@@ -427,6 +426,15 @@ void _runApp(String title, Widget home, ThemeMode themeMode) {
               BotToastNavigatorObserver(),
             ],
             builder: (context, child) {
+              final platformBrightness = MediaQuery.platformBrightnessOf(
+                context,
+              );
+              final activeTheme =
+                  resolvedMode == ThemeMode.light ||
+                      (resolvedMode == ThemeMode.system &&
+                          platformBrightness == Brightness.light)
+                  ? lightTheme
+                  : darkTheme;
               final scaledChild = _keepScaleBuilder(context, child);
               return AnimatedTheme(
                 data: activeTheme,
@@ -599,23 +607,6 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged = () {
-      final userPreference = MyTheme.getThemeModePreference();
-      if (userPreference != ThemeMode.system) return;
-      WidgetsBinding.instance.handlePlatformBrightnessChanged();
-      final systemIsDark =
-          WidgetsBinding.instance.platformDispatcher.platformBrightness ==
-          Brightness.dark;
-      final ThemeMode to = systemIsDark ? ThemeMode.dark : ThemeMode.light;
-      if (mounted) {
-        setState(() {});
-      }
-      // Synchronize the window theme of the system.
-      updateSystemWindowTheme();
-      if (desktopType == DesktopType.main) {
-        bind.mainChangeTheme(dark: to.toShortString());
-      }
-    };
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateOrientation());
   }
@@ -624,6 +615,25 @@ class _AppState extends State<App> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    super.didChangePlatformBrightness();
+    final userPreference = MyTheme.getThemeModePreference();
+    if (userPreference != ThemeMode.system) return;
+    final systemIsDark =
+        WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+    final ThemeMode to = systemIsDark ? ThemeMode.dark : ThemeMode.light;
+    if (mounted) {
+      setState(() {});
+    }
+    // Synchronize the window theme of the system.
+    updateSystemWindowTheme();
+    if (desktopType == DesktopType.main) {
+      bind.mainChangeTheme(dark: to.toShortString());
+    }
   }
 
   @override
@@ -673,19 +683,18 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                 CamelliaThemePreference.light => ThemeMode.light,
                 CamelliaThemePreference.dark ||
                 CamelliaThemePreference.midnight => ThemeMode.dark,
-                CamelliaThemePreference.system => MyTheme.currentThemeMode(),
+                CamelliaThemePreference.system => ThemeMode.system,
               };
-              final activeTheme = resolvedMode == ThemeMode.light
-                  ? MyTheme.lightTheme
-                  : (pref == CamelliaThemePreference.midnight
-                      ? MyTheme.midnightTheme
-                      : MyTheme.darkTheme);
+              final lightTheme = MyTheme.lightTheme;
+              final darkTheme = pref == CamelliaThemePreference.midnight
+                  ? MyTheme.midnightTheme
+                  : MyTheme.darkTheme;
               return GetMaterialApp(
                 navigatorKey: globalKey,
                 debugShowCheckedModeBanner: false,
                 title: buildMainAppTitle(bind.mainGetAppNameSync()),
-                theme: activeTheme,
-                darkTheme: activeTheme,
+                theme: lightTheme,
+                darkTheme: darkTheme,
                 themeMode: resolvedMode,
                 scrollBehavior: const CamelliaScrollBehavior(),
                 home: isDesktop ? const DesktopHomePage() : buildMainHomePage(),
@@ -700,19 +709,37 @@ class _AppState extends State<App> with WidgetsBindingObserver {
                   BotToastNavigatorObserver(),
                 ],
                 builder: isAndroid
-                    ? (context, child) => AnimatedTheme(
-                        data: activeTheme,
-                        duration: Duration.zero,
-                        child: Builder(
-                          builder: (themedContext) => AccessibilityListener(
-                            child: botToastBuilder(
-                              themedContext,
-                              child ?? const SizedBox.shrink(),
+                    ? (context, child) {
+                        final platformBrightness =
+                            MediaQuery.platformBrightnessOf(context);
+                        final activeTheme =
+                            resolvedMode == ThemeMode.light ||
+                                (resolvedMode == ThemeMode.system &&
+                                    platformBrightness == Brightness.light)
+                            ? lightTheme
+                            : darkTheme;
+                        return AnimatedTheme(
+                          data: activeTheme,
+                          duration: Duration.zero,
+                          child: Builder(
+                            builder: (themedContext) => AccessibilityListener(
+                              child: botToastBuilder(
+                                themedContext,
+                                child ?? const SizedBox.shrink(),
+                              ),
                             ),
                           ),
-                        ),
-                      )
+                        );
+                      }
                     : (context, child) {
+                        final platformBrightness =
+                            MediaQuery.platformBrightnessOf(context);
+                        final activeTheme =
+                            resolvedMode == ThemeMode.light ||
+                                (resolvedMode == ThemeMode.system &&
+                                    platformBrightness == Brightness.light)
+                            ? lightTheme
+                            : darkTheme;
                         Widget current = _keepScaleBuilder(context, child);
                         if ((isDesktop && desktopType == DesktopType.main) ||
                             isWebDesktop) {

@@ -29,7 +29,9 @@ class _MyGroupState extends State<MyGroup> {
       gFFI.groupModel.selectedAccessibleItemName;
   RxString get searchAccessibleItemNameText =>
       gFFI.groupModel.searchAccessibleItemNameText;
-  final TextEditingController searchUserController = TextEditingController();
+  late final TextEditingController searchUserController = TextEditingController(
+    text: gFFI.groupModel.searchAccessibleItemNameText.value,
+  );
 
   @override
   void dispose() {

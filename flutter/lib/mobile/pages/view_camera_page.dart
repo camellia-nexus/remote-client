@@ -72,6 +72,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   final FocusNode _mobileFocusNode = FocusNode();
   final FocusNode _physicalFocusNode = FocusNode();
   var _showEdit = false;
+  late final Future<dynamic> _voiceCallSupportFuture;
 
   InputModel get inputModel => gFFI.inputModel;
   SessionID get sessionId => gFFI.sessionId;
@@ -83,6 +84,9 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   @override
   void initState() {
     super.initState();
+    _voiceCallSupportFuture = isWeb
+        ? Future<bool>.value(false)
+        : gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL");
     gFFI.mobileReset();
     _generation = gFFI.sessionGeneration;
     initSharedStates(widget.id, generation: _generation);
@@ -150,7 +154,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
     WakelockManager.disable(_uniqueKey);
     removeSharedStates(widget.id, expectedGeneration: myGen);
-    gFFI.chatModel.onVoiceCallClosed("End connetion");
+    gFFI.chatModel.onVoiceCallClosed("");
   }
 
   @override
@@ -207,21 +211,27 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       return SafeArea(
         top: false,
         minimum: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-        child: GlassSurface(
-          layer: CamelliaGlassLayer.modal,
-          elevated: true,
-          borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: SingleChildScrollView(
-            child: GestureHelp(
-              touchMode: gFFI.ffiModel.touchMode,
-              onTouchModeChange: (t) {
-                gFFI.ffiModel.toggleTouchMode();
-                final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
-                bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
-              },
-              virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
-              inputModel: gFFI.inputModel,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+          ),
+          child: GlassSurface(
+            layer: CamelliaGlassLayer.modal,
+            elevated: true,
+            borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: SingleChildScrollView(
+              child: GestureHelp(
+                touchMode: gFFI.ffiModel.touchMode,
+                onTouchModeChange: (t) {
+                  gFFI.ffiModel.toggleTouchMode();
+                  final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
+                  bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+                },
+                virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
+                inputModel: gFFI.inputModel,
+                onClose: () => setState(() => _showGestureHelp = false),
+              ),
             ),
           ),
         ),
@@ -242,6 +252,10 @@ class _ViewCameraPageState extends State<ViewCameraPage>
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
+        if (_showGestureHelp) {
+          setState(() => _showGestureHelp = false);
+          return;
+        }
         clientClose(sessionId, gFFI);
       },
       child: Scaffold(
@@ -473,21 +487,25 @@ class _ViewCameraPageState extends State<ViewCameraPage>
             () => gFFI.ffiModel.waitForFirstImage.isTrue
                 ? const SizedBox.shrink()
                 : GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() => _showBar = false);
                     },
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 5),
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.onSurface.withValues(
-                            alpha: 0.28,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            CamelliaRadius.pill,
+                    child: SizedBox(
+                      width: 64,
+                      height: 24,
+                      child: Center(
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.28,
+                            ),
+                            borderRadius: BorderRadius.circular(
+                              CamelliaRadius.pill,
+                            ),
                           ),
                         ),
                       ),
@@ -532,10 +550,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                     if (!isWeb)
                       Expanded(
                         child: futureBuilder(
-                          future: gFFI.invokeMethod(
-                            "get_value",
-                            "KEY_IS_SUPPORT_VOICE_CALL",
-                          ),
+                          future: _voiceCallSupportFuture,
                           hasData: (isSupportVoiceCall) => Obx(() {
                             final isInVoice = [
                               VoiceCallStatus.waitingForResponse,

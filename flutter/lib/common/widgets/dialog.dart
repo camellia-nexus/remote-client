@@ -23,6 +23,14 @@ import 'address_book.dart';
 
 const String _kPortInputRegex =
     r'^$|^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$';
+final RegExp _kPortInputRegExp = RegExp(_kPortInputRegex);
+final RegExp _kAutoDisconnectTimeoutRegExp = RegExp(r'^$|^(0|[1-9]\d{0,3})$');
+
+void _disposeAfterFrame(VoidCallback cleanup) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    cleanup();
+  });
+}
 
 class ModernDialogHeader extends StatelessWidget {
   const ModernDialogHeader({
@@ -278,6 +286,7 @@ class _DialogSwitchRow extends StatelessWidget {
 }
 
 void clientClose(SessionID sessionId, FFI ffi) async {
+  _lastSessionPassword.remove(sessionId.toString());
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
     if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
       return;
@@ -352,11 +361,9 @@ void changeIdDialog() {
 
   gFFI.dialogManager.show((setState, close, context) {
     void handleCancel() {
+      if (isCancelled) return;
       isCancelled = true;
       close();
-      try {
-        controller.dispose();
-      } catch (_) {}
     }
 
     Future<void> submit() async {
@@ -383,6 +390,7 @@ void changeIdDialog() {
 
       try {
         await bind.mainChangeId(newId: newId);
+        if (isCancelled || currentGen != dialogGen) return;
         var status = await bind.mainGetAsyncStatus();
         int pollCount = 0;
         const maxPolls = 150; // 15 seconds bounded polling
@@ -451,6 +459,7 @@ void changeIdDialog() {
               ),
             ),
             onChanged: (value) {
+              if (isCancelled) return;
               setState(() {
                 rxId.value = value.trim();
                 msg = '';
@@ -497,6 +506,12 @@ void changeIdDialog() {
       onSubmit: isInProgress ? null : submit,
       onCancel: handleCancel,
     );
+  }).whenComplete(() {
+    isCancelled = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+      rxId.close();
+    });
   });
 }
 
@@ -508,132 +523,146 @@ void changeWhiteList({Function()? callback}) async {
   final controller = TextEditingController(text: newWhiteListField);
   var msg = '';
   var isInProgress = false;
+  var isClosed = false;
   final isOptFixed = isOptionFixed(kOptionWhitelist);
-  gFFI.dialogManager.show((setState, close, context) {
-    void safeClose() {
-      try {
-        controller.dispose();
-      } catch (_) {}
-      close();
-    }
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
 
-    Future<void> submit() async {
-      setState(() {
-        msg = '';
-        isInProgress = true;
-      });
-      newWhiteListField = controller.text.trim();
-      var newWhiteList = '';
-      if (newWhiteListField.isNotEmpty) {
-        final ips = newWhiteListField.trim().split(RegExp(r'[\s,;\n]+'));
-        final ipMatch = RegExp(
-          r'^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([0-9]|[1-2][0-9]|3[0-2])){0,1}$',
-        );
-        final ipv6Match = RegExp(
-          r'^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$',
-        );
-        for (final ip in ips) {
-          final trimmedIp = ip.trim();
-          if (trimmedIp.isEmpty) continue;
-          final lower = trimmedIp.toLowerCase();
-          if (lower == '0.0.0.0' ||
-              lower == '0.0.0.0/32' ||
-              lower == '::' ||
-              lower == '::/128' ||
-              lower == '0:0:0:0:0:0:0:0' ||
-              lower == '0:0:0:0:0:0:0:0/128') {
-            msg =
-                '${translate("Invalid IP")}: $trimmedIp (${translate("Unspecified IP address not allowed")})';
-            setState(() {
-              isInProgress = false;
-            });
-            return;
+      Future<void> submit() async {
+        if (isInProgress || isClosed) return;
+        setState(() {
+          msg = '';
+          isInProgress = true;
+        });
+        newWhiteListField = controller.text.trim();
+        var newWhiteList = '';
+        if (newWhiteListField.isNotEmpty) {
+          final ips = newWhiteListField.trim().split(RegExp(r'[\s,;\n]+'));
+          final ipMatch = RegExp(
+            r'^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([0-9]|[1-2][0-9]|3[0-2])){0,1}$',
+          );
+          final ipv6Match = RegExp(
+            r'^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$',
+          );
+          for (final ip in ips) {
+            final trimmedIp = ip.trim();
+            if (trimmedIp.isEmpty) continue;
+            final lower = trimmedIp.toLowerCase();
+            if (lower == '0.0.0.0' ||
+                lower == '0.0.0.0/32' ||
+                lower == '::' ||
+                lower == '::/128' ||
+                lower == '0:0:0:0:0:0:0:0' ||
+                lower == '0:0:0:0:0:0:0:0/128') {
+              msg =
+                  '${translate("Invalid IP")}: $trimmedIp (${translate("Unspecified IP address not allowed")})';
+              setState(() {
+                isInProgress = false;
+              });
+              return;
+            }
+            if (!ipMatch.hasMatch(trimmedIp) && !ipv6Match.hasMatch(trimmedIp)) {
+              msg = '${translate("Invalid IP")} $trimmedIp';
+              setState(() {
+                isInProgress = false;
+              });
+              return;
+            }
           }
-          if (!ipMatch.hasMatch(trimmedIp) && !ipv6Match.hasMatch(trimmedIp)) {
-            msg = '${translate("Invalid IP")} $trimmedIp';
-            setState(() {
-              isInProgress = false;
-            });
-            return;
-          }
+          newWhiteList = ips
+              .map((x) => x.trim())
+              .where((x) => x.isNotEmpty)
+              .join(',');
         }
-        newWhiteList = ips
-            .map((x) => x.trim())
-            .where((x) => x.isNotEmpty)
-            .join(',');
+        if (newWhiteList.trim().isEmpty) {
+          newWhiteList = defaultOptionWhitelist;
+        }
+        await bind.mainSetOption(key: kOptionWhitelist, value: newWhiteList);
+        if (isClosed) return;
+        callback?.call();
+        safeClose();
       }
-      if (newWhiteList.trim().isEmpty) {
-        newWhiteList = defaultOptionWhitelist;
-      }
-      await bind.mainSetOption(key: kOptionWhitelist, value: newWhiteList);
-      callback?.call();
-      safeClose();
-    }
 
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        title: translate('IP Whitelisting'),
-        subtitle: translate('whitelist_sep'),
-        icon: CamelliaIcons.shield,
-        tone: AppTone.brand,
-        onClose: safeClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 380, maxWidth: 460),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          GlassInput(
-            controller: controller,
-            enabled: !isOptFixed,
-            autofocus: true,
-            maxLines: 4,
-            minHeight: 100,
-            showClearButton: false,
-            tabularNums: true,
-            hintText: '192.168.1.100\n10.0.0.0/24',
-            errorText: msg.isEmpty ? null : translate(msg),
-            onChanged: (_) {
-              if (msg.isNotEmpty) {
-                setState(() => msg = '');
-              }
-            },
-          ).workaroundFreezeLinuxMint(),
-        ],
-      ),
-      actions: [
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: safeClose,
-          child: Text(translate('Cancel')),
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          title: translate('IP Whitelisting'),
+          subtitle: translate('whitelist_sep'),
+          icon: CamelliaIcons.shield,
+          tone: AppTone.brand,
+          onClose: safeClose,
         ),
-        if (!isOptFixed)
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 380,
+          maxWidth: 460,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            GlassInput(
+              controller: controller,
+              enabled: !isOptFixed,
+              autofocus: true,
+              maxLines: 4,
+              minHeight: 100,
+              showClearButton: false,
+              tabularNums: true,
+              hintText: '192.168.1.100\n10.0.0.0/24',
+              errorText: msg.isEmpty ? null : translate(msg),
+              onChanged: (_) {
+                if (!isClosed && msg.isNotEmpty) {
+                  setState(() => msg = '');
+                }
+              },
+            ).workaroundFreezeLinuxMint(),
+          ],
+        ),
+        actions: [
           GlassButton(
-            variant: GlassButtonVariant.ghost,
+            variant: GlassButtonVariant.secondary,
             minHeight: 38,
-            onPressed: () async {
-              await bind.mainSetOption(
-                key: kOptionWhitelist,
-                value: defaultOptionWhitelist,
-              );
-              callback?.call();
-              safeClose();
-            },
-            child: Text(translate('Clear')),
+            onPressed: safeClose,
+            child: Text(translate('Cancel')),
           ),
-        if (!isOptFixed)
-          GlassButton(
-            variant: GlassButtonVariant.primary,
-            minHeight: 38,
-            loading: isInProgress,
-            onPressed: isInProgress ? null : submit,
-            child: Text(translate('OK')),
-          ),
-      ],
-      onCancel: safeClose,
-    );
-  });
+          if (!isOptFixed)
+            GlassButton(
+              variant: GlassButtonVariant.ghost,
+              minHeight: 38,
+              onPressed: () async {
+                if (isClosed) return;
+                await bind.mainSetOption(
+                  key: kOptionWhitelist,
+                  value: defaultOptionWhitelist,
+                );
+                if (isClosed) return;
+                callback?.call();
+                safeClose();
+              },
+              child: Text(translate('Clear')),
+            ),
+          if (!isOptFixed)
+            GlassButton(
+              variant: GlassButtonVariant.primary,
+              minHeight: 38,
+              loading: isInProgress,
+              onPressed: isInProgress ? null : submit,
+              child: Text(translate('OK')),
+            ),
+        ],
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+    });
+  }
 }
 
 Future<String?> changeDirectAccessPort(
@@ -642,13 +671,22 @@ Future<String?> changeDirectAccessPort(
 ) async {
   final controller = TextEditingController(text: currentPort);
   String? committed;
+  var isClosed = false;
   try {
     await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
       Future<void> submit() async {
+        if (isClosed) return;
         final newPort = controller.text.trim();
         await bind.mainSetOption(key: kOptionDirectAccessPort, value: newPort);
+        if (isClosed) return;
         committed = newPort;
-        close();
+        safeClose();
       }
 
       final theme = Theme.of(context);
@@ -660,7 +698,7 @@ Future<String?> changeDirectAccessPort(
           ),
           icon: Icons.settings_ethernet_rounded,
           tone: AppTone.brand,
-          onClose: close,
+          onClose: safeClose,
         ),
         contentBoxConstraints: const BoxConstraints(
           minWidth: 340,
@@ -682,20 +720,28 @@ Future<String?> changeDirectAccessPort(
             ),
           ),
           inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(_kPortInputRegex)),
+            TextInputFormatter.withFunction(
+              (oldValue, newValue) =>
+                  _kPortInputRegExp.hasMatch(newValue.text)
+                  ? newValue
+                  : oldValue,
+            ),
           ],
           onSubmitted: (_) => submit(),
         ).workaroundFreezeLinuxMint(),
         actions: [
-          dialogButton('Cancel', onPressed: close, isOutline: true),
+          dialogButton('Cancel', onPressed: safeClose, isOutline: true),
           dialogButton('OK', onPressed: submit),
         ],
         onSubmit: submit,
-        onCancel: close,
+        onCancel: safeClose,
       );
     });
   } finally {
-    controller.dispose();
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+    });
   }
   return committed;
 }
@@ -703,16 +749,25 @@ Future<String?> changeDirectAccessPort(
 Future<String?> changeAutoDisconnectTimeout(String old) async {
   final controller = TextEditingController(text: old);
   String? committed;
+  var isClosed = false;
   try {
     await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
       Future<void> submit() async {
+        if (isClosed) return;
         final newTimeout = controller.text.trim();
         await bind.mainSetOption(
           key: kOptionAutoDisconnectTimeout,
           value: newTimeout,
         );
+        if (isClosed) return;
         committed = newTimeout;
-        close();
+        safeClose();
       }
 
       final theme = Theme.of(context);
@@ -724,7 +779,7 @@ Future<String?> changeAutoDisconnectTimeout(String old) async {
           ),
           icon: Icons.timer_outlined,
           tone: AppTone.brand,
-          onClose: close,
+          onClose: safeClose,
         ),
         contentBoxConstraints: const BoxConstraints(
           minWidth: 340,
@@ -744,20 +799,28 @@ Future<String?> changeAutoDisconnectTimeout(String old) async {
             ),
           ),
           inputFormatters: [
-            FilteringTextInputFormatter.allow(RegExp(r'^$|^(0|[1-9]\d{0,3})$')),
+            TextInputFormatter.withFunction(
+              (oldValue, newValue) =>
+                  _kAutoDisconnectTimeoutRegExp.hasMatch(newValue.text)
+                  ? newValue
+                  : oldValue,
+            ),
           ],
           onSubmitted: (_) => submit(),
         ).workaroundFreezeLinuxMint(),
         actions: [
-          dialogButton('Cancel', onPressed: close, isOutline: true),
+          dialogButton('Cancel', onPressed: safeClose, isOutline: true),
           dialogButton('OK', onPressed: submit),
         ],
         onSubmit: submit,
-        onCancel: close,
+        onCancel: safeClose,
       );
     });
   } finally {
-    controller.dispose();
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+    });
   }
   return committed;
 }
@@ -1313,7 +1376,8 @@ void wrongPasswordDialog(
   final errText = rawText.isNotEmpty
       ? formatUserFriendlyError(rawText)
       : translate('Wrong Password');
-  final previousPassword = _lastSessionPassword[sessionId.toString()] ?? '';
+  final previousPassword =
+      _lastSessionPassword.remove(sessionId.toString()) ?? '';
   enterPasswordDialog(
     sessionId,
     dialogManager,
@@ -1382,7 +1446,10 @@ Future<void> _connectDialog(
   final errUsername = ''.obs;
   final errPassword = (initialPasswordError ?? '').obs;
   var submitting = false;
+  var submitted = false;
+  var isClosed = false;
   var rememberPassword = false;
+  final sessionKey = sessionId.toString();
   if (passwordController != null) {
     rememberPassword =
         await bind.sessionGetRemember(sessionId: sessionId) ?? false;
@@ -1392,28 +1459,35 @@ Future<void> _connectDialog(
     rememberAccount =
         await bind.sessionGetRemember(sessionId: sessionId) ?? false;
   }
-  if (osUsernameController != null) {
-    osUsernameController.addListener(() {
-      if (errUsername.value.isNotEmpty) {
-        errUsername.value = '';
-      }
-    });
+  void onOsUsernameChanged() {
+    if (!isClosed && errUsername.value.isNotEmpty) {
+      errUsername.value = '';
+    }
   }
-  passwordController?.addListener(() {
-    if (errPassword.value.isNotEmpty) errPassword.value = '';
-  });
+
+  void onPasswordChanged() {
+    if (!isClosed && errPassword.value.isNotEmpty) {
+      errPassword.value = '';
+    }
+  }
+
+  osUsernameController?.addListener(onOsUsernameChanged);
+  passwordController?.addListener(onPasswordChanged);
 
   dialogManager.dismissAll();
   try {
     await dialogManager.show((setState, close, context) {
       void cancel() {
+        if (isClosed) return;
+        isClosed = true;
         submitting = false;
+        _lastSessionPassword.remove(sessionKey);
         close();
         closeConnection();
       }
 
       void submit() {
-        if (submitting) return;
+        if (submitting || isClosed) return;
         if (osUsernameController != null &&
             osUsernameController.text.trim().isEmpty) {
           errUsername.value = translate('Empty Username');
@@ -1429,9 +1503,17 @@ Future<void> _connectDialog(
           return;
         }
         if (password.isNotEmpty) {
-          _lastSessionPassword[sessionId.toString()] = password;
+          if (!_lastSessionPassword.containsKey(sessionKey) &&
+              _lastSessionPassword.length >= 8) {
+            _lastSessionPassword.remove(_lastSessionPassword.keys.first);
+          }
+          _lastSessionPassword[sessionKey] = password;
+        } else {
+          _lastSessionPassword.remove(sessionKey);
         }
-        setState(() => submitting = true);
+        submitted = true;
+        isClosed = true;
+        submitting = true;
         if (rememberAccount) {
           bind.sessionPeerOption(
             sessionId: sessionId,
@@ -1454,7 +1536,10 @@ Future<void> _connectDialog(
         close();
         dialogManager.showLoading(
           translate('Logging in...'),
-          onCancel: closeConnection,
+          onCancel: () {
+            _lastSessionPassword.remove(sessionKey);
+            closeConnection();
+          },
         );
       }
 
@@ -1634,9 +1719,22 @@ Future<void> _connectDialog(
       );
     });
   } finally {
-    osUsernameController?.dispose();
-    osPasswordController?.dispose();
-    passwordController?.dispose();
+    isClosed = true;
+    if (!submitted) {
+      _lastSessionPassword.remove(sessionKey);
+    }
+    osUsernameController?.removeListener(onOsUsernameChanged);
+    passwordController?.removeListener(onPasswordChanged);
+    _disposeAfterFrame(() {
+      osUsernameController?.clear();
+      osPasswordController?.clear();
+      passwordController?.clear();
+      osUsernameController?.dispose();
+      osPasswordController?.dispose();
+      passwordController?.dispose();
+      errUsername.close();
+      errPassword.close();
+    });
   }
 }
 
@@ -1956,13 +2054,15 @@ Future<void> showRequestElevationDialog(
       );
     }, tag: '$sessionId-request-elevation');
   } finally {
-    pwdController.clear();
-    userController.clear();
-    userController.dispose();
-    pwdController.dispose();
-    groupValue.close();
-    errUser.close();
-    errPwd.close();
+    _disposeAfterFrame(() {
+      pwdController.clear();
+      userController.clear();
+      userController.dispose();
+      pwdController.dispose();
+      groupValue.close();
+      errUser.close();
+      errPwd.close();
+    });
   }
 }
 
@@ -2042,6 +2142,7 @@ void showWaitAcceptDialog(
   String text,
   OverlayDialogManager dialogManager,
 ) {
+  _lastSessionPassword.remove(sessionId.toString());
   dialogManager.dismissAll();
   dialogManager.show((setState, close, context) {
     void onCancel() {
@@ -2123,81 +2224,93 @@ Future<void> showSetOSPassword(
   if (osPassword != null && osPassword.isNotEmpty) {
     controller.text = osPassword;
   }
-  dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void closeWithCallback([dynamic _]) {
-      if (isClosed) return;
-      isClosed = true;
-      controller.clear();
-      controller.dispose();
-      close();
-      closeCallback?.call();
-    }
+  var isClosed = false;
+  try {
+    await dialogManager.show((setState, close, context) {
+      void closeWithCallback([dynamic _]) {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+        closeCallback?.call();
+      }
 
-    void submit() {
-      final text = controller.text.trim();
-      if (text.isNotEmpty || !hasSavedPassword) {
+      void submit() {
+        if (isClosed) return;
+        final text = controller.text.trim();
+        if (text.isNotEmpty || !hasSavedPassword) {
+          bind.sessionPeerOption(
+            sessionId: sessionId,
+            name: 'os-password',
+            value: text,
+          );
+        }
         bind.sessionPeerOption(
           sessionId: sessionId,
-          name: 'os-password',
-          value: text,
+          name: 'auto-login',
+          value: autoLogin ? 'Y' : '',
         );
+        if (text.isNotEmpty && login) {
+          bind.sessionInputOsPassword(sessionId: sessionId, value: text);
+        } else if (text.isEmpty && hasSavedPassword && login) {
+          bind.sessionInputStoredOsPassword(sessionId: sessionId);
+        }
+        closeWithCallback();
       }
-      bind.sessionPeerOption(
-        sessionId: sessionId,
-        name: 'auto-login',
-        value: autoLogin ? 'Y' : '',
-      );
-      if (text.isNotEmpty && login) {
-        bind.sessionInputOsPassword(sessionId: sessionId, value: text);
-      } else if (text.isEmpty && hasSavedPassword && login) {
-        bind.sessionInputStoredOsPassword(sessionId: sessionId);
-      }
-      closeWithCallback();
-    }
 
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.lock,
-        title: translate('OS Password'),
-        subtitle: translate('Configure remote OS login password'),
-        onClose: closeWithCallback,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 340, maxWidth: 420),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          PasswordWidget(
-            controller: controller,
-            hintText: hasSavedPassword ? 'Unchanged' : null,
-            onSubmitted: (_) => submit(),
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.lock,
+          title: translate('OS Password'),
+          subtitle: translate('Configure remote OS login password'),
+          onClose: closeWithCallback,
+        ),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 420,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            PasswordWidget(
+              controller: controller,
+              hintText: hasSavedPassword ? 'Unchanged' : null,
+              onSubmitted: (_) => submit(),
+            ),
+            const SizedBox(height: 8),
+            _DialogSwitchRow(
+              label: translate('Auto Login'),
+              value: autoLogin,
+              onChanged: (v) {
+                if (!isClosed) setState(() => autoLogin = v);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          dialogButton(
+            'Cancel',
+            icon: const Icon(CamelliaIcons.close),
+            onPressed: closeWithCallback,
+            isOutline: true,
           ),
-          const SizedBox(height: 8),
-          _DialogSwitchRow(
-            label: translate('Auto Login'),
-            value: autoLogin,
-            onChanged: (v) => setState(() => autoLogin = v),
+          dialogButton(
+            'OK',
+            icon: const Icon(CamelliaIcons.check),
+            onPressed: submit,
           ),
         ],
-      ),
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: const Icon(CamelliaIcons.close),
-          onPressed: closeWithCallback,
-          isOutline: true,
-        ),
-        dialogButton(
-          'OK',
-          icon: const Icon(CamelliaIcons.check),
-          onPressed: submit,
-        ),
-      ],
-      onSubmit: submit,
-      onCancel: closeWithCallback,
-    );
-  });
+        onSubmit: submit,
+        onCancel: closeWithCallback,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.clear();
+      controller.dispose();
+    });
+  }
 }
 
 Future<void> showSetOSAccount(
@@ -2211,78 +2324,88 @@ Future<void> showSetOSAccount(
       '';
   final hasSavedPassword = bind.sessionHasOsPassword(sessionId: sessionId);
   usernameController.text = username;
-  dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
+  var isClosed = false;
+  try {
+    await dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
+      void submit() {
+        if (isClosed) return;
+        final user = usernameController.text.trim();
+        final password = passwdController.text.trim();
+        bind.sessionPeerOption(
+          sessionId: sessionId,
+          name: 'os-username',
+          value: user,
+        );
+        if (password.isNotEmpty || !hasSavedPassword) {
+          bind.sessionPeerOption(
+            sessionId: sessionId,
+            name: 'os-password',
+            value: password,
+          );
+        }
+        safeClose();
+      }
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: Icons.badge_outlined,
+          title: translate('OS Account'),
+          subtitle: translate('os_account_desk_tip'),
+          onClose: safeClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 360,
+          maxWidth: 420,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DialogTextField(
+              title: translate(DialogTextField.kUsernameTitle),
+              controller: usernameController,
+              prefixIcon: DialogTextField.kUsernameIcon,
+            ),
+            PasswordWidget(
+              controller: passwdController,
+              autoFocus: false,
+              hintText: hasSavedPassword ? 'Unchanged' : null,
+              onSubmitted: (_) => submit(),
+            ),
+          ],
+        ),
+        actions: [
+          dialogButton(
+            'Cancel',
+            icon: const Icon(CamelliaIcons.close),
+            onPressed: safeClose,
+            isOutline: true,
+          ),
+          dialogButton(
+            'OK',
+            icon: const Icon(CamelliaIcons.check),
+            onPressed: submit,
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
       usernameController.clear();
       passwdController.clear();
       usernameController.dispose();
       passwdController.dispose();
-      close();
-    }
-
-    void submit() {
-      final user = usernameController.text.trim();
-      final password = passwdController.text.trim();
-      bind.sessionPeerOption(
-        sessionId: sessionId,
-        name: 'os-username',
-        value: user,
-      );
-      if (password.isNotEmpty || !hasSavedPassword) {
-        bind.sessionPeerOption(
-          sessionId: sessionId,
-          name: 'os-password',
-          value: password,
-        );
-      }
-      safeClose();
-    }
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: Icons.badge_outlined,
-        title: translate('OS Account'),
-        subtitle: translate('os_account_desk_tip'),
-        onClose: safeClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 360, maxWidth: 420),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          DialogTextField(
-            title: translate(DialogTextField.kUsernameTitle),
-            controller: usernameController,
-            prefixIcon: DialogTextField.kUsernameIcon,
-          ),
-          PasswordWidget(
-            controller: passwdController,
-            autoFocus: false,
-            hintText: hasSavedPassword ? 'Unchanged' : null,
-            onSubmitted: (_) => submit(),
-          ),
-        ],
-      ),
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: const Icon(CamelliaIcons.close),
-          onPressed: safeClose,
-          isOutline: true,
-        ),
-        dialogButton(
-          'OK',
-          icon: const Icon(CamelliaIcons.check),
-          onPressed: submit,
-        ),
-      ],
-      onSubmit: submit,
-      onCancel: safeClose,
-    );
-  });
+    });
+  }
 }
 
 Widget buildNoteTextField({
@@ -2361,41 +2484,51 @@ Future<void> showAuditDialog(FFI ffi) async {
   final controller = TextEditingController(
     text: bind.sessionGetLastAuditNote(sessionId: ffi.sessionId),
   );
-  ffi.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
+  var isClosed = false;
+  try {
+    await ffi.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
+      void submit() {
+        if (isClosed) return;
+        final text = controller.text;
+        bind.sessionSendNote(sessionId: ffi.sessionId, note: text);
+        safeClose();
+      }
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: Icons.edit_note_rounded,
+          title: translate('Note'),
+          subtitle: translate('Record an audit note for this session'),
+          onClose: safeClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 420,
+        ),
+        content: SizedBox(
+          width: 360,
+          child: buildNoteTextField(controller: controller, onEscape: safeClose),
+        ),
+        actions: [
+          dialogButton('Cancel', onPressed: safeClose, isOutline: true),
+          dialogButton('OK', onPressed: submit),
+        ],
+        onSubmit: submit,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
       controller.dispose();
-      close();
-    }
-
-    void submit() {
-      final text = controller.text;
-      bind.sessionSendNote(sessionId: ffi.sessionId, note: text);
-      safeClose();
-    }
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: Icons.edit_note_rounded,
-        title: translate('Note'),
-        subtitle: translate('Record an audit note for this session'),
-        onClose: safeClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 340, maxWidth: 420),
-      content: SizedBox(
-        width: 360,
-        child: buildNoteTextField(controller: controller, onEscape: safeClose),
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        dialogButton('OK', onPressed: submit),
-      ],
-      onSubmit: submit,
-      onCancel: safeClose,
-    );
-  });
+    });
+  }
 }
 
 bool allowAskForNoteAtEndOfConnection(FFI? ffi, bool closedByControlling) {
@@ -2499,147 +2632,157 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
   );
   final isOptFixed = isOptionFixed(kOptionAllowAskForNoteAtEndOfConnection);
   bool isInProgress = false;
+  var isClosed = false;
 
-  return await ffi.dialogManager.show<bool>((setState, close, context) {
-    var isClosed = false;
-    void safeClose(bool? result) {
-      if (isClosed) return;
-      isClosed = true;
-      controller.dispose();
-      close(result);
-    }
+  try {
+    return await ffi.dialogManager.show<bool>((setState, close, context) {
+      void safeClose(bool? result) {
+        if (isClosed) return;
+        isClosed = true;
+        close(result);
+      }
 
-    void cancel() {
-      safeClose(true);
-    }
+      void cancel() {
+        safeClose(true);
+      }
 
-    Future<bool> saveNote() async {
-      if (isInProgress) return false;
-      setState(() {
-        isInProgress = true;
-      });
-      final noteText = controller.text;
-      if (noteText.isNotEmpty) {
-        bool updateSuccess = false;
-        try {
-          updateSuccess =
-              await updateAuditNoteByGuid(
-                bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
-                noteText,
-              ).timeout(
-                const Duration(seconds: 6),
-                onTimeout: () {
-                  debugPrint('updateAuditNoteByGuid timeout after 6s');
-                  return false;
-                },
-              );
-        } catch (e) {
-          debugPrint('Error updating audit note: $e');
-          updateSuccess = false;
+      Future<bool> saveNote() async {
+        if (isInProgress || isClosed) return false;
+        setState(() {
+          isInProgress = true;
+        });
+        final noteText = controller.text;
+        if (noteText.isNotEmpty) {
+          bool updateSuccess = false;
+          try {
+            updateSuccess =
+                await updateAuditNoteByGuid(
+                  bind.sessionGetAuditGuid(sessionId: ffi.sessionId),
+                  noteText,
+                ).timeout(
+                  const Duration(seconds: 6),
+                  onTimeout: () {
+                    debugPrint('updateAuditNoteByGuid timeout after 6s');
+                    return false;
+                  },
+                );
+          } catch (e) {
+            debugPrint('Error updating audit note: $e');
+            updateSuccess = false;
+          }
+          if (isClosed) return false;
+          if (!updateSuccess) {
+            setState(() {
+              isInProgress = false;
+            });
+            showToast(translate('Failed to update audit note'));
+            return false;
+          }
         }
-        if (!updateSuccess) {
-          setState(() {
-            isInProgress = false;
-          });
-          showToast(translate('Failed to update audit note'));
-          return false;
-        }
-      }
-      if (!isOptFixed) {
-        await mainSetLocalBoolOption(
-          kOptionAllowAskForNoteAtEndOfConnection,
-          askForNote,
-        );
-      }
-      return true;
-    }
-
-    Future<void> submit() async {
-      if (await saveNote()) {
-        safeClose(false);
-      }
-    }
-
-    final buttons = <Widget>[
-      if (closedByControlling)
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: isInProgress ? null : cancel,
-          child: Text(translate('Cancel')),
-        ),
-      if (type == 'relay-hint' || type == 'relay-hint2')
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: () async {
-            if (await saveNote()) {
-              safeClose(true);
-              ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
-            }
-          },
-          child: Text(translate('Retry')),
-        ),
-      if (type == 'relay-hint2')
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: () async {
-            if (await saveNote()) {
-              safeClose(true);
-              ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
-            }
-          },
-          child: Text(translate('Connect via relay')),
-        ),
-      GlassButton(
-        variant: GlassButtonVariant.primary,
-        minHeight: 38,
-        loading: isInProgress,
-        onPressed: isInProgress ? null : submit,
-        child: Text(translate('OK')),
-      ),
-    ];
-
-    final Widget headerSummary = closedByControlling
-        ? SelectionArea(
-            child: msgboxContent(
-              'info',
-              'Close',
-              'Are you sure to close the connection?',
-            ),
-          )
-        : SelectionArea(
-            child: msgboxContent(type, title ?? '', text ?? ''),
+        if (!isOptFixed) {
+          await mainSetLocalBoolOption(
+            kOptionAllowAskForNoteAtEndOfConnection,
+            askForNote,
           );
+        }
+        if (isClosed) return false;
+        return true;
+      }
 
-    return CustomAlertDialog(
-      title: null,
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            headerSummary,
-            const SizedBox(height: 12),
-            buildNoteTextField(controller: controller, onEscape: cancel),
-            if (!isOptFixed) ...[
-              const SizedBox(height: 10),
-              _DialogSwitchRow(
-                label: translate('note-at-conn-end-tip'),
-                value: askForNote,
-                onChanged: (v) => setState(() => askForNote = v),
-              ),
-            ],
-          ],
+      Future<void> submit() async {
+        if (await saveNote()) {
+          safeClose(false);
+        }
+      }
+
+      final buttons = <Widget>[
+        if (closedByControlling)
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: isInProgress ? null : cancel,
+            child: Text(translate('Cancel')),
+          ),
+        if (type == 'relay-hint' || type == 'relay-hint2')
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: () async {
+              if (await saveNote()) {
+                safeClose(true);
+                ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
+              }
+            },
+            child: Text(translate('Retry')),
+          ),
+        if (type == 'relay-hint2')
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: () async {
+              if (await saveNote()) {
+                safeClose(true);
+                ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
+              }
+            },
+            child: Text(translate('Connect via relay')),
+          ),
+        GlassButton(
+          variant: GlassButtonVariant.primary,
+          minHeight: 38,
+          loading: isInProgress,
+          onPressed: isInProgress ? null : submit,
+          child: Text(translate('OK')),
         ),
-      ),
-      actions: buttons,
-      onSubmit: submit,
-      onCancel: cancel,
-    );
-  });
+      ];
+
+      final Widget headerSummary = closedByControlling
+          ? SelectionArea(
+              child: msgboxContent(
+                'info',
+                'Close',
+                'Are you sure to close the connection?',
+              ),
+            )
+          : SelectionArea(
+              child: msgboxContent(type, title ?? '', text ?? ''),
+            );
+
+      return CustomAlertDialog(
+        title: null,
+        content: SizedBox(
+          width: 380,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              headerSummary,
+              const SizedBox(height: 12),
+              buildNoteTextField(controller: controller, onEscape: cancel),
+              if (!isOptFixed) ...[
+                const SizedBox(height: 10),
+                _DialogSwitchRow(
+                  label: translate('note-at-conn-end-tip'),
+                  value: askForNote,
+                  onChanged: (v) {
+                    if (!isClosed) setState(() => askForNote = v);
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: buttons,
+        onSubmit: submit,
+        onCancel: cancel,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+    });
+  }
 }
 
 void showConfirmSwitchSidesDialog(
@@ -2782,56 +2925,69 @@ void deleteConfirmDialog(
   String title,
 ) async {
   bool isInProgress = false;
-  gFFI.dialogManager.show((setState, close, context) {
-    Future<void> submit() async {
-      if (isInProgress) return;
-      setState(() {
-        isInProgress = true;
-      });
-      try {
-        final res = await onSubmit();
-        if (res == false) {
+  var isClosed = false;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
+      Future<void> submit() async {
+        if (isInProgress || isClosed) return;
+        setState(() {
+          isInProgress = true;
+        });
+        try {
+          final res = await onSubmit();
+          if (isClosed) return;
+          if (res == false) {
+            setState(() {
+              isInProgress = false;
+            });
+            return;
+          }
+          safeClose();
+        } catch (e) {
+          debugPrint('deleteConfirmDialog error: $e');
+          showToast(translate('Failed'));
+          if (isClosed) return;
           setState(() {
             isInProgress = false;
           });
-          return;
         }
-        close();
-      } catch (e) {
-        debugPrint('deleteConfirmDialog error: $e');
-        showToast(translate('Failed'));
-        setState(() {
-          isInProgress = false;
-        });
       }
-    }
 
-    return CustomAlertDialog(
-      title: ModernDialogHeader.error(
-        title: title,
-        subtitle: translate('This action cannot be undone.'),
-        onClose: close,
-      ),
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: const Icon(CamelliaIcons.close),
-          onPressed: close,
-          isOutline: true,
+      return CustomAlertDialog(
+        title: ModernDialogHeader.error(
+          title: title,
+          subtitle: translate('This action cannot be undone.'),
+          onClose: safeClose,
         ),
-        GlassButton(
-          variant: GlassButtonVariant.danger,
-          minHeight: 38,
-          loading: isInProgress,
-          icon: const Icon(CamelliaIcons.trash, size: 16),
-          onPressed: isInProgress ? null : submit,
-          child: Text(translate('OK')),
-        ),
-      ],
-      onSubmit: submit,
-      onCancel: close,
-    );
-  });
+        actions: [
+          dialogButton(
+            'Cancel',
+            icon: const Icon(CamelliaIcons.close),
+            onPressed: safeClose,
+            isOutline: true,
+          ),
+          GlassButton(
+            variant: GlassButtonVariant.danger,
+            minHeight: 38,
+            loading: isInProgress,
+            icon: const Icon(CamelliaIcons.trash, size: 16),
+            onPressed: isInProgress ? null : submit,
+            child: Text(translate('OK')),
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+  }
 }
 
 void editAbTagDialog(
@@ -2839,28 +2995,37 @@ void editAbTagDialog(
   FutureOr<dynamic> Function(List<dynamic>) onSubmit,
 ) {
   var isInProgress = false;
+  var isClosed = false;
 
   final tags = List.of(gFFI.abModel.currentAbTags);
   final selectedTag = currentTags.obs;
 
   gFFI.dialogManager.show((setState, close, context) {
+    void safeClose() {
+      if (isClosed) return;
+      isClosed = true;
+      close();
+    }
+
     Future<void> submit() async {
-      if (isInProgress) return;
+      if (isInProgress || isClosed) return;
       setState(() {
         isInProgress = true;
       });
       try {
         final res = await onSubmit(selectedTag);
+        if (isClosed) return;
         if (res == false) {
           setState(() {
             isInProgress = false;
           });
           return;
         }
-        close();
+        safeClose();
       } catch (e) {
         debugPrint('editAbTagDialog error: $e');
         showToast(translate('Failed'));
+        if (isClosed) return;
         setState(() {
           isInProgress = false;
         });
@@ -2872,7 +3037,7 @@ void editAbTagDialog(
         title: translate('Edit Tag'),
         icon: Icons.label_outline_rounded,
         tone: AppTone.brand,
-        onClose: close,
+        onClose: safeClose,
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2887,6 +3052,7 @@ void editAbTagDialog(
                       name: e,
                       tags: selectedTag,
                       onTap: () {
+                        if (isClosed) return;
                         if (selectedTag.contains(e)) {
                           selectedTag.remove(e);
                         } else {
@@ -2902,7 +3068,7 @@ void editAbTagDialog(
         ],
       ),
       actions: [
-        dialogButton('Cancel', onPressed: close, isOutline: true),
+        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
         GlassButton(
           variant: GlassButtonVariant.primary,
           minHeight: 38,
@@ -2912,32 +3078,37 @@ void editAbTagDialog(
         ),
       ],
       onSubmit: submit,
-      onCancel: close,
+      onCancel: safeClose,
     );
+  }).whenComplete(() {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      selectedTag.close();
+    });
   });
 }
 
 void editAbPeerNoteDialog(String id) {
   var isInProgress = false;
+  var isClosed = false;
   final currentNote = gFFI.abModel.getPeerNote(id);
   final controller = TextEditingController(text: currentNote);
 
   gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
     void safeClose() {
       if (isClosed) return;
       isClosed = true;
-      controller.dispose();
       close();
     }
 
     Future<void> submit() async {
-      if (isInProgress) return;
+      if (isInProgress || isClosed) return;
       setState(() {
         isInProgress = true;
       });
       try {
         final ok = await gFFI.abModel.changeNote(id: id, note: controller.text);
+        if (isClosed) return;
         if (ok) {
           showToast(translate('Successful'));
           safeClose();
@@ -2950,6 +3121,7 @@ void editAbPeerNoteDialog(String id) {
       } catch (e) {
         debugPrint('editAbPeerNoteDialog error: $e');
         showToast(translate('Failed'));
+        if (isClosed) return;
         setState(() {
           isInProgress = false;
         });
@@ -2987,6 +3159,11 @@ void editAbPeerNoteDialog(String id) {
       onSubmit: submit,
       onCancel: safeClose,
     );
+  }).whenComplete(() {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+    });
   });
 }
 
@@ -2999,86 +3176,99 @@ void renameDialog({
   final RxBool isInProgress = false.obs;
   final controller = TextEditingController(text: oldName);
   String? validationError;
-  gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
-      controller.dispose();
-      close();
-    }
-
-    Future<void> submit() async {
-      if (isInProgress.value) return;
-      final String text = controller.text.trim();
-      if (validator != null) {
-        final err = validator(text);
-        if (err != null) {
-          setState(() => validationError = err);
-          return;
-        }
+  var isClosed = false;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
       }
-      isInProgress.value = true;
-      try {
-        final res = await onSubmit(text);
-        if (res == false) {
-          isInProgress.value = false;
-          return;
-        }
-        safeClose();
-      } catch (e) {
-        debugPrint('renameDialog error: $e');
-        showToast(translate('Failed'));
-        isInProgress.value = false;
-      }
-    }
 
-    void cancel() {
-      onCancel?.call();
-      safeClose();
-    }
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.edit,
-        title: translate('Rename'),
-        onClose: cancel,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 340, maxWidth: 420),
-      content: GlassInput(
-        controller: controller,
-        autofocus: true,
-        labelText: translate('Name'),
-        errorText: validationError,
-        onChanged: (_) {
-          if (validationError != null) {
-            setState(() => validationError = null);
+      Future<void> submit() async {
+        if (isInProgress.value || isClosed) return;
+        final String text = controller.text.trim();
+        if (validator != null) {
+          final err = validator(text);
+          if (err != null) {
+            setState(() => validationError = err);
+            return;
           }
-        },
-        onSubmitted: (_) => submit(),
-      ).workaroundFreezeLinuxMint(),
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: const Icon(CamelliaIcons.close),
-          onPressed: cancel,
-          isOutline: true,
+        }
+        isInProgress.value = true;
+        try {
+          final res = await onSubmit(text);
+          if (isClosed) return;
+          if (res == false) {
+            isInProgress.value = false;
+            return;
+          }
+          safeClose();
+        } catch (e) {
+          debugPrint('renameDialog error: $e');
+          showToast(translate('Failed'));
+          if (!isClosed) {
+            isInProgress.value = false;
+          }
+        }
+      }
+
+      void cancel() {
+        onCancel?.call();
+        safeClose();
+      }
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.edit,
+          title: translate('Rename'),
+          onClose: cancel,
         ),
-        Obx(
-          () => GlassButton(
-            variant: GlassButtonVariant.primary,
-            minHeight: 38,
-            loading: isInProgress.value,
-            icon: const Icon(CamelliaIcons.check, size: 16),
-            onPressed: isInProgress.value ? null : submit,
-            child: Text(translate('OK')),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 420,
+        ),
+        content: GlassInput(
+          controller: controller,
+          autofocus: true,
+          labelText: translate('Name'),
+          errorText: validationError,
+          onChanged: (_) {
+            if (!isClosed && validationError != null) {
+              setState(() => validationError = null);
+            }
+          },
+          onSubmitted: (_) => submit(),
+        ).workaroundFreezeLinuxMint(),
+        actions: [
+          dialogButton(
+            'Cancel',
+            icon: const Icon(CamelliaIcons.close),
+            onPressed: cancel,
+            isOutline: true,
           ),
-        ),
-      ],
-      onSubmit: submit,
-      onCancel: cancel,
-    );
-  });
+          Obx(
+            () => GlassButton(
+              variant: GlassButtonVariant.primary,
+              minHeight: 38,
+              loading: isInProgress.value,
+              icon: const Icon(CamelliaIcons.check, size: 16),
+              onPressed: isInProgress.value ? null : submit,
+              child: Text(translate('OK')),
+            ),
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: cancel,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.dispose();
+      isInProgress.close();
+    });
+  }
 }
 
 void changeBot({Function()? callback}) async {
@@ -3089,85 +3279,96 @@ void changeBot({Function()? callback}) async {
   }
   String errorText = '';
   bool loading = false;
+  var isClosed = false;
   final controller = TextEditingController();
-  gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+      }
+
+      Future<void> onVerify() async {
+        if (isClosed) return;
+        final token = controller.text.trim();
+        if (token.isEmpty || loading) return;
+        loading = true;
+        errorText = '';
+        setState(() {});
+        final error = await bind.mainVerifyBot(token: token);
+        if (isClosed) return;
+        if (error.isEmpty) {
+          callback?.call();
+          safeClose();
+        } else {
+          errorText = formatUserFriendlyError(error);
+          loading = false;
+          setState(() {});
+        }
+      }
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          title: translate('Telegram bot'),
+          icon: Icons.send_rounded,
+          tone: AppTone.brand,
+          onClose: safeClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 360,
+          maxWidth: 440,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SelectableText(
+              translate('enable-bot-desc'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 12),
+            GlassInput(
+              autofocus: true,
+              controller: controller,
+              labelText: translate('Token'),
+              hintText: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+              prefixIcon: Icons.vpn_key_outlined,
+              tabularNums: true,
+              errorText: errorText.isEmpty ? null : errorText,
+              onChanged: (_) {
+                if (!isClosed && errorText.isNotEmpty) {
+                  setState(() => errorText = '');
+                }
+              },
+              onSubmitted: (_) => onVerify(),
+            ).workaroundFreezeLinuxMint(),
+          ],
+        ),
+        actions: [
+          dialogButton('Cancel', onPressed: safeClose, isOutline: true),
+          GlassButton(
+            variant: GlassButtonVariant.primary,
+            minHeight: 38,
+            loading: loading,
+            onPressed: loading ? null : onVerify,
+            child: Text(translate('OK')),
+          ),
+        ],
+        onSubmit: loading ? null : onVerify,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
       controller.clear();
       controller.dispose();
-      close();
-    }
-
-    Future<void> onVerify() async {
-      final token = controller.text.trim();
-      if (token.isEmpty || loading) return;
-      loading = true;
-      errorText = '';
-      setState(() {});
-      final error = await bind.mainVerifyBot(token: token);
-      if (error.isEmpty) {
-        callback?.call();
-        safeClose();
-      } else {
-        errorText = formatUserFriendlyError(error);
-        loading = false;
-        if (!isClosed) setState(() {});
-      }
-    }
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        title: translate('Telegram bot'),
-        icon: Icons.send_rounded,
-        tone: AppTone.brand,
-        onClose: safeClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 360, maxWidth: 440),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SelectableText(
-            translate('enable-bot-desc'),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 12),
-          GlassInput(
-            autofocus: true,
-            controller: controller,
-            labelText: translate('Token'),
-            hintText: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
-            prefixIcon: Icons.vpn_key_outlined,
-            tabularNums: true,
-            errorText: errorText.isEmpty ? null : errorText,
-            onChanged: (_) {
-              if (errorText.isNotEmpty) {
-                setState(() => errorText = '');
-              }
-            },
-            onSubmitted: (_) => onVerify(),
-          ).workaroundFreezeLinuxMint(),
-        ],
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        GlassButton(
-          variant: GlassButtonVariant.primary,
-          minHeight: 38,
-          loading: loading,
-          onPressed: loading ? null : onVerify,
-          child: Text(translate('OK')),
-        ),
-      ],
-      onSubmit: loading ? null : onVerify,
-      onCancel: safeClose,
-    );
-  });
+    });
+  }
 }
 
 void change2fa({Function()? callback}) async {
@@ -3184,134 +3385,151 @@ void change2fa({Function()? callback}) async {
   final secretRegex = RegExp(r'secret=([^&]+)');
   final secret = secretRegex.firstMatch(new2fa)?.group(1) ?? '';
   String? errorText;
+  var isClosed = false;
   final controller = TextEditingController();
-  gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void safeClose() {
-      if (isClosed) return;
-      isClosed = true;
-      controller.clear();
-      controller.dispose();
-      close();
-    }
-
-    Future<void> onVerify() async {
-      if (await bind.mainVerify2Fa(code: controller.text.trim())) {
-        callback?.call();
-        safeClose();
-      } else {
-        setState(() {
-          errorText = translate('wrong-2fa-code');
-        });
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
       }
-    }
 
-    final codeField = Dialog2FaField(
-      controller: controller,
-      errorText: errorText,
-      onChanged: () => setState(() => errorText = null),
-      title: translate('Verification code'),
-      readyCallback: onVerify,
-    );
+      Future<void> onVerify() async {
+        if (isClosed) return;
+        final ok = await bind.mainVerify2Fa(code: controller.text.trim());
+        if (isClosed) return;
+        if (ok) {
+          callback?.call();
+          safeClose();
+        } else {
+          setState(() {
+            errorText = translate('wrong-2fa-code');
+          });
+        }
+      }
 
-    VoidCallback? getOnSubmit() => codeField.isReady ? onVerify : null;
+      final codeField = Dialog2FaField(
+        controller: controller,
+        errorText: errorText,
+        onChanged: () {
+          if (!isClosed) setState(() => errorText = null);
+        },
+        title: translate('Verification code'),
+        readyCallback: onVerify,
+      );
 
-    final theme = Theme.of(context);
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.shield,
-        title: translate('enable-2fa-title'),
-        onClose: safeClose,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 360, maxWidth: 440),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SelectableText(
-              translate('enable-2fa-desc'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                height: 1.4,
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(CamelliaRadius.surface),
-              border: Border.all(
-                color: AppVisual.tokens(context).border,
-                width: 0.85,
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: SizedBox(
-                width: 156,
-                height: 156,
-                child: QrImageView(
-                  backgroundColor: Colors.white,
-                  data: new2fa,
-                  version: QrVersions.auto,
-                  size: 156,
-                  gapless: false,
+      VoidCallback? getOnSubmit() => codeField.isReady ? onVerify : null;
+
+      final theme = Theme.of(context);
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.shield,
+          title: translate('enable-2fa-title'),
+          onClose: safeClose,
+        ),
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 360,
+          maxWidth: 440,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                translate('enable-2fa-desc'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.4,
                 ),
               ),
             ),
-          ),
-          if (secret.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            GlassSurface(
-              layer: CamelliaGlassLayer.floating,
-              showShadow: false,
-              enableBlur: false,
-              strokeWidth: 0.85,
-              borderRadius: BorderRadius.circular(CamelliaRadius.control),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: SelectableText(
-                      secret,
-                      style: CamelliaTypography.tabular(
-                        theme.textTheme.labelMedium?.copyWith(
-                          fontFamily: 'monospace',
+            const SizedBox(height: 14),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(CamelliaRadius.surface),
+                border: Border.all(
+                  color: AppVisual.tokens(context).border,
+                  width: 0.85,
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: SizedBox(
+                  width: 156,
+                  height: 156,
+                  child: QrImageView(
+                    backgroundColor: Colors.white,
+                    data: new2fa,
+                    version: QrVersions.auto,
+                    size: 156,
+                    gapless: false,
+                  ),
+                ),
+              ),
+            ),
+            if (secret.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              GlassSurface(
+                layer: CamelliaGlassLayer.floating,
+                showShadow: false,
+                enableBlur: false,
+                strokeWidth: 0.85,
+                borderRadius: BorderRadius.circular(CamelliaRadius.control),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: SelectableText(
+                        secret,
+                        style: CamelliaTypography.tabular(
+                          theme.textTheme.labelMedium?.copyWith(
+                            fontFamily: 'monospace',
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  GlassIconButton(
-                    icon: CamelliaIcons.copy,
-                    size: 28,
-                    iconSize: 14,
-                    tooltip: translate('Copy'),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: secret));
-                      showToast(translate('Copied'));
-                    },
-                  ),
-                ],
+                    const SizedBox(width: 6),
+                    GlassIconButton(
+                      icon: CamelliaIcons.copy,
+                      size: 28,
+                      iconSize: 14,
+                      tooltip: translate('Copy'),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: secret));
+                        showToast(translate('Copied'));
+                      },
+                    ),
+                  ],
+                ),
               ),
-            ),
+            ],
+            const SizedBox(height: 12),
+            codeField,
           ],
-          const SizedBox(height: 12),
-          codeField,
+        ),
+        actions: [
+          dialogButton('Cancel', onPressed: safeClose, isOutline: true),
+          dialogButton('OK', onPressed: getOnSubmit()),
         ],
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: safeClose, isOutline: true),
-        dialogButton('OK', onPressed: getOnSubmit()),
-      ],
-      onSubmit: getOnSubmit(),
-      onCancel: safeClose,
-    );
-  });
+        onSubmit: getOnSubmit(),
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.clear();
+      controller.dispose();
+    });
+  }
 }
 
 void enter2FaDialog(
@@ -3319,6 +3537,7 @@ void enter2FaDialog(
   OverlayDialogManager dialogManager, {
   String? errorText,
 }) async {
+  _lastSessionPassword.remove(sessionId.toString());
   final controller = TextEditingController();
   final RxBool submitReady = false.obs;
   final RxBool trustThisDevice = false.obs;
@@ -3327,91 +3546,109 @@ void enter2FaDialog(
               ? ''
               : formatUserFriendlyError(errorText))
           .obs;
+  var isClosed = false;
 
   dialogManager.dismissAll();
-  dialogManager.show((setState, close, context) {
-    var isClosed = false;
-    void cancel() {
-      if (isClosed) return;
-      isClosed = true;
-      controller.dispose();
-      close();
-      closeConnection();
-    }
+  try {
+    await dialogManager.show((setState, close, context) {
+      void cancel() {
+        if (isClosed) return;
+        isClosed = true;
+        close();
+        closeConnection();
+      }
 
-    void submit() {
-      if (isClosed || !submitReady.value) return;
-      isClosed = true;
-      final code = controller.text.trim();
-      controller.dispose();
-      gFFI.send2FA(sessionId, code, trustThisDevice.value);
-      close();
-      dialogManager.showLoading(
-        translate('Logging in...'),
-        onCancel: closeConnection,
+      void submit() {
+        if (isClosed || !submitReady.value) return;
+        isClosed = true;
+        final code = controller.text.trim();
+        gFFI.send2FA(sessionId, code, trustThisDevice.value);
+        close();
+        dialogManager.showLoading(
+          translate('Logging in...'),
+          onCancel: closeConnection,
+        );
+      }
+
+      late Dialog2FaField codeField;
+      codeField = Dialog2FaField(
+        controller: controller,
+        title: translate('Verification code'),
+        errorText: null,
+        readyCallback: submit,
+        onChanged: () {
+          if (isClosed) return;
+          if (activeError.value.isNotEmpty) {
+            activeError.value = '';
+          }
+          submitReady.value = codeField.isReady;
+        },
       );
-    }
 
-    late Dialog2FaField codeField;
-    codeField = Dialog2FaField(
-      controller: controller,
-      title: translate('Verification code'),
-      errorText: null,
-      readyCallback: submit,
-      onChanged: () {
-        if (activeError.value.isNotEmpty) {
-          activeError.value = '';
-        }
-        submitReady.value = codeField.isReady;
-      },
-    );
-
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.shield,
-        title: translate('enter-2fa-title'),
-        subtitle: translate(
-          'Enter the 6-digit verification code from your authenticator',
-        ),
-        tone: activeError.value.isNotEmpty ? AppTone.danger : AppTone.brand,
-        onClose: cancel,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 340, maxWidth: 420),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Obx(
-            () => activeError.value.isEmpty
-                ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _DialogInlineAlert(message: activeError.value),
-                  ),
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.shield,
+          title: translate('enter-2fa-title'),
+          subtitle: translate(
+            'Enter the 6-digit verification code from your authenticator',
           ),
-          codeField,
-          if (bind.sessionGetEnableTrustedDevices(sessionId: sessionId)) ...[
-            const SizedBox(height: 8),
-            Obx(
-              () => _DialogSwitchRow(
-                label: translate('Trust this device'),
-                value: trustThisDevice.value,
-                onChanged: (v) => trustThisDevice.value = v,
-              ),
-            ),
-          ],
-        ],
-      ),
-      actions: [
-        dialogButton('Cancel', onPressed: cancel, isOutline: true),
-        Obx(
-          () => dialogButton('OK', onPressed: submitReady.isTrue ? submit : null),
+          tone: activeError.value.isNotEmpty ? AppTone.danger : AppTone.brand,
+          onClose: cancel,
         ),
-      ],
-      onSubmit: submit,
-      onCancel: cancel,
-    );
-  });
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 420,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Obx(
+              () => activeError.value.isEmpty
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _DialogInlineAlert(message: activeError.value),
+                    ),
+            ),
+            codeField,
+            if (bind.sessionGetEnableTrustedDevices(sessionId: sessionId)) ...[
+              const SizedBox(height: 8),
+              Obx(
+                () => _DialogSwitchRow(
+                  label: translate('Trust this device'),
+                  value: trustThisDevice.value,
+                  onChanged: (v) {
+                    if (!isClosed) trustThisDevice.value = v;
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          dialogButton('Cancel', onPressed: cancel, isOutline: true),
+          Obx(
+            () => dialogButton(
+              'OK',
+              onPressed: submitReady.isTrue ? submit : null,
+            ),
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: cancel,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.clear();
+      controller.dispose();
+      submitReady.close();
+      trustThisDevice.close();
+      activeError.close();
+    });
+  }
 }
 
 void showWindowsSessionsDialog(
@@ -3423,6 +3660,7 @@ void showWindowsSessionsDialog(
   String peerId,
   String sessions,
 ) {
+  _lastSessionPassword.remove(sessionId.toString());
   List<dynamic> sessionsList = [];
   try {
     sessionsList = json.decode(sessions);
@@ -3515,58 +3753,78 @@ void addPeersToAbDialog(List<Peer> peers) async {
     currentName.value = names[0];
   }
 
-  gFFI.dialogManager.show((setState, close, context) {
-    Future<void> submit() async {
-      if (isInProgress.value) return;
-      isInProgress.value = true;
-      if (await addTo(currentName.value)) {
+  var isClosed = false;
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      void safeClose() {
+        if (isClosed) return;
+        isClosed = true;
         close();
       }
-      isInProgress.value = false;
-    }
 
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: CamelliaIcons.addressBook,
-        title: translate('Add to address book'),
-        subtitle: translate('Choose destination address book'),
-        onClose: close,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 340, maxWidth: 420),
-      content: Obx(
-        () => ComboBox(
-          keys: names,
-          values: names
-              .map((e) => gFFI.abModel.translatedName(e))
-              .toList(growable: false),
-          initialKey: currentName.value,
-          onChanged: (value) {
-            currentName.value = value;
-          },
+      Future<void> submit() async {
+        if (isInProgress.value || isClosed) return;
+        isInProgress.value = true;
+        final ok = await addTo(currentName.value);
+        if (isClosed) return;
+        if (ok) {
+          safeClose();
+        }
+        isInProgress.value = false;
+      }
+
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: CamelliaIcons.addressBook,
+          title: translate('Add to address book'),
+          subtitle: translate('Choose destination address book'),
+          onClose: safeClose,
         ),
-      ),
-      actions: [
-        dialogButton(
-          'Cancel',
-          icon: const Icon(CamelliaIcons.close),
-          onPressed: close,
-          isOutline: true,
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 340,
+          maxWidth: 420,
         ),
-        Obx(
-          () => GlassButton(
-            variant: GlassButtonVariant.primary,
-            minHeight: 38,
-            loading: isInProgress.value,
-            icon: const Icon(CamelliaIcons.check, size: 16),
-            onPressed: isInProgress.value ? null : submit,
-            child: Text(translate('OK')),
+        content: Obx(
+          () => ComboBox(
+            keys: names,
+            values: names
+                .map((e) => gFFI.abModel.translatedName(e))
+                .toList(growable: false),
+            initialKey: currentName.value,
+            onChanged: (value) {
+              if (!isClosed) currentName.value = value;
+            },
           ),
         ),
-      ],
-      onSubmit: submit,
-      onCancel: close,
-    );
-  });
+        actions: [
+          dialogButton(
+            'Cancel',
+            icon: const Icon(CamelliaIcons.close),
+            onPressed: safeClose,
+            isOutline: true,
+          ),
+          Obx(
+            () => GlassButton(
+              variant: GlassButtonVariant.primary,
+              minHeight: 38,
+              loading: isInProgress.value,
+              icon: const Icon(CamelliaIcons.check, size: 16),
+              onPressed: isInProgress.value ? null : submit,
+              child: Text(translate('OK')),
+            ),
+          ),
+        ],
+        onSubmit: submit,
+        onCancel: safeClose,
+      );
+    });
+  } finally {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      isInProgress.close();
+      currentName.close();
+    });
+  }
 }
 
 void setSharedAbPasswordDialog(String abName, Peer peer) {
@@ -3574,21 +3832,23 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
   final RxBool isInProgress = false.obs;
   final RxBool isInputEmpty = true.obs;
   bool passwordVisible = false;
-  controller.addListener(() {
-    isInputEmpty.value = controller.text.isEmpty;
-  });
+  var isClosed = false;
+  void onTextChanged() {
+    if (!isClosed) {
+      isInputEmpty.value = controller.text.isEmpty;
+    }
+  }
+
+  controller.addListener(onTextChanged);
   gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
     void cancel() {
       if (isClosed) return;
       isClosed = true;
-      controller.clear();
-      controller.dispose();
       close();
     }
 
     Future<void> change(String password) async {
-      if (isInProgress.value) return;
+      if (isInProgress.value || isClosed) return;
       isInProgress.value = true;
       try {
         final bool res = await gFFI.abModel.changeSharedPassword(
@@ -3596,6 +3856,7 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
           peer.id,
           password,
         );
+        if (isClosed) return;
         isInProgress.value = false;
         if (res) {
           showToast(translate('Successful'));
@@ -3604,8 +3865,12 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
           showToast(translate('Failed'));
         }
       } catch (e) {
-        isInProgress.value = false;
-        showToast('${translate('Failed')}: ${formatUserFriendlyError(e.toString())}');
+        if (!isClosed) {
+          isInProgress.value = false;
+        }
+        showToast(
+          '${translate('Failed')}: ${formatUserFriendlyError(e.toString())}',
+        );
       }
     }
 
@@ -3631,7 +3896,7 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
             labelText: translate('Password'),
             prefixIcon: CamelliaIcons.lock,
             onSubmitted: (_) {
-              if (!isInputEmpty.value && !isInProgress.value) {
+              if (!isClosed && !isInputEmpty.value && !isInProgress.value) {
                 change(controller.text);
               }
             },
@@ -3642,6 +3907,7 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
               child: InkWell(
                 borderRadius: BorderRadius.circular(CamelliaRadius.pill),
                 onTap: () {
+                  if (isClosed) return;
                   setState(() {
                     passwordVisible = !passwordVisible;
                   });
@@ -3699,12 +3965,21 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
         ),
       ],
       onSubmit: () {
-        if (!isInputEmpty.value && !isInProgress.value) {
+        if (!isClosed && !isInputEmpty.value && !isInProgress.value) {
           change(controller.text);
         }
       },
       onCancel: cancel,
     );
+  }).whenComplete(() {
+    isClosed = true;
+    controller.removeListener(onTextChanged);
+    _disposeAfterFrame(() {
+      controller.clear();
+      controller.dispose();
+      isInProgress.close();
+      isInputEmpty.close();
+    });
   });
 }
 
@@ -3746,19 +4021,16 @@ void changeUnlockPinDialog(Function() callback) {
   String? pinErrorText;
   String? confirmationErrorText;
   final maxLength = bind.mainMaxEncryptLen();
+  var isClosed = false;
   gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
     void safeClose() {
       if (isClosed) return;
       isClosed = true;
-      pinController.clear();
-      confirmController.clear();
-      pinController.dispose();
-      confirmController.dispose();
       close();
     }
 
     Future<void> submit() async {
+      if (isClosed) return;
       pinErrorText = null;
       confirmationErrorText = null;
       final pin = pinController.text.trim();
@@ -3803,7 +4075,7 @@ void changeUnlockPinDialog(Function() callback) {
             errorText: pinErrorText,
             maxLength: maxLength,
             onChanged: (_) {
-              if (pinErrorText != null) {
+              if (!isClosed && pinErrorText != null) {
                 setState(() => pinErrorText = null);
               }
             },
@@ -3816,7 +4088,7 @@ void changeUnlockPinDialog(Function() callback) {
             errorText: confirmationErrorText,
             maxLength: maxLength,
             onChanged: (_) {
-              if (confirmationErrorText != null) {
+              if (!isClosed && confirmationErrorText != null) {
                 setState(() => confirmationErrorText = null);
               }
             },
@@ -3831,23 +4103,30 @@ void changeUnlockPinDialog(Function() callback) {
       onSubmit: submit,
       onCancel: safeClose,
     );
+  }).whenComplete(() {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      pinController.clear();
+      confirmController.clear();
+      pinController.dispose();
+      confirmController.dispose();
+    });
   });
 }
 
 void checkUnlockPinDialog(Function() passCallback) {
   final controller = TextEditingController();
   String? errorText;
+  var isClosed = false;
   gFFI.dialogManager.show((setState, close, context) {
-    var isClosed = false;
     void safeClose() {
       if (isClosed) return;
       isClosed = true;
-      controller.clear();
-      controller.dispose();
       close();
     }
 
     Future<void> submit() async {
+      if (isClosed) return;
       final pin = controller.text.trim();
       // CRED-005: Authoritative verification against Rust core; Dart never holds or receives plaintext PIN.
       final verified =
@@ -3876,7 +4155,7 @@ void checkUnlockPinDialog(Function() passCallback) {
         errorText: errorText,
         hintText: '',
         onChanged: (_) {
-          if (errorText != null) {
+          if (!isClosed && errorText != null) {
             setState(() => errorText = null);
           }
         },
@@ -3889,6 +4168,12 @@ void checkUnlockPinDialog(Function() passCallback) {
       onSubmit: submit,
       onCancel: safeClose,
     );
+  }).whenComplete(() {
+    isClosed = true;
+    _disposeAfterFrame(() {
+      controller.clear();
+      controller.dispose();
+    });
   });
 }
 
@@ -3942,45 +4227,55 @@ void confrimDeleteTrustedDevicesDialog(
 void manageTrustedDeviceDialog() async {
   final RxList<TrustedDevice> trustedDevices = (await TrustedDevice.get()).obs;
   final RxList<Uint8List> selectedDevices = RxList.empty();
-  gFFI.dialogManager.show((setState, close, context) {
-    return CustomAlertDialog(
-      title: ModernDialogHeader(
-        icon: Icons.devices_rounded,
-        title: translate('Manage trusted devices'),
-        subtitle: translate(
-          'Review or revoke devices authorized to skip two-factor verification',
-        ),
-        onClose: close,
-      ),
-      contentBoxConstraints: const BoxConstraints(minWidth: 400, maxWidth: 500),
-      content: trustedDevicesTable(trustedDevices, selectedDevices),
-      actions: [
-        GlassButton(
-          variant: GlassButtonVariant.secondary,
-          minHeight: 38,
-          onPressed: close,
-          child: Text(translate('Close')),
-        ),
-        Obx(
-          () => GlassButton(
-            variant: GlassButtonVariant.danger,
-            minHeight: 38,
-            icon: const Icon(CamelliaIcons.trash, size: 16),
-            onPressed: selectedDevices.isEmpty
-                ? null
-                : () {
-                    confrimDeleteTrustedDevicesDialog(
-                      trustedDevices,
-                      selectedDevices,
-                    );
-                  },
-            child: Text(translate('Delete')),
+  try {
+    await gFFI.dialogManager.show((setState, close, context) {
+      return CustomAlertDialog(
+        title: ModernDialogHeader(
+          icon: Icons.devices_rounded,
+          title: translate('Manage trusted devices'),
+          subtitle: translate(
+            'Review or revoke devices authorized to skip two-factor verification',
           ),
+          onClose: close,
         ),
-      ],
-      onCancel: close,
-    );
-  });
+        contentBoxConstraints: const BoxConstraints(
+          minWidth: 400,
+          maxWidth: 500,
+        ),
+        content: trustedDevicesTable(trustedDevices, selectedDevices),
+        actions: [
+          GlassButton(
+            variant: GlassButtonVariant.secondary,
+            minHeight: 38,
+            onPressed: close,
+            child: Text(translate('Close')),
+          ),
+          Obx(
+            () => GlassButton(
+              variant: GlassButtonVariant.danger,
+              minHeight: 38,
+              icon: const Icon(CamelliaIcons.trash, size: 16),
+              onPressed: selectedDevices.isEmpty
+                  ? null
+                  : () {
+                      confrimDeleteTrustedDevicesDialog(
+                        trustedDevices,
+                        selectedDevices,
+                      );
+                    },
+              child: Text(translate('Delete')),
+            ),
+          ),
+        ],
+        onCancel: close,
+      );
+    });
+  } finally {
+    _disposeAfterFrame(() {
+      trustedDevices.close();
+      selectedDevices.close();
+    });
+  }
 }
 
 class TrustedDevice {

@@ -61,17 +61,15 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         if (viewCameraPage is ViewCameraPage) {
           final ffi = viewCameraPage.ffi;
           bind.setCurSessionId(sessionId: ffi.sessionId);
-          bind.sessionSetCustomFps(sessionId: ffi.sessionId, fps: 0);
-          bind.sessionRefresh(sessionId: ffi.sessionId, display: _display ?? 0);
-        }
-        // Throttle unselected camera tabs so background streams don't waste decode cycles.
-        for (final tab in tabController.state.value.tabs) {
-          if (tab.key != id) {
-            final page = tabController.widget(tab.key);
-            if (page is ViewCameraPage) {
-              bind.sessionSetCustomFps(sessionId: page.ffi.sessionId, fps: 1);
-            }
-          }
+          final currentDisplay = ffi.ffiModel.pi.currentDisplay;
+          final refreshDisplay =
+              currentDisplay >= 0 && currentDisplay != kAllDisplayValue
+              ? currentDisplay
+              : 0;
+          bind.sessionRefresh(
+            sessionId: ffi.sessionId,
+            display: refreshDisplay,
+          );
         }
         WindowController.fromWindowId(
           params['windowId'],
@@ -84,15 +82,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           label: peerId!,
           selectedIcon: selectedIcon,
           unselectedIcon: unselectedIcon,
-          onTabCloseButton: () async {
-            if (await desktopTryShowTabAuditDialogCloseCancelled(
-              id: peerId!,
-              tabController: tabController,
-            )) {
-              return;
-            }
-            tabController.closeBy(peerId!);
-          },
+          onTabCloseButton: () => _closeTab(peerId!),
           page: ViewCameraPage(
             key: ValueKey(peerId),
             id: peerId!,
@@ -117,6 +107,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       params['connToken'] = null;
     }
     tabController.onRemoved = (_, id) => onRemoveId(id);
+    tabController.onTeardownTabs = _teardownTabs;
     rustDeskWinManager.setMethodHandler(_remoteMethodHandler);
   }
 
@@ -323,54 +314,59 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
         label: translate('Close'),
         icon: CamelliaIcons.close,
         destructive: true,
-        onTap: () async {
+        onTap: () {
           closeMenu();
-          if (await desktopTryShowTabAuditDialogCloseCancelled(
-            id: key,
-            tabController: tabController,
-          )) {
-            return;
-          }
-          tabController.closeBy(key);
+          unawaited(_closeTab(key));
         },
       ),
     ]);
     return items;
   }
 
-  void onRemoveId(String id) async {
-    if (tabController.state.value.tabs.isEmpty) {
-      Future<void> loopCloseWindow() async {
-        int c = 0;
-        final wId = windowId();
-        try {
-          await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-            "id": wId,
-          });
-        } catch (e) {
-          debugPrint("Failed to notify main window on camera window close: $e");
-        }
-        final windowController = WindowController.fromWindowId(wId);
-        try {
-          await windowController.setPreventClose(false);
-        } catch (_) {}
-        while (c < 20 &&
-            tabController.state.value.tabs.isEmpty &&
-            (!await windowController.isHidden())) {
-          try {
-            await windowController.close();
-          } catch (_) {
-            break;
-          }
-          await Future.delayed(const Duration(milliseconds: 100));
-          c++;
-        }
+  Future<void> _teardownTabs(List<TabInfo> tabs) async {
+    final futures = <Future<void>>[];
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is ViewCameraPage) {
+        futures.add(
+          page.teardown().catchError((e) {
+            debugPrint(
+              '[ViewCameraTabPage] Teardown failed for ${tab.key}: $e',
+            );
+          }),
+        );
       }
-
-      loopCloseWindow();
     }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
+  }
+
+  Future<void> _closeTab(String id) async {
+    if (await desktopTryShowTabAuditDialogCloseCancelled(
+      id: id,
+      tabController: tabController,
+    )) {
+      return;
+    }
+    final page = tabController.widget(id);
+    if (page is ViewCameraPage) {
+      try {
+        await page.teardown().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        debugPrint('[ViewCameraTabPage] Teardown failed for $id: $e');
+      }
+    }
+    tabController.closeBy(id);
+  }
+
+  void onRemoveId(String id) {
     ConnectionTypeState.delete(id);
     _update_remote_count();
+    if (!tabController.suppressEmptyWindowClose &&
+        tabController.state.value.tabs.isEmpty) {
+      unawaited(tabController.closeWindow(skipConfirm: true));
+    }
   }
 
   int windowId() {
@@ -386,26 +382,18 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
       )) {
         return false;
       }
-      tabController.clear();
       return true;
     }
     if (connLength <= 0) {
-      tabController.clear();
       return true;
     }
-    final bool res;
     if (!option2bool(
       kOptionEnableConfirmClosingTabs,
       bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
     )) {
-      res = true;
-    } else {
-      res = await closeConfirmDialog(isSessionWindow: true);
+      return true;
     }
-    if (res) {
-      tabController.clear();
-    }
-    return res;
+    return await closeConfirmDialog(isSessionWindow: true);
   }
 
   _update_remote_count() =>
@@ -450,15 +438,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
           label: id,
           selectedIcon: selectedIcon,
           unselectedIcon: unselectedIcon,
-          onTabCloseButton: () async {
-            if (await desktopTryShowTabAuditDialogCloseCancelled(
-              id: id,
-              tabController: tabController,
-            )) {
-              return;
-            }
-            tabController.closeBy(id);
-          },
+          onTabCloseButton: () => _closeTab(id),
           page: ViewCameraPage(
             key: ValueKey(id),
             id: id,
@@ -482,7 +462,7 @@ class _ViewCameraTabPageState extends State<ViewCameraTabPage> {
     } else if (call.method == kWindowDisableGrabKeyboard) {
       // no-op
     } else if (call.method == "onDestroy") {
-      tabController.clear();
+      await tabController.closeWindow(skipConfirm: true);
     } else if (call.method == kWindowActionRebuild) {
       reloadCurrentWindow();
     } else if (call.method == kWindowEventActiveSession) {

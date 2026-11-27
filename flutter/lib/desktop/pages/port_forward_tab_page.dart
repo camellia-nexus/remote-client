@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -40,12 +41,14 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
       ).setTitle(getWindowNameWithId(id));
     };
     tabController.onRemoved = (_, id) => onRemoveId(id);
+    tabController.onTeardownTabs = _teardownTabs;
     tabController.add(
       TabInfo(
         key: params['id'],
         label: params['id'],
         selectedIcon: selectedIcon,
         unselectedIcon: unselectedIcon,
+        onTabCloseButton: () => _closeTab(params['id']),
         page: PortForwardPage(
           key: ValueKey(params['id']),
           id: params['id'],
@@ -87,6 +90,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
             label: id,
             selectedIcon: selectedIcon,
             unselectedIcon: unselectedIcon,
+            onTabCloseButton: () => _closeTab(id),
             page: PortForwardPage(
               key: ValueKey(args['id']),
               id: id,
@@ -108,7 +112,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
         }
         return jumpOk;
       } else if (call.method == "onDestroy") {
-        tabController.clear();
+        await tabController.closeWindow(skipConfirm: true);
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
       }
@@ -127,26 +131,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: DesktopTab(
         controller: tabController,
-        onWindowCloseButton: () async {
-          final connLength = tabController.state.value.tabs.length;
-          if (connLength <= 1) {
-            tabController.clear();
-            return true;
-          }
-          final bool res;
-          if (!option2bool(
-            kOptionEnableConfirmClosingTabs,
-            bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
-          )) {
-            res = true;
-          } else {
-            res = await closeConfirmDialog(isSessionWindow: true);
-          }
-          if (res) {
-            tabController.clear();
-          }
-          return res;
-        },
+        onWindowCloseButton: handleWindowCloseButton,
         tail: const AddButton(),
         selectedBorderColor: Theme.of(context).colorScheme.primary,
         labelGetter: DesktopTab.tablabelGetter,
@@ -181,19 +166,55 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
           );
   }
 
-  void onRemoveId(String id) async {
-    if (tabController.state.value.tabs.isEmpty) {
-      final wId = windowId();
+  Future<void> _teardownTabs(List<TabInfo> tabs) async {
+    final futures = <Future<void>>[];
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is PortForwardPage) {
+        futures.add(
+          page.teardown().catchError((e) {
+            debugPrint(
+              '[PortForwardTabPage] Teardown failed for ${tab.key}: $e',
+            );
+          }),
+        );
+      }
+    }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
+  }
+
+  Future<void> _closeTab(String id) async {
+    final page = tabController.widget(id);
+    if (page is PortForwardPage) {
       try {
-        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-          "id": wId,
-        });
-      } catch (_) {}
-      final wc = WindowController.fromWindowId(wId);
-      try {
-        await wc.setPreventClose(false);
-      } catch (_) {}
-      await wc.close();
+        await page.teardown().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        debugPrint('[PortForwardTabPage] Teardown failed for $id: $e');
+      }
+    }
+    tabController.closeBy(id);
+  }
+
+  Future<bool> handleWindowCloseButton() async {
+    final connLength = tabController.state.value.tabs.length;
+    if (connLength <= 1) {
+      return true;
+    }
+    if (!option2bool(
+      kOptionEnableConfirmClosingTabs,
+      bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
+    )) {
+      return true;
+    }
+    return await closeConfirmDialog(isSessionWindow: true);
+  }
+
+  void onRemoveId(String id) {
+    if (!tabController.suppressEmptyWindowClose &&
+        tabController.state.value.tabs.isEmpty) {
+      unawaited(tabController.closeWindow(skipConfirm: true));
     }
   }
 

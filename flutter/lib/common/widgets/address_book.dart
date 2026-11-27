@@ -1,4 +1,5 @@
 import 'package:dropdown_button2/dropdown_button2.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common/formatter/id_formatter.dart';
 import 'package:camellia_remote_app/common/hbbs/hbbs.dart';
@@ -36,6 +37,7 @@ class AddressBook extends StatefulWidget {
 
 class _AddressBookState extends State<AddressBook> {
   Offset _lastPointerPos = Offset.zero;
+  int? _tagsMorePointerId;
   final _tagsMenuController = MenuController();
   final _abSearchController = TextEditingController();
 
@@ -298,9 +300,20 @@ class _AddressBookState extends State<AddressBook> {
                     const SizedBox(width: 4),
                     Listener(
                       onPointerDown: (event) {
-                        _lastPointerPos = event.position;
+                        if (event.kind != PointerDeviceKind.mouse ||
+                            (event.buttons & kPrimaryMouseButton) != 0) {
+                          _tagsMorePointerId = event.pointer;
+                          _lastPointerPos = event.position;
+                        }
                       },
-                      onPointerUp: (_) {
+                      onPointerCancel: (event) {
+                        if (_tagsMorePointerId == event.pointer) {
+                          _tagsMorePointerId = null;
+                        }
+                      },
+                      onPointerUp: (event) {
+                        if (_tagsMorePointerId != event.pointer) return;
+                        _tagsMorePointerId = null;
                         _tagsMenuController.close();
                         _showMenu(_resolveMenuRect(_lastPointerPos));
                       },
@@ -700,6 +713,7 @@ class _AddressBookState extends State<AddressBook> {
     final selectedTag = List<dynamic>.empty(growable: true).obs;
     String? errorMsg;
     final isCurrentAbShared = !gFFI.abModel.current.isPersonal();
+    var isClosed = false;
     var disposed = false;
 
     void cleanup() {
@@ -716,12 +730,13 @@ class _AddressBookState extends State<AddressBook> {
     try {
       await gFFI.dialogManager.show((setState, close, context) {
         void handleClose() {
-          cleanup();
+          if (isClosed) return;
+          isClosed = true;
           close();
         }
 
         Future<void> submit() async {
-          if (isInProgress) return;
+          if (isInProgress || isClosed) return;
           final String id = idController.id.trim();
           if (id.isEmpty) {
             setState(() => errorMsg = translate('Can not be empty'));
@@ -746,6 +761,7 @@ class _AddressBookState extends State<AddressBook> {
             selectedTag,
             noteController.text,
           );
+          if (isClosed) return;
           if (errMsg2 != null) {
             setState(() {
               isInProgress = false;
@@ -920,7 +936,10 @@ class _AddressBookState extends State<AddressBook> {
         );
       });
     } finally {
-      cleanup();
+      isClosed = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        cleanup();
+      });
     }
   }
 
@@ -929,6 +948,7 @@ class _AddressBookState extends State<AddressBook> {
     var msg = "";
     var isInProgress = false;
     final controller = TextEditingController(text: field);
+    var isClosed = false;
     var disposed = false;
 
     void cleanup() {
@@ -940,12 +960,13 @@ class _AddressBookState extends State<AddressBook> {
     try {
       await gFFI.dialogManager.show((setState, close, context) {
         void handleClose() {
-          cleanup();
+          if (isClosed) return;
+          isClosed = true;
           close();
         }
 
         Future<void> submit() async {
-          if (isInProgress) return;
+          if (isInProgress || isClosed) return;
           field = controller.text.trim();
           if (field.isEmpty) {
             handleClose();
@@ -963,7 +984,7 @@ class _AddressBookState extends State<AddressBook> {
           for (final t in [kUntagged, translate(kUntagged)]) {
             if (tags.contains(t)) {
               showToast(translate('Tag name cannot be empty'));
-              setState(() => isInProgress = false);
+              if (!isClosed) setState(() => isInProgress = false);
               return;
             }
           }
@@ -1021,7 +1042,10 @@ class _AddressBookState extends State<AddressBook> {
         );
       });
     } finally {
-      cleanup();
+      isClosed = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        cleanup();
+      });
     }
   }
 }

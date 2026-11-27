@@ -155,7 +155,9 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                 await start_service(true);
                 await updateStatus();
               case 'server':
-                showServerSettings(gFFI.dialogManager, setState);
+                showServerSettings(gFFI.dialogManager, (fn) {
+                  if (mounted) setState(fn);
+                });
               case 'refresh':
                 await updateStatus();
             }

@@ -6,21 +6,15 @@ import 'package:provider/provider.dart';
 import 'package:camellia_remote_app/common.dart';
 import 'package:camellia_remote_app/desktop/pages/connection_page.dart';
 import 'package:camellia_remote_app/desktop/pages/desktop_setting_page.dart';
-import 'package:camellia_remote_app/desktop/widgets/desktop_shell.dart';
 import 'package:camellia_remote_app/models/platform_model.dart';
 import 'package:camellia_remote_app/models/server_model.dart';
 import 'package:camellia_remote_app/ui/camellia_design.dart';
 import 'package:camellia_remote_app/ui/glass_components.dart';
 
 /// Opens the Security / Safety settings tab in-shell when hosted inside
-/// [CamelliaDesktopShell], falling back cleanly to [DesktopSettingPage.switch2page].
+/// `CamelliaDesktopShell`, falling back cleanly to [DesktopSettingPage.switch2page].
 void _openSecuritySettings(BuildContext context) {
-  final shell = CamelliaDesktopShell.of(context);
-  if (shell != null) {
-    DesktopSettingPage.pendingInitialTabKey = SettingsTabKey.safety;
-    shell.setDestination(DesktopNavDestination.settings);
-  }
-  DesktopSettingPage.switch2page(SettingsTabKey.safety);
+  DesktopSettingPage.switch2page(SettingsTabKey.safety, context: context);
 }
 
 /// Reusable one-click copy button with spring icon morph (`copy -> check`).

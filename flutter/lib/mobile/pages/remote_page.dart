@@ -81,6 +81,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   final FocusNode _physicalFocusNode = FocusNode();
   var _showEdit = false; // use soft keyboard
   var _dockCollapsed = false;
+  late final Future<dynamic> _voiceCallSupportFuture;
 
   Worker? _waylandKeyboardGateWorker;
   bool _waylandKeyboardGateInitialized = false;
@@ -95,6 +96,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _voiceCallSupportFuture = isWeb
+        ? Future<bool>.value(false)
+        : gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL");
     gFFI.mobileReset();
     _generation = gFFI.sessionGeneration;
     initSharedStates(widget.id, generation: _generation);
@@ -179,7 +183,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
     WakelockManager.disable(_uniqueKey);
     removeSharedStates(widget.id, expectedGeneration: myGen);
-    gFFI.chatModel.onVoiceCallClosed("End connetion");
+    gFFI.chatModel.onVoiceCallClosed("");
   }
 
   @override
@@ -473,7 +477,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) clientClose(sessionId, gFFI);
+        if (didPop) return;
+        if (_showGestureHelp) {
+          setState(() => _showGestureHelp = false);
+          return;
+        }
+        clientClose(sessionId, gFFI);
       },
       child: Scaffold(
         floatingActionButtonLocation: keyboardIsVisible
@@ -664,11 +673,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 children: [
                   keyCap(
                     label: 'Esc',
-                    onTap: () => inputModel.inputKey('Escape'),
+                    onTap: () => inputModel.inputKey('VK_ESCAPE'),
                   ),
                   keyCap(
                     label: 'Tab',
-                    onTap: () => inputModel.inputKey('Tab'),
+                    onTap: () => inputModel.inputKey('VK_TAB'),
                   ),
                   keyCap(
                     label: 'Ctrl',
@@ -711,22 +720,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     keyCap(
                       label: 'Left',
                       icon: Icons.keyboard_arrow_left_rounded,
-                      onTap: () => inputModel.inputKey('LeftArrow'),
+                      onTap: () => inputModel.inputKey('VK_LEFT'),
                     ),
                     keyCap(
                       label: 'Up',
                       icon: Icons.keyboard_arrow_up_rounded,
-                      onTap: () => inputModel.inputKey('UpArrow'),
+                      onTap: () => inputModel.inputKey('VK_UP'),
                     ),
                     keyCap(
                       label: 'Down',
                       icon: Icons.keyboard_arrow_down_rounded,
-                      onTap: () => inputModel.inputKey('DownArrow'),
+                      onTap: () => inputModel.inputKey('VK_DOWN'),
                     ),
                     keyCap(
                       label: 'Right',
                       icon: Icons.keyboard_arrow_right_rounded,
-                      onTap: () => inputModel.inputKey('RightArrow'),
+                      onTap: () => inputModel.inputKey('VK_RIGHT'),
                     ),
                     keyCap(
                       label: 'Home',
@@ -746,7 +755,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     ),
                     keyCap(
                       label: 'Del',
-                      onTap: () => inputModel.inputKey('Delete'),
+                      onTap: () => inputModel.inputKey('VK_DELETE'),
                     ),
                     keyCap(
                       label: 'CAD',
@@ -837,7 +846,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         ),
       if (!isWeb)
         FutureBuilder<dynamic>(
-          future: gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
+          future: _voiceCallSupportFuture,
           builder: (context, snapshot) {
             final supportsVoice = snapshot.data == true;
             return Obx(() {
@@ -922,6 +931,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         children: [
           if (canInput && _showVirtualKeys) _buildVirtualKeyBar(),
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () {
               HapticFeedback.selectionClick();
               setState(() {
@@ -929,16 +939,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 _showVirtualKeys = false;
               });
             },
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withValues(alpha: 0.28),
-                  borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+            child: SizedBox(
+              width: 64,
+              height: 24,
+              child: Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.onSurface.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+                  ),
                 ),
               ),
             ),
@@ -1296,21 +1309,27 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-      child: GlassSurface(
-        layer: CamelliaGlassLayer.modal,
-        elevated: true,
-        borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: SingleChildScrollView(
-          child: GestureHelp(
-            touchMode: gFFI.ffiModel.touchMode,
-            onTouchModeChange: (t) {
-              gFFI.ffiModel.toggleTouchMode();
-              final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
-              bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
-            },
-            virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
-            inputModel: gFFI.inputModel,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.62,
+        ),
+        child: GlassSurface(
+          layer: CamelliaGlassLayer.modal,
+          elevated: true,
+          borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: SingleChildScrollView(
+            child: GestureHelp(
+              touchMode: gFFI.ffiModel.touchMode,
+              onTouchModeChange: (t) {
+                gFFI.ffiModel.toggleTouchMode();
+                final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
+                bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+              },
+              virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
+              inputModel: gFFI.inputModel,
+              onClose: () => setState(() => _showGestureHelp = false),
+            ),
           ),
         ),
       ),

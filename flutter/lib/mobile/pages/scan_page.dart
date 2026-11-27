@@ -29,7 +29,6 @@ class _ScanPageState extends State<ScanPage> {
   StreamSubscription? scanSubscription;
   bool _torchEnabled = false;
   bool _isProcessingScan = false;
-  Timer? _openDialogTimer;
 
   @override
   void reassemble() {
@@ -146,63 +145,75 @@ class _ScanPageState extends State<ScanPage> {
           ),
           // Bottom camera control dock
           Positioned(
-            left: 20,
-            right: 20,
+            left: 16,
+            right: 16,
             bottom: bottomPadding + 24,
             child: Center(
-              child: GlassSurface(
-                layer: CamelliaGlassLayer.modal,
-                elevated: true,
-                tintColor: const Color(0xCC0D1424),
-                borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _ScanDockAction(
-                      icon: Icons.photo_library_rounded,
-                      label: translate('Gallery'),
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        _pickImage();
-                      },
-                    ),
-                    const SizedBox(width: 14),
-                    _ScanDockAction(
-                      icon: _torchEnabled
-                          ? Icons.flashlight_on_rounded
-                          : Icons.flashlight_off_rounded,
-                      label: translate('Flash'),
-                      active: _torchEnabled,
-                      activeColor: CamelliaColors.sun,
-                      onTap: () async {
-                        HapticFeedback.selectionClick();
-                        try {
-                          await controller?.toggleFlash();
-                          if (mounted) {
-                            setState(() => _torchEnabled = !_torchEnabled);
-                          }
-                        } catch (_) {}
-                      },
-                    ),
-                    const SizedBox(width: 14),
-                    _ScanDockAction(
-                      icon: Icons.cameraswitch_rounded,
-                      label: translate('Switch Camera'),
-                      onTap: () async {
-                        HapticFeedback.selectionClick();
-                        try {
-                          await controller?.flipCamera();
-                          if (mounted) {
-                            setState(() => _torchEnabled = false);
-                          }
-                        } catch (_) {}
-                      },
-                    ),
-                  ],
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 320),
+                child: GlassSurface(
+                  layer: CamelliaGlassLayer.modal,
+                  elevated: true,
+                  tintColor: const Color(0xCC0D1424),
+                  borderRadius: BorderRadius.circular(CamelliaRadius.sheet),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _ScanDockAction(
+                          icon: Icons.photo_library_rounded,
+                          label: translate('Gallery'),
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            _pickImage();
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: _ScanDockAction(
+                          icon: _torchEnabled
+                              ? Icons.flashlight_on_rounded
+                              : Icons.flashlight_off_rounded,
+                          label: translate('Flash'),
+                          active: _torchEnabled,
+                          activeColor: CamelliaColors.sun,
+                          onTap: () async {
+                            if (controller == null) return;
+                            HapticFeedback.selectionClick();
+                            try {
+                              await controller!.toggleFlash();
+                              final status =
+                                  (await controller!.getFlashStatus()) ?? false;
+                              if (mounted) {
+                                setState(() => _torchEnabled = status);
+                              }
+                            } catch (_) {}
+                          },
+                        ),
+                      ),
+                      Expanded(
+                        child: _ScanDockAction(
+                          icon: Icons.cameraswitch_rounded,
+                          label: translate('Switch Camera'),
+                          onTap: () async {
+                            if (controller == null) return;
+                            HapticFeedback.selectionClick();
+                            try {
+                              await controller!.flipCamera();
+                              final status =
+                                  (await controller!.getFlashStatus()) ?? false;
+                              if (mounted) {
+                                setState(() => _torchEnabled = status);
+                              }
+                            } catch (_) {}
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -272,13 +283,22 @@ class _ScanPageState extends State<ScanPage> {
     }
   }
 
+  void _scheduleScanCooldownReset() {
+    Future.delayed(const Duration(milliseconds: 900), () {
+      if (mounted) {
+        _isProcessingScan = false;
+      }
+    });
+  }
+
   Future<void> _handleScannedPayload(String data) async {
     if (_isProcessingScan || !mounted) return;
     _isProcessingScan = true;
     HapticFeedback.mediumImpact();
 
     final uriPrefix = bind.mainUriPrefixSync();
-    if (uriPrefix.isNotEmpty && data.startsWith(uriPrefix)) {
+    if (uriPrefix.isNotEmpty &&
+        data.toLowerCase().startsWith(uriPrefix.toLowerCase())) {
       try {
         await controller?.pauseCamera();
       } catch (_) {}
@@ -294,16 +314,14 @@ class _ScanPageState extends State<ScanPage> {
     }
 
     showToast(translate('Invalid QR code'));
-    Future.delayed(const Duration(milliseconds: 900), () {
-      _isProcessingScan = false;
-    });
+    _scheduleScanCooldownReset();
   }
 
   void showServerSettingFromQr(String data) async {
     if (!mounted) return;
     if (!data.startsWith('config=')) {
       showToast(translate('Invalid QR code'));
-      _isProcessingScan = false;
+      _scheduleScanCooldownReset();
       return;
     }
 
@@ -312,7 +330,7 @@ class _ScanPageState extends State<ScanPage> {
       sc = ServerConfig.decode(data.substring(7));
     } catch (_) {
       showToast(translate('Invalid QR code'));
-      _isProcessingScan = false;
+      _scheduleScanCooldownReset();
       return;
     }
 
@@ -322,19 +340,14 @@ class _ScanPageState extends State<ScanPage> {
       debugPrint('pauseCamera error: $e');
     }
     if (!mounted) return;
-    closeConnection();
-
-    _openDialogTimer?.cancel();
-    _openDialogTimer = Timer(const Duration(milliseconds: 60), () {
-      _openDialogTimer = null;
+    await Navigator.of(context).maybePop();
+    Future.delayed(const Duration(milliseconds: 60), () {
       showServerSettingsWithValue(sc, gFFI.dialogManager, null);
     });
   }
 
   @override
   void dispose() {
-    _openDialogTimer?.cancel();
-    _openDialogTimer = null;
     scanSubscription?.cancel();
     scanSubscription = null;
     // RES-062 lifecycle contract: QRViewState disposes underlying platform view;
@@ -373,12 +386,12 @@ class _ScanDockAction extends StatelessWidget {
           borderRadius: BorderRadius.circular(CamelliaRadius.pill),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
             decoration: BoxDecoration(
               color: active
                   ? activeColor.withValues(alpha: 0.18)
                   : Colors.transparent,
-              borderRadius: BorderRadius.circular(CamelliaRadius.pill),
+              borderRadius: BorderRadius.circular(CamelliaRadius.control),
               border: active
                   ? Border.all(
                       color: activeColor.withValues(alpha: 0.55),
@@ -386,13 +399,17 @@ class _ScanDockAction extends StatelessWidget {
                     )
                   : null,
             ),
-            child: Row(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 19, color: fg),
-                const SizedBox(width: 6),
+                Icon(icon, size: 20, color: fg),
+                const SizedBox(height: 3),
                 Text(
                   label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: fg,
                     fontWeight: active ? FontWeight.w700 : FontWeight.w600,

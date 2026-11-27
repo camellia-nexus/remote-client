@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
 import 'package:camellia_remote_app/common.dart';
@@ -297,25 +298,17 @@ class DraggableKeyPosition {
 
   // Adjust position to keep it in the screen
   // Only used for desktop and web desktop
-  tryAdjust(double w, double h, double scale) {
-    final size = MediaQuery.sizeOf(Get.context!);
+  tryAdjust(double w, double h, double scale, {Size? screenSize}) {
+    final ctx = Get.context;
+    final size = screenSize ?? (ctx != null ? MediaQuery.sizeOf(ctx) : null);
+    if (size == null) return;
     w = w * scale;
     h = h * scale;
-    double x = _pos.dx;
-    double y = _pos.dy;
-    if (x + w > size.width) {
-      x = size.width - w;
-    }
     final tabBarHeight = isDesktop ? 40.0 : 0.0;
-    if (y + h > (size.height - tabBarHeight)) {
-      y = size.height - tabBarHeight - h;
-    }
-    if (x < 0) {
-      x = 0;
-    }
-    if (y < 0) {
-      y = 0;
-    }
+    final maxX = math.max(0.0, size.width - w);
+    final maxY = math.max(0.0, size.height - tabBarHeight - h);
+    final double x = _pos.dx.clamp(0.0, maxX).toDouble();
+    final double y = _pos.dy.clamp(0.0, maxY).toDouble();
     if (x != _pos.dx || y != _pos.dy) {
       update(Offset(x, y));
     }
@@ -389,37 +382,41 @@ class _DraggableState extends State<Draggable> {
   void onPanUpdate(DragUpdateDetails d) {
     final offset = d.delta;
     final size = MediaQuery.sizeOf(context);
-    double x = 0;
-    double y = 0;
-
-    if (position.dx + offset.dx + widget.width > size.width) {
-      x = size.width - widget.width;
-    } else if (position.dx + offset.dx < 0) {
-      x = 0;
-    } else {
-      x = position.dx + offset.dx;
-    }
-
-    if (position.dy + offset.dy + widget.height > size.height) {
-      y = size.height - widget.height;
-    } else if (position.dy + offset.dy < 0) {
-      y = 0;
-    } else {
-      y = position.dy + offset.dy;
-    }
+    final maxX = math.max(0.0, size.width - widget.width);
+    final maxY = math.max(0.0, size.height - widget.height);
+    final x = (position.dx + offset.dx).clamp(0.0, maxX).toDouble();
+    final y = (position.dy + offset.dy).clamp(0.0, maxY).toDouble();
     setState(() {
       widget.position.update(Offset(x, y));
     });
     _chatModel?.setChatWindowPosition(position);
   }
 
-  checkScreenSize() {
-    // Ensure the draggable always stays within current screen bounds
-    widget.position.tryAdjust(widget.width, widget.height, 1);
+  void _schedulePositionUpdate(Offset nextPos) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.position.pos != nextPos) {
+        setState(() {
+          widget.position.update(nextPos);
+        });
+        _chatModel?.setChatWindowPosition(widget.position.pos);
+      }
+    });
   }
 
-  checkKeyboard() {
+  void checkScreenSize(BuildContext context) {
+    // Ensure the draggable always stays within current screen bounds
+    widget.position.tryAdjust(
+      widget.width,
+      widget.height,
+      1,
+      screenSize: MediaQuery.sizeOf(context),
+    );
+  }
+
+  void checkKeyboard(BuildContext context) {
     final bottomHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final contextHeight = MediaQuery.sizeOf(context).height;
     final currentVisible = bottomHeight != 0;
 
     // save
@@ -427,36 +424,38 @@ class _DraggableState extends State<Draggable> {
       _saveHeight = position.dy;
     }
 
+    Offset? nextPos;
     // reset
     if (_lastBottomHeight > 0 && bottomHeight == 0) {
-      setState(() {
-        widget.position.update(Offset(position.dx, _saveHeight));
-      });
+      final maxY = math.max(0.0, contextHeight - widget.height);
+      final y = _saveHeight.clamp(0.0, maxY).toDouble();
+      nextPos = Offset(position.dx, y);
     }
 
     // onKeyboardVisible
     if (_keyboardVisible && currentVisible) {
       final sumHeight = bottomHeight + widget.height;
-      final contextHeight = MediaQuery.sizeOf(context).height;
       if (sumHeight + position.dy > contextHeight) {
-        final y = contextHeight - sumHeight;
-        setState(() {
-          widget.position.update(Offset(position.dx, y));
-        });
+        final y = math.max(0.0, contextHeight - sumHeight);
+        nextPos = Offset(position.dx, y);
       }
     }
 
     _keyboardVisible = currentVisible;
     _lastBottomHeight = bottomHeight;
+
+    if (nextPos != null) {
+      _schedulePositionUpdate(nextPos);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (widget.checkKeyboard) {
-      checkKeyboard();
+      checkKeyboard(context);
     }
     if (widget.checkScreenSize) {
-      checkScreenSize();
+      checkScreenSize(context);
     }
     return Stack(
       children: [
@@ -509,8 +508,21 @@ class IOSDraggableState extends State<IOSDraggable> {
 
   DraggableKeyPosition get position => widget.position;
 
-  checkKeyboard() {
+  void _schedulePositionUpdate(Offset nextPos) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (position.pos != nextPos) {
+        setState(() {
+          position.update(nextPos);
+        });
+        _chatModel?.setChatWindowPosition(position.pos);
+      }
+    });
+  }
+
+  void checkKeyboard(BuildContext context) {
     final bottomHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final contextHeight = MediaQuery.sizeOf(context).height;
     final currentVisible = bottomHeight != 0;
 
     // save
@@ -518,27 +530,29 @@ class IOSDraggableState extends State<IOSDraggable> {
       _saveHeight = position.pos.dy;
     }
 
+    Offset? nextPos;
     // reset
     if (_lastBottomHeight > 0 && bottomHeight == 0) {
-      setState(() {
-        position.update(Offset(position.pos.dx, _saveHeight));
-      });
+      final maxY = math.max(0.0, contextHeight - _height);
+      final y = _saveHeight.clamp(0.0, maxY).toDouble();
+      nextPos = Offset(position.pos.dx, y);
     }
 
     // onKeyboardVisible
     if (_keyboardVisible && currentVisible) {
       final sumHeight = bottomHeight + _height;
-      final contextHeight = MediaQuery.sizeOf(context).height;
       if (sumHeight + position.pos.dy > contextHeight) {
-        final y = contextHeight - sumHeight;
-        setState(() {
-          position.update(Offset(position.pos.dx, y));
-        });
+        final y = math.max(0.0, contextHeight - sumHeight);
+        nextPos = Offset(position.pos.dx, y);
       }
     }
 
     _keyboardVisible = currentVisible;
     _lastBottomHeight = bottomHeight;
+
+    if (nextPos != null) {
+      _schedulePositionUpdate(nextPos);
+    }
   }
 
   @override
@@ -549,7 +563,7 @@ class IOSDraggableState extends State<IOSDraggable> {
 
   @override
   Widget build(BuildContext context) {
-    checkKeyboard();
+    checkKeyboard(context);
     return Stack(
       children: [
         Positioned(
@@ -557,8 +571,17 @@ class IOSDraggableState extends State<IOSDraggable> {
           top: position.pos.dy,
           child: GestureDetector(
             onPanUpdate: (details) {
+              final size = MediaQuery.sizeOf(context);
+              final maxX = math.max(0.0, size.width - _width);
+              final maxY = math.max(0.0, size.height - _height);
+              final nextX = (position.pos.dx + details.delta.dx)
+                  .clamp(0.0, maxX)
+                  .toDouble();
+              final nextY = (position.pos.dy + details.delta.dy)
+                  .clamp(0.0, maxY)
+                  .toDouble();
               setState(() {
-                position.update(position.pos + details.delta);
+                position.update(Offset(nextX, nextY));
               });
               _chatModel?.setChatWindowPosition(position.pos);
             },

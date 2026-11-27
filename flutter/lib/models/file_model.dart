@@ -653,7 +653,7 @@ class FileController {
           for (var element in fd.entries) {
             totalSize += element.size;
           }
-          job.totalSize = totalSize;
+          job.totalSize = math.max(totalSize, job.finishedSize);
           job.fileCount = fileCount;
           debugPrint("update receive details: ${fd.path}");
           jobController.jobTable.refresh();
@@ -756,36 +756,40 @@ class FileController {
 
   bool _removeCheckboxRemember = false;
 
-  Future<void> removeAction(SelectedItems items) async {
+  Future<bool> removeAction(SelectedItems items) async {
     _removeCheckboxRemember = false;
     if (items.isLocal != isLocal) {
       debugPrint("Failed to removeFile, wrong files");
-      return;
+      return false;
     }
-    if (items.items.isEmpty) return;
+    final targetEntries = items.items
+        .where((e) => !e.isDrive)
+        .toList(growable: false);
+    if (targetEntries.isEmpty) return false;
 
     // Single upfront confirmation when multiple items are selected.
     bool batchConfirmed = false;
-    if (items.items.length > 1) {
-      final previewNames = items.items
+    if (targetEntries.length > 1) {
+      final previewNames = targetEntries
           .take(4)
           .map((e) => '• ${e.name}')
           .join('\n');
-      final moreCount = items.items.length - 4;
+      final moreCount = targetEntries.length - 4;
       final summary = moreCount > 0
           ? '$previewNames\n+${moreCount.toString()} ${translate('More').toLowerCase()}'
           : previewNames;
       final confirmed = await showRemoveDialog(
-        '${translate('Delete items?')} (${items.items.length})',
+        '${translate('Delete items?')} (${targetEntries.length})',
         summary,
         false,
       );
-      if (confirmed != true) return;
+      if (confirmed != true) return false;
       batchConfirmed = true;
     }
 
+    bool anyConfirmed = batchConfirmed;
     final isWindows = options.value.isWindows;
-    await Future.forEach(items.items, (Entry item) async {
+    await Future.forEach(targetEntries, (Entry item) async {
       final jobID = JobController.jobID.next();
       var title = "";
       var content = "";
@@ -839,6 +843,7 @@ class FileController {
                   false,
                 );
           if (confirm == true) {
+            anyConfirmed = true;
             await sendRemoveEmptyDir(item.path, 0, deleteJobId);
           } else {
             jobController.updateJobStatus(
@@ -887,6 +892,7 @@ class FileController {
         );
         return;
       }
+      anyConfirmed = true;
 
       for (var i = 0; i < entries.length; i++) {
         try {
@@ -901,7 +907,10 @@ class FileController {
         }
       }
     });
-    refresh();
+    if (anyConfirmed) {
+      refresh();
+    }
+    return anyConfirmed;
   }
 
   Future<bool?> showRemoveDialog(
@@ -1230,7 +1239,7 @@ class JobController {
         ..type = JobType.transfer
         ..fileName = path.basename(from.path)
         ..jobName = from.path
-        ..totalSize = from.size
+        ..totalSize = from.isFile ? from.size : 0
         ..state = JobState.inProgress
         ..id = jobID
         ..isRemoteToLocal = isRemoteToLocal,
@@ -1304,8 +1313,8 @@ class JobController {
             job.lastTransferredSize,
             transferred,
           );
-          if (job.totalSize > 0) {
-            job.finishedSize = math.min(job.finishedSize, job.totalSize);
+          if (job.totalSize > 0 && job.finishedSize > job.totalSize) {
+            job.totalSize = job.finishedSize;
           }
         }
         if (job.type == JobType.transfer &&
@@ -1609,7 +1618,7 @@ class JobController {
       if (totalSize != null && totalSize.isFinite) {
         final normalizedTotalSize = math.max(0, totalSize.toInt());
         if (normalizedTotalSize > 0) {
-          job.totalSize = normalizedTotalSize;
+          job.totalSize = math.max(normalizedTotalSize, job.finishedSize);
         }
       }
       jobTable.refresh();
@@ -2089,7 +2098,8 @@ class JobProgress {
     if (state == JobState.done && totalSize > 0) {
       return totalSize;
     }
-    return math.max(finishedSize, lastTransferredSize);
+    final raw = math.max(finishedSize, lastTransferredSize);
+    return totalSize > 0 ? math.min(raw, totalSize) : raw;
   }
 
   int get effectiveTotalSize {
@@ -2337,7 +2347,7 @@ class SelectedItems {
 
   void selectAll(List<Entry> entries) {
     items.clear();
-    items.addAll(entries);
+    items.addAll(entries.where((e) => !e.isDrive));
   }
 
   static bool valid(RxList<Entry> items) {

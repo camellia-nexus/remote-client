@@ -92,10 +92,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
+    final screenHeight = MediaQuery.sizeOf(context).height;
     return LayoutBuilder(
       builder: (context, constraints) {
         final compactVertical =
-            constraints.maxHeight < 460 || widget.shareSection != null;
+            screenHeight < 520 || widget.shareSection != null;
 
         if (!compactVertical) {
           // Non-contending studio split: Connect Deck stays pinned at top while
@@ -153,20 +154,52 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
+  String _extractRemoteIdFromClipboard(String raw) {
+    final lines = raw
+        .split(RegExp(r'[\r\n]+'))
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return '';
+
+    String targetLine = lines.first;
+    final idLabelPattern = RegExp(
+      r'(?<![A-Za-z0-9])id\s*[:：]\s*(.+)$',
+      caseSensitive: false,
+    );
+    for (final line in lines) {
+      final match = idLabelPattern.firstMatch(line);
+      if (match != null) {
+        final labeled = match.group(1)?.trim() ?? '';
+        if (labeled.isNotEmpty) {
+          targetLine = labeled;
+          break;
+        }
+      }
+    }
+
+    if (RegExp(r'^[\d \-]+$').hasMatch(targetLine)) {
+      return targetLine.replaceAll(RegExp(r'[ \-]+'), '');
+    }
+    if (!targetLine.contains(RegExp(r'\s')) &&
+        RegExp(r'[A-Za-z.]').hasMatch(targetLine)) {
+      return targetLine;
+    }
+    final numericMatch = RegExp(
+      r'(?<![A-Za-z0-9])\d[\d \-]{4,}\d(?![A-Za-z0-9])',
+    ).firstMatch(targetLine);
+    if (numericMatch != null) {
+      return numericMatch.group(0)!.replaceAll(RegExp(r'[ \-]+'), '');
+    }
+    return targetLine.split(RegExp(r'\s+')).first;
+  }
+
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final raw = data?.text?.trim() ?? '';
     if (raw.isEmpty || !mounted) return;
-    final cleaned = raw.replaceAll(RegExp(r'[\s\-]+'), '');
-    final numericMatch = RegExp(r'\d[\d\s\-]{4,}\d').firstMatch(raw);
-    final String extracted;
-    if (RegExp(r'^[\d\s\-]+$').hasMatch(raw) && cleaned.isNotEmpty) {
-      extracted = cleaned;
-    } else if (numericMatch != null) {
-      extracted = numericMatch.group(0)!.replaceAll(RegExp(r'[\s\-]+'), '');
-    } else {
-      extracted = raw.split(RegExp(r'\s+')).first;
-    }
+    final extracted = _extractRemoteIdFromClipboard(raw);
+    if (extracted.isEmpty) return;
     HapticFeedback.lightImpact();
     setState(() {
       _idController.id = extracted;

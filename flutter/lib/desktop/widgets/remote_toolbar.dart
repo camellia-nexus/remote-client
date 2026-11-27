@@ -560,13 +560,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         return const SizedBox.shrink();
       }
       if (hide.value) {
-        return RemoteToolbarOverlaySurface(
-          edge: _ToolbarEdge.top,
-          fraction: _fraction.value,
-          toolbar: _HiddenToolbarRevealStrip(
-            onRestore: () => widget.state.switchHide(widget.ffi.sessionId),
-          ),
-        );
+        return const SizedBox.shrink();
       }
       final edge = _edge.value;
       final isHorizontal = _isHorizontalEdge(edge);
@@ -2642,12 +2636,8 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
   String _groupValue = '';
   Resolution? _localResolution;
 
-  late final TextEditingController _customWidth = TextEditingController(
-    text: rect?.width.toInt().toString() ?? '',
-  );
-  late final TextEditingController _customHeight = TextEditingController(
-    text: rect?.height.toInt().toString() ?? '',
-  );
+  late final TextEditingController _customWidth;
+  late final TextEditingController _customHeight;
 
   FFI get ffi => widget.ffi;
   PeerInfo get pi => widget.ffi.ffiModel.pi;
@@ -2659,6 +2649,12 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
   @override
   void initState() {
     super.initState();
+    _customWidth = TextEditingController(
+      text: rect?.width.toInt().toString() ?? '',
+    );
+    _customHeight = TextEditingController(
+      text: rect?.height.toInt().toString() ?? '',
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _getLocalResolutionWayland();
     });
@@ -2741,6 +2737,8 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
   void dispose() {
     _adjustWindowTimer?.cancel();
     _adjustWindowTimer = null;
+    _customWidth.dispose();
+    _customHeight.dispose();
     super.dispose();
   }
 
@@ -2899,7 +2897,9 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
       child: RdoMenuButton(
         value: _kCustomResolutionValue,
         groupValue: _groupValue,
-        onChanged: (String? value) => _onChanged(value),
+        toggleable: true,
+        onChanged: (String? value) =>
+            _onChanged(value ?? _kCustomResolutionValue),
         ffi: widget.ffi,
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -2960,6 +2960,10 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
           LengthLimitingTextInputFormatter(4),
         ],
         controller: controller,
+        onSubmitted: (_) {
+          _menuDismissCallback(widget.ffi);
+          _onChanged(_kCustomResolutionValue);
+        },
       ).workaroundFreezeLinuxMint(),
     );
   }
@@ -3928,6 +3932,7 @@ class RdoMenuButton<T> extends StatelessWidget {
   final FFI? ffi;
   // When true, submenu will be dismissed on activate; when false, it stays open.
   final bool closeOnActivate;
+  final bool toggleable;
   const RdoMenuButton({
     Key? key,
     required this.value,
@@ -3936,6 +3941,7 @@ class RdoMenuButton<T> extends StatelessWidget {
     this.ffi,
     this.onChanged,
     this.closeOnActivate = true,
+    this.toggleable = false,
   }) : super(key: key);
 
   @override
@@ -3943,6 +3949,7 @@ class RdoMenuButton<T> extends StatelessWidget {
     return RadioMenuButton(
       value: value,
       groupValue: groupValue,
+      toggleable: toggleable,
       child: child,
       closeOnActivate: closeOnActivate,
       onChanged: onChanged != null
@@ -4401,75 +4408,6 @@ class _MinimizedMonitorSwitchButton extends StatelessWidget {
         ),
       );
     });
-  }
-}
-
-class _HiddenToolbarRevealStrip extends StatefulWidget {
-  const _HiddenToolbarRevealStrip({required this.onRestore});
-
-  final VoidCallback onRestore;
-
-  @override
-  State<_HiddenToolbarRevealStrip> createState() =>
-      _HiddenToolbarRevealStripState();
-}
-
-class _HiddenToolbarRevealStripState extends State<_HiddenToolbarRevealStrip> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final tokens =
-        theme.extension<AppDesignTokens>() ?? AppVisual.tokens(context);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onRestore,
-        child: Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: AnimatedContainer(
-            duration: CamelliaMotion.resolve(context, CamelliaMotion.state),
-            curve: CamelliaMotion.standard,
-            height: _hovered ? 26 : 4,
-            padding: EdgeInsets.symmetric(horizontal: _hovered ? 12 : 0),
-            constraints: BoxConstraints(minWidth: _hovered ? 112 : 76),
-            decoration: BoxDecoration(
-              color: _hovered
-                  ? tokens.surfaceElevated.withValues(alpha: 0.94)
-                  : theme.colorScheme.onSurface.withValues(alpha: 0.24),
-              borderRadius: BorderRadius.circular(CamelliaRadius.pill),
-              border: _hovered
-                  ? Border.all(color: tokens.border, width: 0.85)
-                  : null,
-            ),
-            child: _hovered
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        CamelliaIcons.eye,
-                        size: 14,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        translate('Show Toolbar'),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ],
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ),
-      ),
-    );
   }
 }
 

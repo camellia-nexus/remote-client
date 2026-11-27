@@ -2186,26 +2186,31 @@ SettingsTile _getPopupDialogRadioEntry({
                 }
               };
 
-        return Obx(
-          () => Padding(
+        return ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
+          ),
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ...list.map(
-                  (e) => getRadio(
-                    Text(translate(e.label)),
-                    e.value,
-                    groupValue.value,
-                    onChanged,
+            child: Obx(
+              () => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ...list.map(
+                    (e) => getRadio(
+                      Text(translate(e.label)),
+                      e.value,
+                      groupValue.value,
+                      onChanged,
+                    ),
                   ),
-                ),
-                if (tail != null && showTail != null && showTail.value == true)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
-                    child: tail,
-                  ),
-              ],
+                  if (tail != null && showTail != null && showTail.value == true)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+                      child: tail,
+                    ),
+                ],
+              ),
             ),
           ),
         );

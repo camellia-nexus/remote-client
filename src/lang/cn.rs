@@ -1114,5 +1114,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Verify browser permission for seamless remote copy & paste synchronization.", "检查浏览器剪贴板授权，以实现本机与远端无缝复制粘贴同步。"),
         ("clear-shortcuts-inhibitor-permission-tip", "清除已记住的 Wayland 快捷键捕获授权，下次连接时将重新询问"),
         ("min", "分钟"),
+        ("Voice call declined", "对方已拒绝语音通话"),
     ].iter().cloned().collect();
 }

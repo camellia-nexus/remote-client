@@ -129,13 +129,14 @@ class _TerminalPageState extends State<TerminalPage>
         bind.mainGetLocalOption(key: kOptionShowTerminalCtrlKeys) == 'Y';
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       _ffi.dialogManager.showLoading(
         translate('Connecting...'),
         onCancel: closeConnection,
       );
 
-      if (_showTerminalExtraKeys) {
-        _updateKeyboardHeight();
+      if (mounted && _showTerminalExtraKeys) {
+        setState(_updateKeyboardHeight);
       }
     });
     _ffi.ffiModel.updateEventListener(_ffi.sessionId, widget.id);

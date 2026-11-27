@@ -1114,5 +1114,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Verify browser permission for seamless remote copy & paste synchronization.", "Verify browser permission for seamless remote copy & paste synchronization."),
         ("clear-shortcuts-inhibitor-permission-tip", "Clear saved Wayland shortcut capture consent so the system asks again next session"),
         ("min", "min"),
+        ("Voice call declined", "Voice call declined"),
     ].iter().cloned().collect();
 }

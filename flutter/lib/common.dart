@@ -774,9 +774,11 @@ class MyTheme {
 
   static Future<void> changeThemeStyle(CamelliaThemeStyle style) async {
     _themeHydrated = true;
-    unawaited(bind.mainSetLocalOption(key: 'theme_style', value: style.name));
     themeStyleNotifier.value = style;
     await updateSystemWindowTheme();
+    try {
+      await bind.mainSetLocalOption(key: 'theme_style', value: style.name);
+    } catch (_) {}
 
     final pref = themeNotifier.value;
     final persisted = switch (pref) {
@@ -786,7 +788,11 @@ class MyTheme {
       CamelliaThemePreference.system => defaultOptionTheme,
     };
     if (desktopType == DesktopType.main || isAndroid || isIOS || isWeb) {
-      if (!isWeb) unawaited(bind.mainChangeTheme(dark: persisted));
+      if (!isWeb) {
+        try {
+          unawaited(bind.mainChangeTheme(dark: persisted));
+        } catch (_) {}
+      }
     }
   }
 
@@ -863,25 +869,27 @@ class MyTheme {
     }
   }
 
+  static ThemeMode _themeModeForPreference(CamelliaThemePreference pref) {
+    return switch (pref) {
+      CamelliaThemePreference.light => ThemeMode.light,
+      CamelliaThemePreference.dark ||
+      CamelliaThemePreference.midnight => ThemeMode.dark,
+      CamelliaThemePreference.system => ThemeMode.system,
+    };
+  }
+
   static ThemeMode getThemeModePreference() {
+    if (_themeHydrated) {
+      return _themeModeForPreference(themeNotifier.value);
+    }
     try {
       final raw = bind.mainGetLocalOption(key: kCommConfKeyTheme);
-      if (raw.trim().isEmpty && _themeHydrated) {
-        return switch (themeNotifier.value) {
-          CamelliaThemePreference.light => ThemeMode.light,
-          CamelliaThemePreference.dark ||
-          CamelliaThemePreference.midnight => ThemeMode.dark,
-          CamelliaThemePreference.system => ThemeMode.system,
-        };
+      if (raw.trim().isEmpty) {
+        return _themeModeForPreference(themeNotifier.value);
       }
       return themeModeFromString(raw);
     } catch (_) {
-      return themeNotifier.value == CamelliaThemePreference.light
-          ? ThemeMode.light
-          : (themeNotifier.value == CamelliaThemePreference.dark ||
-                  themeNotifier.value == CamelliaThemePreference.midnight
-              ? ThemeMode.dark
-              : ThemeMode.system);
+      return _themeModeForPreference(themeNotifier.value);
     }
   }
 
@@ -889,6 +897,7 @@ class MyTheme {
     CamelliaThemePreference preference,
   ) async {
     _themeHydrated = true;
+    themeNotifier.value = preference;
     final persisted = switch (preference) {
       CamelliaThemePreference.light => 'light',
       CamelliaThemePreference.dark => 'dark',
@@ -896,10 +905,15 @@ class MyTheme {
       CamelliaThemePreference.system => defaultOptionTheme,
     };
     if (desktopType == DesktopType.main || isAndroid || isIOS || isWeb) {
-      unawaited(bind.mainSetLocalOption(key: kCommConfKeyTheme, value: persisted));
-      if (!isWeb) unawaited(bind.mainChangeTheme(dark: persisted));
+      try {
+        await bind.mainSetLocalOption(key: kCommConfKeyTheme, value: persisted);
+      } catch (_) {}
+      if (!isWeb) {
+        try {
+          unawaited(bind.mainChangeTheme(dark: persisted));
+        } catch (_) {}
+      }
     }
-    themeNotifier.value = preference;
     await updateSystemWindowTheme();
   }
 

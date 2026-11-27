@@ -541,7 +541,7 @@ class FfiModel with ChangeNotifier {
         parent.target?.chatModel.onVoiceCallStarted();
       } else if (name == 'on_voice_call_closed') {
         // Voice call is closed with reason.
-        final reason = evt['reason'].toString();
+        final reason = (evt['reason'] ?? '').toString();
         parent.target?.chatModel.onVoiceCallClosed(reason);
       } else if (name == 'on_voice_call_incoming') {
         // Voice call is requested by the peer.
@@ -1267,16 +1267,7 @@ class FfiModel with ChangeNotifier {
     final durMsc = evt['dur_msec'] ?? 2000;
     final duration = Duration(milliseconds: durMsc);
     if ((text).isEmpty) {
-      final ffi = parent.target;
-      if (ffi != null && !ffi.closed) {
-        ffi.dialogManager.showLoading(translate('Connecting...'));
-      } else {
-        showToast(
-          translate('Waiting'),
-          timeout: duration,
-          tone: AppTone.info,
-        );
-      }
+      showToast(translate('Waiting'), timeout: duration, tone: AppTone.info);
     } else {
       if (type.contains('error')) {
         showToast(
@@ -1550,7 +1541,7 @@ class FfiModel with ChangeNotifier {
     if (waitForFirstImage.isFalse) return;
     dialogManager.dismissAll();
     dialogManager.showLoading(
-      translate('Negotiating video stream...'),
+      'Negotiating video stream...',
       onCancel: onClose,
       tag: '$sessionId-waiting-for-image',
     );

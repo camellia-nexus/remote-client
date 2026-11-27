@@ -246,31 +246,26 @@ class RustDeskMultiWindowManager {
   }) async {
     if (openInTabs) {
       windows.removeWhere((id) => !_activeWindows.contains(id));
-      if (windows.isEmpty) {
-        final windowId = await newSessionWindow(
-          type,
-          remoteId,
-          msg,
-          windows,
-          screenRect != null,
-        );
-        return MultiWindowCallResult(windowId, null);
-      } else {
+      if (windows.isNotEmpty) {
         try {
-          return await call(type, methodName, msg);
+          final res = await call(type, methodName, msg);
+          if (res.windowId != kInvalidWindowId) {
+            return res;
+          }
+          windows.removeWhere((id) => !_activeWindows.contains(id));
         } catch (e) {
           debugPrint('Failed to invoke method on existing tab window: $e');
           windows.clear();
-          final windowId = await newSessionWindow(
-            type,
-            remoteId,
-            msg,
-            windows,
-            screenRect != null,
-          );
-          return MultiWindowCallResult(windowId, null);
         }
       }
+      final windowId = await newSessionWindow(
+        type,
+        remoteId,
+        msg,
+        windows,
+        screenRect != null,
+      );
+      return MultiWindowCallResult(windowId, null);
     } else {
       if (_inactiveWindows.isNotEmpty) {
         for (final windowId in List<int>.from(windows)) {
@@ -728,7 +723,9 @@ class RustDeskMultiWindowManager {
   }
 
   void registerActiveWindowListener(AsyncCallback callback) {
-    _windowActiveCallbacks.add(callback);
+    if (!_windowActiveCallbacks.contains(callback)) {
+      _windowActiveCallbacks.add(callback);
+    }
   }
 
   void unregisterActiveWindowListener(AsyncCallback callback) {

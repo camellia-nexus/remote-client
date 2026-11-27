@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -39,21 +40,14 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
       ).setTitle(getWindowNameWithId(id));
     };
     tabController.onRemoved = (_, id) => onRemoveId(id);
+    tabController.onTeardownTabs = _teardownTabs;
     tabController.add(
       TabInfo(
         key: params['id'],
         label: params['id'],
         selectedIcon: selectedIcon,
         unselectedIcon: unselectedIcon,
-        onTabCloseButton: () async {
-          if (await desktopTryShowTabAuditDialogCloseCancelled(
-            id: params['id'],
-            tabController: tabController,
-          )) {
-            return;
-          }
-          tabController.closeBy(params['id']);
-        },
+        onTabCloseButton: () => _closeTab(params['id']),
         page: FileManagerPage(
           key: ValueKey(params['id']),
           id: params['id'],
@@ -88,15 +82,7 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
             label: id,
             selectedIcon: selectedIcon,
             unselectedIcon: unselectedIcon,
-            onTabCloseButton: () async {
-              if (await desktopTryShowTabAuditDialogCloseCancelled(
-                id: id,
-                tabController: tabController,
-              )) {
-                return;
-              }
-              tabController.closeBy(id);
-            },
+            onTabCloseButton: () => _closeTab(id),
             page: FileManagerPage(
               key: ValueKey(id),
               id: id,
@@ -117,7 +103,7 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
         }
         return jumpOk;
       } else if (call.method == "onDestroy") {
-        tabController.clear();
+        await tabController.closeWindow(skipConfirm: true);
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
       }
@@ -163,19 +149,47 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
           );
   }
 
-  void onRemoveId(String id) async {
-    if (tabController.state.value.tabs.isEmpty) {
-      final wId = windowId();
+  Future<void> _teardownTabs(List<TabInfo> tabs) async {
+    final futures = <Future<void>>[];
+    for (final tab in tabs) {
+      final page = tab.page;
+      if (page is FileManagerPage) {
+        futures.add(
+          page.teardown().catchError((e) {
+            debugPrint(
+              '[FileManagerTabPage] Teardown failed for ${tab.key}: $e',
+            );
+          }),
+        );
+      }
+    }
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+    }
+  }
+
+  Future<void> _closeTab(String id) async {
+    if (await desktopTryShowTabAuditDialogCloseCancelled(
+      id: id,
+      tabController: tabController,
+    )) {
+      return;
+    }
+    final page = tabController.widget(id);
+    if (page is FileManagerPage) {
       try {
-        await rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {
-          "id": wId,
-        });
-      } catch (_) {}
-      final wc = WindowController.fromWindowId(wId);
-      try {
-        await wc.setPreventClose(false);
-      } catch (_) {}
-      await wc.close();
+        await page.teardown().timeout(const Duration(seconds: 3));
+      } catch (e) {
+        debugPrint('[FileManagerTabPage] Teardown failed for $id: $e');
+      }
+    }
+    tabController.closeBy(id);
+  }
+
+  void onRemoveId(String id) {
+    if (!tabController.suppressEmptyWindowClose &&
+        tabController.state.value.tabs.isEmpty) {
+      unawaited(tabController.closeWindow(skipConfirm: true));
     }
   }
 
@@ -192,25 +206,17 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
       )) {
         return false;
       }
-      tabController.clear();
       return true;
     }
     if (connLength <= 0) {
-      tabController.clear();
       return true;
     }
-    final bool res;
     if (!option2bool(
       kOptionEnableConfirmClosingTabs,
       bind.mainGetLocalOption(key: kOptionEnableConfirmClosingTabs),
     )) {
-      res = true;
-    } else {
-      res = await closeConfirmDialog(isSessionWindow: true);
+      return true;
     }
-    if (res) {
-      tabController.clear();
-    }
-    return res;
+    return await closeConfirmDialog(isSessionWindow: true);
   }
 }
