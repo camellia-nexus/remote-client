@@ -82,7 +82,7 @@ Required CI also rejects any mismatch between the protocol submodule and the exa
 
 Formal publication requires the protected `release` environment. Selected platform packages are produced once, checksummed, described by `versions.json`, and attested with GitHub/Sigstore identity. Windows Authenticode, macOS signing/notarization, Linux OpenPGP signatures, Android release keys, and iOS certificate/provisioning exports are optional complete groups; missing groups produce explicitly unsigned/ad-hoc or re-signing outputs and partial groups fail closed. Public packages should use a recognized publisher identity, but private or temporarily unsigned releases remain supported when their limitations are stated. See [release signing modes](docs/release-signing.md).
 
-Versions are stable SemVer from the root manifest. Published tags and assets are immutable; rebuilding or moving an existing release is prohibited. See the [release policy](docs/releasing.md) and [production-readiness audit](docs/production-readiness-audit.md) for the complete release decision.
+Versions are stable SemVer from the root manifest. Published tags and assets are immutable; rebuilding or moving an existing release is prohibited. See the [release policy](docs/releasing.md) for the complete release decision.
 
 ## Self-hosting
 
